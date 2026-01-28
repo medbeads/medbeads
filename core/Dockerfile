@@ -19,5 +19,5 @@ COPY --from=builder /app/medbeads-core .
 # Data Volume Mount Point
 RUN mkdir -p /app/medbeads_data
 
-EXPOSE 8081
+EXPOSE 8080
 CMD ["./medbeads-core"]
