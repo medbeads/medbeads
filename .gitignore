@@ -1,0 +1,37 @@
+# Data & Database
+medbeads_data/
+**/medbeads_data/
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# Secrets
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+.python-version
+uv.lock
+
+# Node
+node_modules/
+npm-debug.log
+dist/
+build/
+
+# Go
+medbeads-core
+core/medbeads-core
+
+# OS & IDE
+.DS_Store
+.vscode/
+.idea/

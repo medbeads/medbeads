@@ -1,0 +1,184 @@
+# MedBeads
+
+MedBeads is an **Immutable, Agent-Native Data Infrastructure** for medical AI.
+
+
+[English](README.md) | [日本語](README.ja.md) | [中文](README.zh.md)
+
+## System Architecture
+
+```mermaid
+graph TD
+    User((User))
+    
+    subgraph Frontend
+        UI["React UI (Vite)<br/>Port: 5174"]
+    end
+    
+    subgraph Backend
+        Core["Go Core Server<br/>Port: 8080"]
+        API["Python AI API<br/>Port: 8000"]
+    end
+    
+    subgraph Storage
+        Objects["Object Storage<br/>(CAS)"]
+        SQL["Metadata DB<br/>(SQLite)"]
+    end
+    
+    subgraph External
+        Gemini[Gemini AI API]
+    end
+
+    User -->|Browser| UI
+    UI -->|Data/Search| Core
+    UI -->|AI Analysis| API
+    
+    API -->|Get Context| Core
+    API -->|Generate| Gemini
+    
+    Core -->|Read/Write| Objects
+    Core -->|Read/Write| SQL
+```
+
+### Directory Structure
+
+```
+medbeads/
+├── core/                    # Go Backend Server
+│   ├── main.go              # Entry Point
+│   ├── medbeads_data/       # Data Storage (Mounted in Docker)
+│   └── Dockerfile           # Core Dockerfile
+│
+├── api/                     # Python AI API Server
+│   ├── main.py              # FastAPI Entry Point
+│   ├── ai.py                # Gemini AI Logic
+│   └── Dockerfile           # API Dockerfile
+│
+├── ui/                      # React Frontend
+│   ├── src/                 # Source Code
+│   └── Dockerfile           # UI Dockerfile
+│
+├── FHIR_sample/             # Sample Data (Synthea)
+├── docker-compose.yml       # Docker Composition
+└── start.sh                 # Local Helper Script
+```
+
+## Configuration
+
+To use AI features, you need to configure your Google Gemini API Key.
+
+1. Copy the example environment file:
+   ```bash
+   cp api/.env.example api/.env
+   ```
+2. Edit `api/.env` and set your API key:
+   ```
+   GEMINI_API_KEY=your_actual_api_key_here
+   ```
+
+## Quick Start (Docker)
+
+The easiest way to run MedBeads is using Docker. This will start the Core, API, and UI services.
+
+### Prerequisites
+- Docker Engine
+- Docker Compose
+
+### Running the Application
+
+1. Build and start the containers:
+   ```bash
+   docker-compose up --build
+   ```
+
+2. Access the services:
+   - **UI (Visualizer):** [http://localhost:5174](http://localhost:5174)
+   - **AI API:** [http://localhost:8000](http://localhost:8000)
+   - **Core Engine:** [http://localhost:8080](http://localhost:8080)
+
+3. Stop the application:
+   ```bash
+   Ctrl+C
+   ```
+
+## Local Development (Manual)
+
+If you prefer to run services individually without Docker, follow these steps.
+Since the repository does not contain pre-generated data, **Step 2 (Data Ingestion)** is required for the first run.
+
+### Prerequisites
+- Go 1.21+
+- Python 3.12+ (managed via `uv`)
+- Node.js 20+
+
+### One-Click Start
+You can use the helper script to verify the environment, ingest sample data, and start all servers at once:
+```bash
+./start.sh
+```
+
+### Manual Steps (Detailed)
+
+1. **Start Core Engine (Go):**
+   This service manages the data storage and index.
+   ```bash
+   cd core
+   go run main.go
+   # Server runs on localhost:8080
+   ```
+
+2. **Ingest Initial Data (Python):**
+   *(Required if database is empty)*
+   Convert FHIR sample data into Beads and send to the Core Engine.
+   Run this in a **new terminal** while Core is running:
+   ```bash
+   # Ingest 5 sample patients
+   uv run --with requests scripts/mass_ingest.py medbeads/FHIR_sample --limit 5
+   ```
+
+3. **Start AI API (Python):
+   This service provides AI analysis features.
+   ```bash
+   cd api
+   uv run uvicorn main:app --host 0.0.0.0 --port 8000
+   ```
+
+4. **Start UI (React):**
+   The frontend visualization interface.
+   ```bash
+   cd ui
+   npm install
+   npm run dev
+   # Access at http://localhost:5174
+   ```
+
+## Data Architecture & Ingestion Flow
+
+1. **FHIR Source Data**
+   - Located in `medbeads/FHIR_sample/`.
+   - Contains raw FHIR JSON files.
+
+2. **Ingestion Process (Python)**
+   - Run `python scripts/mass_ingest.py` (or via `uv run`).
+   - The script reads JSON files, converts them into **Beads** (Merkle Graph Nodes), and sends them to the Core Server.
+
+3. **Storage (Core Engine)**
+   - **Content Addressable Storage (CAS):** Raw data is stored as immutable files in `medbeads/core/medbeads_data/objects/`.
+   - **Metadata Index (SQLite):** Searchable index is stored in `medbeads/core/medbeads_data/metadata.db`.
+
+## Populating Seed Data
+
+To populate the repository with initial seed data (e.g., half of the samples):
+
+1. Start the Core Server:
+   ```bash
+   cd core && go run main.go
+   ```
+2. Run the ingestion script (in another terminal):
+   ```bash
+   uv run --with requests medbeads/scripts/mass_ingest.py medbeads/FHIR_sample --limit 5
+   ```
+3. (Optional) Force commit the generated data:
+   ```bash
+   git add -f core/medbeads_data/metadata.db core/medbeads_data/objects/
+   ```
