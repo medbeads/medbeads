@@ -90,20 +90,32 @@ MedBeads を最も簡単に実行する方法は Docker を使用することで
    docker-compose up --build
    ```
 
-2. サービスへのアクセス:
+2. **ブラウザでUIにアクセス:**
+   
+   👉 **http://localhost:5174**
+
+3. 全サービス一覧:
    - **UI (Visualizer):** [http://localhost:5174](http://localhost:5174)
    - **AI API:** [http://localhost:8000](http://localhost:8000)
    - **Core Engine:** [http://localhost:8080](http://localhost:8080)
 
-3. アプリケーションの停止:
+4. アプリケーションの停止:
    ```bash
    Ctrl+C
    ```
 
+### プリロード済みサンプルデータ
+
+このリポジトリには、すぐにデモできるように **3名のサンプル患者** が含まれています。FHIRサンプルから追加の患者を取り込むには、Docker起動中に以下のコマンドを実行してください:
+
+```bash
+# 追加の患者を取り込み（例: 5名追加）
+uv run --with requests scripts/mass_ingest.py FHIR_sample --limit 5
+```
+
 ## ローカル開発 (手動実行)
 
 Docker を使用せずに個別にサービスを実行したい場合は、以下の手順に従ってください。
-このリポジトリには生成済みのデータが含まれていないため、初回実行時には **ステップ 2 (データ取り込み)** が必須となります。
 
 ### 前提条件
 - Go 1.21+

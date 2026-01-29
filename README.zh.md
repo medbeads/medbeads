@@ -90,20 +90,32 @@ medbeads/
    docker-compose up --build
    ```
 
-2. 访问服务:
+2. **在浏览器中访问 UI:**
+   
+   👉 **http://localhost:5174**
+
+3. 所有服务:
    - **UI (可视化):** [http://localhost:5174](http://localhost:5174)
    - **AI API:** [http://localhost:8000](http://localhost:8000)
    - **Core Engine (核心):** [http://localhost:8080](http://localhost:8080)
 
-3. 停止应用程序:
+4. 停止应用程序:
    ```bash
    Ctrl+C
    ```
 
+### 预加载的样本数据
+
+此仓库包含 **3 个样本患者**，可以立即进行演示。要从 FHIR 样本中添加更多患者，请在 Docker 运行时执行以下命令:
+
+```bash
+# 添加更多患者（例如: 5 个额外）
+uv run --with requests scripts/mass_ingest.py FHIR_sample --limit 5
+```
+
 ## 本地开发 (手动)
 
 如果您不想使用 Docker 而更喜欢单独运行服务，请按照以下步骤操作。
-由于仓库不包含预生成的数据，因此首次运行时必须执行 **步骤 2 (数据摄入)**。
 
 ### 前置条件
 - Go 1.21+

@@ -4,9 +4,9 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      # Mount sample data by default for demo. 
-      # User can override this locally to mount real data.
-      - ./FHIR_sample:/app/medbeads_data
+      # Mount pre-populated sample data for demo.
+      # This directory contains processed Beads data ready for use.
+      - ./core/medbeads_data:/app/medbeads_data
     restart: unless-stopped
 
   api:

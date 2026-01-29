@@ -91,15 +91,28 @@ The easiest way to run MedBeads is using Docker. This will start the Core, API, 
    docker-compose up --build
    ```
 
-2. Access the services:
+2. **Open your browser and access the UI:**
+   
+   👉 **http://localhost:5174**
+
+3. All services:
    - **UI (Visualizer):** [http://localhost:5174](http://localhost:5174)
    - **AI API:** [http://localhost:8000](http://localhost:8000)
    - **Core Engine:** [http://localhost:8080](http://localhost:8080)
 
-3. Stop the application:
+4. Stop the application:
    ```bash
    Ctrl+C
    ```
+
+### Pre-loaded Sample Data
+
+The repository includes **3 sample patients** for immediate demo. To add more patients from the FHIR samples, run the following command while Docker is running:
+
+```bash
+# Add more patients (e.g., 5 additional)
+uv run --with requests scripts/mass_ingest.py FHIR_sample --limit 5
+```
 
 ## Local Development (Manual)
 
