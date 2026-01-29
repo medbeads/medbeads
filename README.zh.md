@@ -193,3 +193,21 @@ uv run --with requests scripts/mass_ingest.py FHIR_sample --limit 5
    ```bash
    git add -f core/medbeads_data/metadata.db core/medbeads_data/objects/
    ```
+
+## 📚 Citation（引用）
+
+如果您在研究中使用 MedBeads，请引用我们的论文：
+
+```bibtex
+@article{medbeads2025,
+  title={MedBeads: Immutable Agent-Native Data Infrastructure for Medical AI},
+  author={Nakajima, Takahito},
+  journal={medRxiv (审稿中)},
+  year={2026},
+  note={DOI: TBD}
+}
+```
+
+## 🙏 Acknowledgement（致谢）
+
+感谢 [Synthea](https://synthetichealth.github.io/synthea/) 提供本项目使用的合成 FHIR 患者数据。

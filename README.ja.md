@@ -193,3 +193,21 @@ Docker を使用せずに個別にサービスを実行したい場合は、以�
    ```bash
    git add -f core/medbeads_data/metadata.db core/medbeads_data/objects/
    ```
+
+## 📚 Citation（引用）
+
+本プロジェクトを研究で使用される場合は、以下の論文を引用してください:
+
+```bibtex
+@article{medbeads2025,
+  title={MedBeads: Immutable Agent-Native Data Infrastructure for Medical AI},
+  author={Nakajima, Takahito},
+  journal={medRxiv (査読中)},
+  year={2026},
+  note={DOI: TBD}
+}
+```
+
+## 🙏 Acknowledgement（謝辞）
+
+本プロジェクトで使用している合成FHIRデータを提供してくださった [Synthea](https://synthetichealth.github.io/synthea/) に感謝いたします。

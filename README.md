@@ -195,3 +195,21 @@ To populate the repository with initial seed data (e.g., half of the samples):
    ```bash
    git add -f core/medbeads_data/metadata.db core/medbeads_data/objects/
    ```
+
+## 📚 Citation
+
+If you use MedBeads in your research, please cite our paper:
+
+```bibtex
+@article{medbeads2025,
+  title={MedBeads: Immutable Agent-Native Data Infrastructure for Medical AI},
+  author={Nakajima, Takahito},
+  journal={medRxiv (under review)},
+  year={2026},
+  note={DOI: TBD}
+}
+```
+
+## 🙏 Acknowledgement
+
+We thank [Synthea](https://synthetichealth.github.io/synthea/) for providing the synthetic FHIR patient data used in this project.
