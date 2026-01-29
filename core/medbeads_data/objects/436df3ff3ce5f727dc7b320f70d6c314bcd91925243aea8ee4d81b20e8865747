@@ -1,0 +1,10 @@
+{
+  "type": "patient_registration",
+  "timestamp": "1993-08-19",
+  "parents": [],
+  "content": {
+    "fhir_id": "a8c67f30-eca3-489f-8d00-63604faf9638",
+    "gender": "female",
+    "name": "David379 B"
+  }
+}

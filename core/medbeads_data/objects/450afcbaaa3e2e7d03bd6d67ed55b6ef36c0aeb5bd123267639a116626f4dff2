@@ -1,0 +1,67 @@
+{
+  "type": "fhir_careplan",
+  "timestamp": "2014-10-27",
+  "parents": [
+    "436df3ff3ce5f727dc7b320f70d6c314bcd91925243aea8ee4d81b20e8865747"
+  ],
+  "content": {
+    "activity": [
+      {
+        "detail": {
+          "code": {
+            "coding": [
+              {
+                "code": "183051005",
+                "display": "Recommendation to rest",
+                "system": "http://snomed.info/sct"
+              }
+            ]
+          },
+          "status": "completed"
+        }
+      },
+      {
+        "detail": {
+          "code": {
+            "coding": [
+              {
+                "code": "226138001",
+                "display": "Alcohol-free diet",
+                "system": "http://snomed.info/sct"
+              }
+            ]
+          },
+          "status": "completed"
+        }
+      }
+    ],
+    "addresses": [
+      {
+        "reference": "urn:uuid:d72f79a2-1e79-4657-93ad-5434ff5ca517"
+      }
+    ],
+    "category": [
+      {
+        "coding": [
+          {
+            "code": "47387005",
+            "display": "Head injury rehabilitation",
+            "system": "http://snomed.info/sct"
+          }
+        ]
+      }
+    ],
+    "context": {
+      "reference": "urn:uuid:8e8ff10d-6e81-4766-8976-6e8eed9b4e81"
+    },
+    "period": {
+      "end": "2015-01-07",
+      "start": "2014-10-27"
+    },
+    "resourceType": "CarePlan",
+    "status": "completed",
+    "subject": {
+      "reference": "urn:uuid:a8c67f30-eca3-489f-8d00-63604faf9638"
+    }
+  }
+}

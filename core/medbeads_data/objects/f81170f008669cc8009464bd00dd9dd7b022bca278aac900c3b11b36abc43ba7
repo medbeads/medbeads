@@ -1,0 +1,48 @@
+{
+  "type": "fhir_procedure",
+  "timestamp": "2099-01-01",
+  "parents": [
+    "436df3ff3ce5f727dc7b320f70d6c314bcd91925243aea8ee4d81b20e8865747"
+  ],
+  "content": {
+    "code": {
+      "coding": [
+        {
+          "code": "428191000124101",
+          "display": "Documentation of current medications",
+          "system": "http://snomed.info/sct"
+        }
+      ],
+      "text": "Documentation of current medications"
+    },
+    "context": {
+      "reference": "urn:uuid:274f1db7-b858-44b4-a3da-c80407bfee99"
+    },
+    "extension": [
+      {
+        "url": "http://standardhealthrecord.org/fhir/StructureDefinition/shr-core-CodeableConcept-extension",
+        "valueCodeableConcept": {
+          "coding": [
+            {
+              "code": "428191000124101",
+              "display": "Documentation of current medications",
+              "system": "http://snomed.info/sct"
+            }
+          ],
+          "text": "Documentation of current medications"
+        }
+      }
+    ],
+    "meta": {
+      "profile": [
+        "http://standardhealthrecord.org/fhir/StructureDefinition/shr-procedure-Procedure"
+      ]
+    },
+    "performedDateTime": "2010-11-08T23:22:52-05:00",
+    "resourceType": "Procedure",
+    "status": "completed",
+    "subject": {
+      "reference": "urn:uuid:a8c67f30-eca3-489f-8d00-63604faf9638"
+    }
+  }
+}

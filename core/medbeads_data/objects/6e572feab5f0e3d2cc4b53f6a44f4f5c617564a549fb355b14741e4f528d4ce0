@@ -1,0 +1,53 @@
+{
+  "type": "fhir_observation",
+  "timestamp": "2011-02-21T09:53:10-05:00",
+  "parents": [
+    "a23906a5e61bcaf893b711f75f74f270d7df08cf840958e733d014a570b1a09a"
+  ],
+  "content": {
+    "category": [
+      {
+        "coding": [
+          {
+            "code": "vital-signs",
+            "system": "http://hl7.org/fhir/observation-category"
+          }
+        ]
+      }
+    ],
+    "code": {
+      "coding": [
+        {
+          "code": "39156-5",
+          "display": "Body Mass Index",
+          "system": "http://loinc.org"
+        }
+      ],
+      "text": "Body Mass Index"
+    },
+    "context": {
+      "reference": "urn:uuid:3b263bdd-950f-4c13-8f15-8a05e6fe7414"
+    },
+    "effectiveDateTime": "2011-02-21T09:53:10-05:00",
+    "id": "84f495de-eb66-4219-8d40-5bc4583b5c8d",
+    "issued": "2011-02-21T09:53:10-05:00",
+    "meta": {
+      "profile": [
+        "http://standardhealthrecord.org/fhir/StructureDefinition/shr-observation-Observation",
+        "http://standardhealthrecord.org/fhir/StructureDefinition/shr-vital-VitalSign",
+        "http://standardhealthrecord.org/fhir/StructureDefinition/shr-vital-BodyMassIndex"
+      ]
+    },
+    "resourceType": "Observation",
+    "status": "final",
+    "subject": {
+      "reference": "urn:uuid:d6ee689c-8142-433e-9e8f-5643620cd5e3"
+    },
+    "valueQuantity": {
+      "code": "kg/m2",
+      "system": "http://unitsofmeasure.org/",
+      "unit": "kg/m2",
+      "value": 20.672871405014916
+    }
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "type": "fhir_medication",
+  "timestamp": "2099-01-01",
+  "parents": [
+    "436df3ff3ce5f727dc7b320f70d6c314bcd91925243aea8ee4d81b20e8865747"
+  ],
+  "content": {
+    "code": {
+      "coding": [
+        {
+          "code": "824184",
+          "display": " Amoxicillin 250 MG / Clavulanate 125 MG [Augmentin]",
+          "system": "http://www.nlm.nih.gov/research/umls/rxnorm"
+        }
+      ],
+      "text": " Amoxicillin 250 MG / Clavulanate 125 MG [Augmentin]"
+    },
+    "meta": {
+      "profile": [
+        "http://standardhealthrecord.org/fhir/StructureDefinition/shr-medication-Medication"
+      ]
+    },
+    "resourceType": "Medication"
+  }
+}

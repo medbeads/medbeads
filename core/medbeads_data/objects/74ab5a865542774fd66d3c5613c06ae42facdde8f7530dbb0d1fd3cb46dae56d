@@ -1,0 +1,83 @@
+{
+  "type": "fhir_observation",
+  "timestamp": "2013-11-12T06:52:13-05:00",
+  "parents": [
+    "e4618cc162889be35ecc58a07812b2fe16334a000c9b96a1daf89015bc553260"
+  ],
+  "content": {
+    "category": [
+      {
+        "coding": [
+          {
+            "code": "vital-signs",
+            "system": "http://hl7.org/fhir/observation-category"
+          }
+        ]
+      }
+    ],
+    "code": {
+      "coding": [
+        {
+          "code": "55284-4",
+          "display": "Blood Pressure",
+          "system": "http://loinc.org"
+        }
+      ]
+    },
+    "component": [
+      {
+        "code": {
+          "coding": [
+            {
+              "code": "8480-6",
+              "display": "Systolic Blood Pressure",
+              "system": "http://loinc.org"
+            }
+          ],
+          "text": "Systolic Blood Pressure"
+        },
+        "valueQuantity": {
+          "code": "mmHg",
+          "system": "http://unitsofmeasure.org/",
+          "unit": "mmHg",
+          "value": 129
+        }
+      },
+      {
+        "code": {
+          "coding": [
+            {
+              "code": "8462-4",
+              "display": "Diastolic Blood Pressure",
+              "system": "http://loinc.org"
+            }
+          ],
+          "text": "Diastolic Blood Pressure"
+        },
+        "valueQuantity": {
+          "code": "mmHg",
+          "system": "http://unitsofmeasure.org/",
+          "unit": "mmHg",
+          "value": 78
+        }
+      }
+    ],
+    "context": {
+      "reference": "urn:uuid:08f7c1f3-a4df-4f6f-989f-efd0f65e9960"
+    },
+    "effectiveDateTime": "2013-11-12T06:52:13-05:00",
+    "id": "7bf08ff6-cd5f-4e84-abe5-f3fed92f1b6e",
+    "issued": "2013-11-12T06:52:13-05:00",
+    "meta": {
+      "profile": [
+        "http://standardhealthrecord.org/fhir/StructureDefinition/shr-observation-Observation",
+        "http://standardhealthrecord.org/fhir/StructureDefinition/shr-vital-BloodPressure"
+      ]
+    },
+    "resourceType": "Observation",
+    "status": "final",
+    "subject": {
+      "reference": "urn:uuid:bccd5886-4ceb-4eb2-85f6-b8bafbbd1f1b"
+    }
+  }
+}

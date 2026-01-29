@@ -1,0 +1,25 @@
+{
+  "type": "fhir_medication",
+  "timestamp": "2099-01-01",
+  "parents": [
+    "e4618cc162889be35ecc58a07812b2fe16334a000c9b96a1daf89015bc553260"
+  ],
+  "content": {
+    "code": {
+      "coding": [
+        {
+          "code": "282464",
+          "display": "Acetaminophen 160 MG Oral Tablet",
+          "system": "http://www.nlm.nih.gov/research/umls/rxnorm"
+        }
+      ],
+      "text": "Acetaminophen 160 MG Oral Tablet"
+    },
+    "meta": {
+      "profile": [
+        "http://standardhealthrecord.org/fhir/StructureDefinition/shr-medication-Medication"
+      ]
+    },
+    "resourceType": "Medication"
+  }
+}

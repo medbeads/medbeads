@@ -1,0 +1,53 @@
+{
+  "type": "fhir_observation",
+  "timestamp": "2016-08-17T11:04:03-04:00",
+  "parents": [
+    "e4618cc162889be35ecc58a07812b2fe16334a000c9b96a1daf89015bc553260"
+  ],
+  "content": {
+    "category": [
+      {
+        "coding": [
+          {
+            "code": "vital-signs",
+            "system": "http://hl7.org/fhir/observation-category"
+          }
+        ]
+      }
+    ],
+    "code": {
+      "coding": [
+        {
+          "code": "8302-2",
+          "display": "Body Height",
+          "system": "http://loinc.org"
+        }
+      ],
+      "text": "Body Height"
+    },
+    "context": {
+      "reference": "urn:uuid:27c57e7a-0711-4710-8dec-78a6721783db"
+    },
+    "effectiveDateTime": "2016-08-17T11:04:03-04:00",
+    "id": "e49e834e-4a17-43d6-8bc6-604ef8ce2956",
+    "issued": "2016-08-17T11:04:03-04:00",
+    "meta": {
+      "profile": [
+        "http://standardhealthrecord.org/fhir/StructureDefinition/shr-observation-Observation",
+        "http://standardhealthrecord.org/fhir/StructureDefinition/shr-vital-VitalSign",
+        "http://standardhealthrecord.org/fhir/StructureDefinition/shr-vital-BodyHeight"
+      ]
+    },
+    "resourceType": "Observation",
+    "status": "final",
+    "subject": {
+      "reference": "urn:uuid:bccd5886-4ceb-4eb2-85f6-b8bafbbd1f1b"
+    },
+    "valueQuantity": {
+      "code": "cm",
+      "system": "http://unitsofmeasure.org/",
+      "unit": "cm",
+      "value": 130.17408601232432
+    }
+  }
+}

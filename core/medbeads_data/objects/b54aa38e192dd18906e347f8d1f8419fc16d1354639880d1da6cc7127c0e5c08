@@ -1,0 +1,49 @@
+{
+  "type": "fhir_medicationrequest",
+  "timestamp": "2010-11-25",
+  "parents": [
+    "436df3ff3ce5f727dc7b320f70d6c314bcd91925243aea8ee4d81b20e8865747"
+  ],
+  "content": {
+    "authoredOn": "2010-11-25",
+    "context": {
+      "reference": "urn:uuid:d0f36c2d-5434-437c-9764-35bf285e9a6f"
+    },
+    "dosageInstruction": [
+      {}
+    ],
+    "extension": [
+      {
+        "url": "http://standardhealthrecord.org/fhir/StructureDefinition/shr-base-ActionCode-extension",
+        "valueCodeableConcept": {
+          "coding": [
+            {
+              "code": "33633005",
+              "display": "Prescription of drug (procedure)",
+              "system": "http://snomed.info/sct"
+            }
+          ],
+          "text": "Prescription of drug (procedure)"
+        }
+      }
+    ],
+    "medicationReference": {
+      "reference": ""
+    },
+    "meta": {
+      "profile": [
+        "http://standardhealthrecord.org/fhir/StructureDefinition/shr-medication-MedicationPrescription"
+      ]
+    },
+    "reasonReference": [
+      {
+        "reference": "urn:uuid:95929ddc-53a9-4ef0-a817-583fd020f931"
+      }
+    ],
+    "resourceType": "MedicationRequest",
+    "status": "stopped",
+    "subject": {
+      "reference": "urn:uuid:a8c67f30-eca3-489f-8d00-63604faf9638"
+    }
+  }
+}

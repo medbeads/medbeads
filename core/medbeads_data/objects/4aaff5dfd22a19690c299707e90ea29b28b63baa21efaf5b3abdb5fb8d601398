@@ -1,0 +1,67 @@
+{
+  "type": "fhir_careplan",
+  "timestamp": "2013-09-08",
+  "parents": [
+    "e4618cc162889be35ecc58a07812b2fe16334a000c9b96a1daf89015bc553260"
+  ],
+  "content": {
+    "activity": [
+      {
+        "detail": {
+          "code": {
+            "coding": [
+              {
+                "code": "229586001",
+                "display": "Rest, ice, compression and elevation treatment programme",
+                "system": "http://snomed.info/sct"
+              }
+            ]
+          },
+          "status": "completed"
+        }
+      },
+      {
+        "detail": {
+          "code": {
+            "coding": [
+              {
+                "code": "229070002",
+                "display": "Stretching exercises",
+                "system": "http://snomed.info/sct"
+              }
+            ]
+          },
+          "status": "completed"
+        }
+      }
+    ],
+    "addresses": [
+      {
+        "reference": "urn:uuid:14799f63-f7fd-4946-ba77-d7c6e2cd638a"
+      }
+    ],
+    "category": [
+      {
+        "coding": [
+          {
+            "code": "91251008",
+            "display": "Physical therapy procedure",
+            "system": "http://snomed.info/sct"
+          }
+        ]
+      }
+    ],
+    "context": {
+      "reference": "urn:uuid:8946197d-abd0-4d74-83d2-a636dec2551f"
+    },
+    "period": {
+      "end": "2013-10-19",
+      "start": "2013-09-08"
+    },
+    "resourceType": "CarePlan",
+    "status": "completed",
+    "subject": {
+      "reference": "urn:uuid:bccd5886-4ceb-4eb2-85f6-b8bafbbd1f1b"
+    }
+  }
+}

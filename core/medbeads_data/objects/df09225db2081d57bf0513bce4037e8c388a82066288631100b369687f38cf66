@@ -1,0 +1,41 @@
+{
+  "type": "fhir_encounter",
+  "timestamp": "2017-04-03T03:55:46-04:00",
+  "parents": [
+    "436df3ff3ce5f727dc7b320f70d6c314bcd91925243aea8ee4d81b20e8865747"
+  ],
+  "content": {
+    "class": {
+      "code": "outpatient"
+    },
+    "id": "6ce1cee6-1913-45ca-bbfe-543e432eb2f9",
+    "meta": {
+      "profile": [
+        "http://standardhealthrecord.org/fhir/StructureDefinition/shr-encounter-Encounter"
+      ]
+    },
+    "period": {
+      "end": "2017-04-03T04:55:46-04:00",
+      "start": "2017-04-03T03:55:46-04:00"
+    },
+    "resourceType": "Encounter",
+    "serviceProvider": {
+      "reference": "urn:uuid:ce9867c4-655e-40c7-8324-3c860101ab03"
+    },
+    "status": "finished",
+    "subject": {
+      "reference": "urn:uuid:a8c67f30-eca3-489f-8d00-63604faf9638"
+    },
+    "type": [
+      {
+        "coding": [
+          {
+            "code": "185349003",
+            "system": "http://snomed.info/sct"
+          }
+        ],
+        "text": "Outpatient Encounter"
+      }
+    ]
+  }
+}

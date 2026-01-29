@@ -1,0 +1,10 @@
+{
+  "type": "patient_registration",
+  "timestamp": "1990-04-08",
+  "parents": [],
+  "content": {
+    "fhir_id": "d6ee689c-8142-433e-9e8f-5643620cd5e3",
+    "gender": "female",
+    "name": "Geovany401 C"
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "type": "fhir_encounter",
+  "timestamp": "2013-02-13T10:19:15-05:00",
+  "parents": [
+    "436df3ff3ce5f727dc7b320f70d6c314bcd91925243aea8ee4d81b20e8865747"
+  ],
+  "content": {
+    "class": {
+      "code": "outpatient"
+    },
+    "id": "774fd959-eec0-427e-89fc-a281f144118c",
+    "meta": {
+      "profile": [
+        "http://standardhealthrecord.org/fhir/StructureDefinition/shr-encounter-Encounter"
+      ]
+    },
+    "period": {
+      "end": "2013-02-13T10:19:15-05:00",
+      "start": "2013-02-13T10:19:15-05:00"
+    },
+    "reason": {
+      "coding": [
+        {
+          "code": "195662009",
+          "display": "Acute viral pharyngitis (disorder)",
+          "system": "http://snomed.info/sct"
+        }
+      ]
+    },
+    "resourceType": "Encounter",
+    "serviceProvider": {
+      "reference": "urn:uuid:ce9867c4-655e-40c7-8324-3c860101ab03"
+    },
+    "status": "finished",
+    "subject": {
+      "reference": "urn:uuid:a8c67f30-eca3-489f-8d00-63604faf9638"
+    },
+    "type": [
+      {
+        "coding": [
+          {
+            "code": "185345009",
+            "system": "http://snomed.info/sct"
+          }
+        ],
+        "text": "Encounter for symptom"
+      }
+    ]
+  }
+}

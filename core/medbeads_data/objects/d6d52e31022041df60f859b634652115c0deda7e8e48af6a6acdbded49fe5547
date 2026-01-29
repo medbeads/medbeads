@@ -1,0 +1,25 @@
+{
+  "type": "fhir_medication",
+  "timestamp": "2099-01-01",
+  "parents": [
+    "436df3ff3ce5f727dc7b320f70d6c314bcd91925243aea8ee4d81b20e8865747"
+  ],
+  "content": {
+    "code": {
+      "coding": [
+        {
+          "code": "757594",
+          "display": "Jolivette 28 Day Pack",
+          "system": "http://www.nlm.nih.gov/research/umls/rxnorm"
+        }
+      ],
+      "text": "Jolivette 28 Day Pack"
+    },
+    "meta": {
+      "profile": [
+        "http://standardhealthrecord.org/fhir/StructureDefinition/shr-medication-Medication"
+      ]
+    },
+    "resourceType": "Medication"
+  }
+}

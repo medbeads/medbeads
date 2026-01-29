@@ -1,0 +1,37 @@
+{
+  "type": "fhir_condition",
+  "timestamp": "2099-01-01",
+  "parents": [
+    "436df3ff3ce5f727dc7b320f70d6c314bcd91925243aea8ee4d81b20e8865747"
+  ],
+  "content": {
+    "abatementDateTime": "2010-11-18T20:34:02-05:00",
+    "assertedDate": "2010-04-15",
+    "clinicalStatus": "active",
+    "code": {
+      "coding": [
+        {
+          "code": "72892002",
+          "display": "Normal pregnancy",
+          "system": "http://snomed.info/sct"
+        }
+      ],
+      "text": "Normal pregnancy"
+    },
+    "context": {
+      "reference": "urn:uuid:f7443041-7492-4095-9b47-d70f1da2f18d"
+    },
+    "id": "91034a58-0eeb-4c37-9d7f-e219ec3f0e5d",
+    "meta": {
+      "profile": [
+        "http://standardhealthrecord.org/fhir/StructureDefinition/shr-problem-Problem"
+      ]
+    },
+    "onsetDateTime": "2010-04-15T20:34:02-04:00",
+    "resourceType": "Condition",
+    "subject": {
+      "reference": "urn:uuid:a8c67f30-eca3-489f-8d00-63604faf9638"
+    },
+    "verificationStatus": "confirmed"
+  }
+}

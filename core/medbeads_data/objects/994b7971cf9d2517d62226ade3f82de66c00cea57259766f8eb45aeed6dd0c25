@@ -1,0 +1,50 @@
+{
+  "type": "fhir_encounter",
+  "timestamp": "2010-11-11T20:34:02-05:00",
+  "parents": [
+    "436df3ff3ce5f727dc7b320f70d6c314bcd91925243aea8ee4d81b20e8865747"
+  ],
+  "content": {
+    "class": {
+      "code": "ambulatory"
+    },
+    "id": "372f8c1c-8577-4bbf-a08f-4415a80fa828",
+    "meta": {
+      "profile": [
+        "http://standardhealthrecord.org/fhir/StructureDefinition/shr-encounter-Encounter"
+      ]
+    },
+    "period": {
+      "end": "2010-11-11T20:34:02-05:00",
+      "start": "2010-11-11T20:34:02-05:00"
+    },
+    "reason": {
+      "coding": [
+        {
+          "code": "72892002",
+          "display": "Normal pregnancy",
+          "system": "http://snomed.info/sct"
+        }
+      ]
+    },
+    "resourceType": "Encounter",
+    "serviceProvider": {
+      "reference": "urn:uuid:ce9867c4-655e-40c7-8324-3c860101ab03"
+    },
+    "status": "finished",
+    "subject": {
+      "reference": "urn:uuid:a8c67f30-eca3-489f-8d00-63604faf9638"
+    },
+    "type": [
+      {
+        "coding": [
+          {
+            "code": "424619006",
+            "system": "http://snomed.info/sct"
+          }
+        ],
+        "text": "Prenatal visit"
+      }
+    ]
+  }
+}
