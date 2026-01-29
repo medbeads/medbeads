@@ -30,9 +30,19 @@ export function DetailPanel({ selectedItem }: DetailPanelProps) {
       const result = await fetchAIInsight(selectedItem.data.id);
       setInsight(result.insight);
       setBeadsUsed(result.beads_used || []);
-    } catch (e) {
+    } catch (e: any) {
       console.error('Failed to fetch insight:', e);
-      setInsight('Failed to generate AI insight.');
+      // Check if it's a network error or API error
+      if (e?.response?.data?.detail) {
+        // API returned an error message
+        setInsight(`⚠️ ${e.response.data.detail}`);
+      } else if (e?.message?.includes('Network Error') || e?.code === 'ERR_NETWORK') {
+        // Network/connection error
+        setInsight('⚠️ AI API is not reachable. Please ensure the API server is running on port 8000.');
+      } else {
+        // Generic error with setup hint
+        setInsight('⚠️ AI機能を使用するには、GEMINI_API_KEY の設定が必要です。\n\n1. `api/.env` ファイルを作成\n2. `GEMINI_API_KEY=your_key_here` を設定\n3. Docker を再起動');
+      }
       setBeadsUsed([]);
     } finally {
       setLoadingInsight(false);
