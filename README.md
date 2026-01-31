@@ -168,16 +168,59 @@ You can use the helper script to verify the environment, ingest sample data, and
 ## Data Architecture & Ingestion Flow
 
 1. **FHIR Source Data**
-   - Located in `medbeads/FHIR_sample/`.
+   - Located in `medbeads/FHIR_sample/` (general samples) or `sample_data/fhir/` (security clearance test data).
    - Contains raw FHIR JSON files.
 
 2. **Ingestion Process (Python)**
    - Run `python scripts/mass_ingest.py` (or via `uv run`).
-   - The script reads JSON files, converts them into **Beads** (Merkle Graph Nodes), and sends them to the Core Server.
+   - The script reads JSON files, converts them into **Beads** (Merkle Graph Nodes), and sends them to the Core Server via API.
+   - **Important:** Beads must be ingested through the API to be indexed in SQLite. Simply copying object files will not register them in the database.
 
 3. **Storage (Core Engine)**
    - **Content Addressable Storage (CAS):** Raw data is stored as immutable files in `medbeads/core/medbeads_data/objects/`.
    - **Metadata Index (SQLite):** Searchable index is stored in `medbeads/core/medbeads_data/metadata.db`.
+
+4. **Docker Startup Ingestion**
+   - When running via Docker (`deploy/hf/Dockerfile`), the startup script automatically:
+     1. Starts the Core server temporarily
+     2. Ingests FHIR data from `sample_data/fhir/` using `mass_ingest.py`
+     3. Sets up security clearance rules
+     4. Restarts services via supervisord
+
+## Security Clearance
+
+MedBeads supports **Security Clearance** to control who can view specific medical records. This uses a **Blacklist model** (default: all can view, explicit deny for specific roles).
+
+### Viewer Roles
+
+| Role | Label (日本語) | Description |
+|------|---------------|-------------|
+| `patient` | 患者本人 | The patient themselves |
+| `family` | 家族 | Family members |
+| `primary_care` | 主治医 | Primary care physician |
+| `specialist` | 専門医 | Consulting specialists |
+| `nurse` | 看護師 | Nursing staff |
+| `admin` | 事務 | Hospital administration |
+| `insurance` | 保険会社 | Insurance companies |
+| `researcher` | 研究者 | Research access |
+| `emergency` | 緊急時 | Emergency override (bypasses all restrictions) |
+| `system` | システム | System/AI processes (full access) |
+
+### Sample Test Patients
+
+The `sample_data/fhir/` directory contains 5 test patients with various clearance scenarios:
+
+| Patient | Scenario | Clearance |
+|---------|----------|-----------|
+| Patient A (30s F) | Gynecology | Hide from family |
+| Patient B (50s M) | Cancer suspicion | Temporarily hide from patient/family (2 weeks) |
+| Patient C (40s M) | Psychiatry | Hide from insurance/admin |
+| Patient D (60s F) | General internal medicine | No restrictions |
+| Patient E (20s M) | Complex/Emergency | Multiple restrictions (drug screen, alcohol) |
+
+### Testing Clearance
+
+Use the **Viewer Role Selector** in the UI header to switch between roles and observe how restricted records are displayed or hidden.
 
 ## Populating Seed Data
 

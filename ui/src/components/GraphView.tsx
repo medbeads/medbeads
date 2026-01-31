@@ -377,24 +377,24 @@ function GraphViewInner({ items, onNodeClick, selectedId, clearanceRulesMap = {}
 
       {/* Legend for clearance colors */}
       <div className="absolute top-4 left-4 bg-white/90 backdrop-blur-sm rounded-lg shadow-md border border-slate-200 p-3 text-xs">
-        <div className="font-semibold text-slate-700 mb-2">クリアランス凡例</div>
+        <div className="font-semibold text-slate-700 mb-2">Clearance Legend</div>
         <div className="space-y-1.5">
           <div className="flex items-center gap-2">
             <div className="w-5 h-5 rounded border-2 border-dashed" style={{ background: 'rgba(251, 191, 36, 0.15)', borderColor: 'rgba(251, 191, 36, 0.5)' }} />
-            <span className="text-slate-600">制限グループ（点線矩形）</span>
+            <span className="text-slate-600">Restricted Group</span>
           </div>
           <div className="flex items-center gap-2">
             <span className="text-sm">🔓</span>
-            <span className="text-slate-600">アクセス可（制限あり）</span>
+            <span className="text-slate-600">Access Allowed (with restrictions)</span>
           </div>
           <div className="flex items-center gap-2">
             <span className="text-sm">🔒</span>
-            <span className="text-slate-600">アクセス不可</span>
+            <span className="text-slate-600">Access Denied</span>
           </div>
         </div>
         {clearanceGroups.length > 0 && (
           <div className="mt-2 pt-2 border-t border-slate-200 text-slate-500">
-            {clearanceGroups.length} グループ検出
+            {clearanceGroups.length} group(s) detected
           </div>
         )}
       </div>
