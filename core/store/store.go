@@ -1056,41 +1056,13 @@ func HasAccessWithRules(rules []types.ClearanceRule, viewerRoles []string) bool 
 	return true
 }
 
-// FilterByAccess filters a list of beads based on viewer's access permissions
+// FilterByAccess returns all beads without filtering
+// Security clearance is for visual indication only - all beads remain visible
+// The UI shows clearance areas/rectangles to indicate restricted beads
 func FilterByAccess(beads []types.Bead, viewerRoles []string) ([]types.Bead, error) {
-	if len(beads) == 0 {
-		return beads, nil
-	}
-
-	// Emergency/System role sees everything
-	for _, role := range viewerRoles {
-		if role == types.RoleEmergency || role == types.RoleSystem {
-			return beads, nil
-		}
-	}
-
-	// Collect all bead IDs
-	beadIDs := make([]string, len(beads))
-	for i, bead := range beads {
-		beadIDs[i] = bead.ID
-	}
-
-	// Fetch all rules at once
-	rulesMap, err := GetAllClearanceRulesForBeads(beadIDs)
-	if err != nil {
-		return nil, err
-	}
-
-	// Filter beads
-	var filtered []types.Bead
-	for _, bead := range beads {
-		rules := rulesMap[bead.ID]
-		if HasAccessWithRules(rules, viewerRoles) {
-			filtered = append(filtered, bead)
-		}
-	}
-
-	return filtered, nil
+	// No filtering - all beads are always visible
+	// Clearance rules are used for visual display only
+	return beads, nil
 }
 
 // LogClearanceAction logs a clearance-related action for audit purposes

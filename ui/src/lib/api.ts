@@ -28,7 +28,6 @@ export type ViewerRole =
   | 'primary_care' // 主治医
   | 'specialist'   // 専門医
   | 'nurse'        // 看護師
-  | 'admin'        // 事務
   | 'insurance'    // 保険会社
   | 'researcher'   // 研究者
   | 'emergency'    // 緊急時オーバーライド
@@ -40,7 +39,6 @@ export const VIEWER_ROLES: { value: ViewerRole; label: string; labelJa: string }
   { value: 'primary_care', label: 'Primary Care', labelJa: '主治医' },
   { value: 'specialist', label: 'Specialist', labelJa: '専門医' },
   { value: 'nurse', label: 'Nurse', labelJa: '看護師' },
-  { value: 'admin', label: 'Admin', labelJa: '事務' },
   { value: 'insurance', label: 'Insurance', labelJa: '保険会社' },
   { value: 'researcher', label: 'Researcher', labelJa: '研究者' },
   { value: 'emergency', label: 'Emergency', labelJa: '緊急時' },

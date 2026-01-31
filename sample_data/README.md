@@ -31,7 +31,7 @@ sample_data/
 
 ### Patient C: Suzuki Kenji (40s Male) - Psychiatry
 - **Scenario**: Depression and anxiety treatment
-- **Clearance**: Hide all mental health records from **insurance and admin**
+- **Clearance**: Hide all mental health records from **insurance**
 - **Use Case**: Patient concerned about employment/insurance discrimination
 
 ### Patient D: Sato Hanako (60s Female) - General Internal Medicine
@@ -45,7 +45,7 @@ sample_data/
   - Boxer's fracture
   - Positive drug screen (THC)
 - **Clearance**: Multiple restrictions
-  - Alcohol/drug information: Hide from **family, insurance, admin**
+  - Alcohol/drug information: Hide from **family, insurance**
   - Drug screen: Hide from **all except primary care**
   - Social work notes: **Primary care only**
 - **Use Case**: Complex case with legal/employment implications
@@ -91,7 +91,6 @@ curl -H "X-Viewer-Roles: emergency" http://localhost:8080/beads/context?id=PATIE
 | `primary_care` | Primary care physician |
 | `specialist` | Consulting specialists |
 | `nurse` | Nursing staff |
-| `admin` | Hospital administration |
 | `insurance` | Insurance companies |
 | `researcher` | Research access |
 | `emergency` | Emergency override (bypasses all) |

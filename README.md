@@ -200,7 +200,6 @@ MedBeads supports **Security Clearance** to control who can view specific medica
 | `primary_care` | 主治医 | Primary care physician |
 | `specialist` | 専門医 | Consulting specialists |
 | `nurse` | 看護師 | Nursing staff |
-| `admin` | 事務 | Hospital administration |
 | `insurance` | 保険会社 | Insurance companies |
 | `researcher` | 研究者 | Research access |
 | `emergency` | 緊急時 | Emergency override (bypasses all restrictions) |
@@ -214,7 +213,7 @@ The `sample_data/fhir/` directory contains 5 test patients with various clearanc
 |---------|----------|-----------|
 | Patient A (30s F) | Gynecology | Hide from family |
 | Patient B (50s M) | Cancer suspicion | Temporarily hide from patient/family (2 weeks) |
-| Patient C (40s M) | Psychiatry | Hide from insurance/admin |
+| Patient C (40s M) | Psychiatry | Hide from insurance |
 | Patient D (60s F) | General internal medicine | No restrictions |
 | Patient E (20s M) | Complex/Emergency | Multiple restrictions (drug screen, alcohol) |
 

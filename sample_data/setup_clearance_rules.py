@@ -30,7 +30,7 @@ CLEARANCE_SCENARIOS = [
     {
         "patient_name": "Tanaka Yuki",
         "search_terms": ["pregnancy test", "Urine pregnancy"],
-        "denied_roles": ["family", "admin"],
+        "denied_roles": ["family"],
         "reason": "Sensitive reproductive health information",
         "expires_at": None
     },
@@ -51,56 +51,56 @@ CLEARANCE_SCENARIOS = [
     {
         "patient_name": "Suzuki Kenji",
         "search_terms": ["Depressive disorder", "Major depressive"],
-        "denied_roles": ["insurance", "admin"],
+        "denied_roles": ["insurance"],
         "reason": "Patient explicit request - mental health privacy",
         "expires_at": None
     },
     {
         "patient_name": "Suzuki Kenji",
         "search_terms": ["Anxiety disorder", "Generalized anxiety"],
-        "denied_roles": ["insurance", "admin"],
+        "denied_roles": ["insurance"],
         "reason": "Mental health condition - restricted disclosure",
         "expires_at": None
     },
     {
         "patient_name": "Suzuki Kenji",
         "search_terms": ["Escitalopram", "Alprazolam"],
-        "denied_roles": ["insurance", "admin"],
+        "denied_roles": ["insurance"],
         "reason": "Psychiatric medication - restricted",
         "expires_at": None
     },
     {
         "patient_name": "Suzuki Kenji",
         "search_terms": ["Psychiatry progress note"],
-        "denied_roles": ["insurance", "admin", "family"],
+        "denied_roles": ["insurance", "family"],
         "reason": "Confidential mental health documentation",
         "expires_at": None
     },
     {
         "patient_name": "Nakamura Ryo",
         "search_terms": ["Alcohol intoxication", "Acute alcohol"],
-        "denied_roles": ["family", "insurance", "admin"],
+        "denied_roles": ["family", "insurance"],
         "reason": "Patient request - may affect employment",
         "expires_at": None
     },
     {
         "patient_name": "Nakamura Ryo",
         "search_terms": ["Blood alcohol level"],
-        "denied_roles": ["family", "insurance", "admin"],
+        "denied_roles": ["family", "insurance"],
         "reason": "Sensitive substance-related information",
         "expires_at": None
     },
     {
         "patient_name": "Nakamura Ryo",
         "search_terms": ["THC", "cannabis", "Drug screen"],
-        "denied_roles": ["family", "insurance", "admin", "specialist", "nurse"],
+        "denied_roles": ["family", "insurance", "specialist", "nurse"],
         "reason": "Highly sensitive - legal implications - primary care only",
         "expires_at": None
     },
     {
         "patient_name": "Nakamura Ryo",
         "search_terms": ["Social work assessment"],
-        "denied_roles": ["family", "insurance", "admin", "specialist", "nurse"],
+        "denied_roles": ["family", "insurance", "specialist", "nurse"],
         "reason": "Confidential social work documentation",
         "expires_at": None
     }

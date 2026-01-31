@@ -16,7 +16,6 @@ const (
 	RolePrimaryCare = "primary_care" // 主治医
 	RoleSpecialist  = "specialist"   // 専門医
 	RoleNurse       = "nurse"        // 看護師
-	RoleAdmin       = "admin"        // 事務
 	RoleInsurance   = "insurance"    // 保険会社
 	RoleResearcher  = "researcher"   // 研究者
 	RoleEmergency   = "emergency"    // 緊急時オーバーライド
@@ -30,7 +29,6 @@ var AllRoles = []string{
 	RolePrimaryCare,
 	RoleSpecialist,
 	RoleNurse,
-	RoleAdmin,
 	RoleInsurance,
 	RoleResearcher,
 	RoleEmergency,
