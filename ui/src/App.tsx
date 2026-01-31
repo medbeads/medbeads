@@ -224,10 +224,11 @@ function App() {
                                 ))}
                             </div>
                         ) : (
-                            <GraphView 
-                                items={timelineItems} 
+                            <GraphView
+                                items={timelineItems}
                                 onNodeClick={(item) => setSelectedItem(item)}
                                 selectedId={selectedItem?.data?.id}
+                                clearanceRulesMap={clearanceRulesMap}
                             />
                         )}
                     </>
