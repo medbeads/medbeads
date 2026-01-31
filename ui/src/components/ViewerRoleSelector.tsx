@@ -10,17 +10,6 @@ interface ViewerRoleSelectorProps {
 export function ViewerRoleSelector({ selectedRoles, onRolesChange }: ViewerRoleSelectorProps) {
   const [isOpen, setIsOpen] = useState(false);
 
-  const toggleRole = (role: ViewerRole) => {
-    if (selectedRoles.includes(role)) {
-      // Don't allow removing the last role
-      if (selectedRoles.length > 1) {
-        onRolesChange(selectedRoles.filter(r => r !== role));
-      }
-    } else {
-      onRolesChange([...selectedRoles, role]);
-    }
-  };
-
   const selectSingleRole = (role: ViewerRole) => {
     onRolesChange([role]);
     setIsOpen(false);
