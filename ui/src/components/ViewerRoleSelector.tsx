@@ -12,14 +12,6 @@ export function ViewerRoleSelector({ selectedRoles, onRolesChange }: ViewerRoleS
 
   const currentRole = selectedRoles[0] || 'system';
 
-  // Group roles for compact display
-  const roleGroups = [
-    { roles: ['patient', 'family'] as ViewerRole[], label: '患者側' },
-    { roles: ['primary_care', 'specialist', 'nurse'] as ViewerRole[], label: '医療者' },
-    { roles: ['admin', 'insurance'] as ViewerRole[], label: '事務' },
-    { roles: ['emergency', 'system'] as ViewerRole[], label: '特権' },
-  ];
-
   return (
     <div className="flex items-center gap-2 text-sm">
       <span className="text-slate-500 font-medium mr-1">閲覧者:</span>
