@@ -104,7 +104,7 @@ const clearanceColors = [
 ];
 
 // Custom layout: Group by Date (Y axis = Time, X axis = Items in same date)
-const getLayoutedElements = (nodes: Node[], edges: Edge[], items: TimelineItem[]) => {
+const getLayoutedElements = (nodes: Node[], edges: Edge[], items: TimelineItem[], restrictedNodeIds: Set<string>) => {
   // 1. Group nodes by date
   const nodesByDate: Record<string, Node[]> = {};
 
@@ -138,8 +138,17 @@ const getLayoutedElements = (nodes: Node[], edges: Edge[], items: TimelineItem[]
   sortedDates.forEach(date => {
     const rowNodes = nodesByDate[date];
 
-    // Sort nodes within row by type
+    // Sort nodes within row:
+    // 1. Access Status (Accessible first)
+    // 2. Type
     rowNodes.sort((a, b) => {
+        const isRestrictedA = restrictedNodeIds.has(a.id);
+        const isRestrictedB = restrictedNodeIds.has(b.id);
+
+        if (isRestrictedA !== isRestrictedB) {
+            return isRestrictedA ? 1 : -1; // Accessible (false) comes before Restricted (true)
+        }
+
         const typeA = items.find(i => i.data.id === a.id)?.type || '';
         const typeB = items.find(i => i.data.id === b.id)?.type || '';
         return typeA.localeCompare(typeB);
@@ -169,30 +178,33 @@ function GraphViewInner({ items, onNodeClick, selectedId, clearanceRulesMap = {}
     const newNodes: Node[] = [];
     const newEdges: Edge[] = [];
     const idSet = new Set(items.map(item => item.data.id));
+    const restrictedNodeIds = new Set<string>();
 
-    // Track nodes by their clearance group
-    const clearanceGroupNodes: Record<string, { nodeIds: string[], deniedRoles: string[] }> = {};
+    // Track accessible nodes by date for grouping
+    const accessibleNodesByDate: Record<string, string[]> = {};
 
     items.forEach((item) => {
       const itemId = item.data.id;
       const isSelected = selectedId === itemId;
       const rules = clearanceRulesMap[itemId];
-      const deniedRoles = getDeniedRoles(rules);
-      const deniedRolesKey = getDeniedRolesKey(rules);
-      const hasClearance = deniedRoles.length > 0;
+      const isRestricted = isRestrictedForViewer(rules, viewerRoles);
 
-      // Track clearance groups
-      if (hasClearance && deniedRolesKey) {
-        if (!clearanceGroupNodes[deniedRolesKey]) {
-          clearanceGroupNodes[deniedRolesKey] = { nodeIds: [], deniedRoles };
-        }
-        clearanceGroupNodes[deniedRolesKey].nodeIds.push(itemId);
+      if (isRestricted) {
+          restrictedNodeIds.add(itemId);
+      } else {
+          // Track for grouping
+          const dateKey = item.date && item.date.length >= 10 ? item.date.substring(0, 10) : 'unknown';
+          if (!accessibleNodesByDate[dateKey]) {
+              accessibleNodesByDate[dateKey] = [];
+          }
+          accessibleNodesByDate[dateKey].push(itemId);
       }
 
       let label = item.type.toUpperCase();
       let bgColor = "rgba(255, 255, 255, 0.95)";
       let borderColor = "#cbd5e1";
 
+      // Base Styles
       if (item.type === "medication") {
         label = "💊 Medication";
         bgColor = isSelected ? '#dbeafe' : '#f0fdf4';
@@ -215,6 +227,13 @@ function GraphViewInner({ items, onNodeClick, selectedId, clearanceRulesMap = {}
         borderColor = isSelected ? '#2563eb' : '#0891b2';
       }
 
+      // Restricted Overlay Styles
+      if (isRestricted) {
+          label = `🔒 ${label}`;
+          bgColor = '#f1f5f9'; // Slate 100
+          borderColor = '#cbd5e1'; // Slate 300
+      }
+
       let detail = "";
       if (item.type === "medication") detail = item.data.medication_name;
       if (item.type === "observation") detail = item.data.display_name;
@@ -231,7 +250,7 @@ function GraphViewInner({ items, onNodeClick, selectedId, clearanceRulesMap = {}
         style: {
             background: bgColor,
             border: `2px solid ${borderColor}`,
-            color: '#1e293b',
+            color: isRestricted ? '#64748b' : '#1e293b',
             borderRadius: '10px',
             fontSize: '11px',
             padding: '8px',
@@ -242,6 +261,7 @@ function GraphViewInner({ items, onNodeClick, selectedId, clearanceRulesMap = {}
             boxShadow: isSelected ? '0 0 0 3px rgba(37, 99, 235, 0.3)' : '0 1px 3px rgba(0,0,0,0.1)',
             cursor: 'pointer',
             zIndex: 10,
+            opacity: isRestricted ? 0.6 : 1.0,
         },
       });
 
@@ -254,10 +274,10 @@ function GraphViewInner({ items, onNodeClick, selectedId, clearanceRulesMap = {}
                 target: itemId,
                 type: 'smoothstep',
                 animated: false,
-                style: { stroke: '#94a3b8', strokeWidth: 1 },
+                style: { stroke: isRestricted ? '#e2e8f0' : '#94a3b8', strokeWidth: 1 },
                 markerEnd: {
                     type: MarkerType.ArrowClosed,
-                    color: '#94a3b8',
+                    color: isRestricted ? '#e2e8f0' : '#94a3b8',
                     width: 15,
                     height: 15,
                 },
@@ -267,32 +287,16 @@ function GraphViewInner({ items, onNodeClick, selectedId, clearanceRulesMap = {}
     });
 
     // Apply layout first to get positions
-    const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(newNodes, newEdges, items);
+    const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(newNodes, newEdges, items, restrictedNodeIds);
 
-    // Create clearance group rectangles after layout
-    // For 'system' role: show all clearance areas
-    // For other roles: only show clearance areas for beads the viewer CAN access
+    // Create group rectangles for Accessible Areas
     const groupNodes: Node[] = [];
-    let colorIndex = 0;
-    const isSystemView = viewerRoles.includes('system') || viewerRoles.includes('emergency');
+    
+    // We iterate through dates to create row-based accessible areas
+    Object.entries(accessibleNodesByDate).forEach(([dateKey, nodeIds]) => {
+      if (nodeIds.length === 0) return;
 
-    Object.entries(clearanceGroupNodes).forEach(([key, group]) => {
-      if (group.nodeIds.length === 0) return;
-
-      // For non-system viewers, filter to only show beads they can access
-      let visibleNodeIds = group.nodeIds;
-      if (!isSystemView) {
-        visibleNodeIds = group.nodeIds.filter(nodeId => {
-          const rules = clearanceRulesMap[nodeId];
-          // Check if viewer is NOT denied
-          return !isRestrictedForViewer(rules, viewerRoles);
-        });
-      }
-
-      if (visibleNodeIds.length === 0) return;
-
-      // Find bounding box for this group
-      const groupItemNodes = layoutedNodes.filter(n => visibleNodeIds.includes(n.id));
+      const groupItemNodes = layoutedNodes.filter(n => nodeIds.includes(n.id));
       if (groupItemNodes.length === 0) return;
 
       const padding = 15;
@@ -305,20 +309,13 @@ function GraphViewInner({ items, onNodeClick, selectedId, clearanceRulesMap = {}
         maxY = Math.max(maxY, node.position.y + nodeHeight);
       });
 
-      const color = clearanceColors[colorIndex % clearanceColors.length];
-      colorIndex++;
-
-      // Create background rectangle node
-      // For system view: show denied roles; for other views: just show "Accessible"
-      const deniedList = group.deniedRoles.slice(0, 3).join(', ') + (group.deniedRoles.length > 3 ? '...' : '');
-      const groupLabel = isSystemView
-        ? `🔒 Denied: ${deniedList}`
-        : `✓ Accessible`;
+      // Visual style for Accessible Area
+      const color = { bg: 'rgba(34, 197, 94, 0.05)', border: 'rgba(34, 197, 94, 0.3)' }; // Greenish
 
       groupNodes.push({
-        id: `clearance-group-${key}`,
+        id: `accessible-group-${dateKey}`,
         data: {
-          label: groupLabel,
+          label: "✓ Accessible Area",
         },
         position: { x: minX - padding, y: minY - padding - 20 },
         style: {
@@ -331,7 +328,7 @@ function GraphViewInner({ items, onNodeClick, selectedId, clearanceRulesMap = {}
           pointerEvents: 'none' as const,
           fontSize: '10px',
           fontWeight: '600',
-          color: color.border.replace('0.4', '1').replace('0.5', '1'),
+          color: 'rgba(21, 128, 61, 0.8)', // Green 700
           padding: '4px 8px',
           display: 'flex',
           alignItems: 'flex-start',
@@ -341,6 +338,16 @@ function GraphViewInner({ items, onNodeClick, selectedId, clearanceRulesMap = {}
         draggable: false,
       });
     });
+
+    // Add group nodes at the beginning (so they render behind)
+    const allNodes = [...groupNodes, ...layoutedNodes];
+
+    return {
+      nodes: allNodes,
+      edges: layoutedEdges,
+      clearanceGroups: Object.keys(accessibleNodesByDate)
+    };
+  }, [items, selectedId, clearanceRulesMap, viewerRoles]);
 
     // Add group nodes at the beginning (so they render behind)
     const allNodes = [...groupNodes, ...layoutedNodes];
@@ -393,25 +400,24 @@ function GraphViewInner({ items, onNodeClick, selectedId, clearanceRulesMap = {}
         <div className="font-semibold text-slate-700 mb-2">
           Security Clearance
           <span className="ml-2 font-normal text-slate-500">
-            ({viewerRoles.includes('system') || viewerRoles.includes('emergency') ? 'Full access' : `Viewing as: ${viewerRoles[0]}`})
+            (Viewing as: {viewerRoles.join(', ')})
           </span>
         </div>
         <div className="space-y-1.5">
-          {(viewerRoles.includes('system') || viewerRoles.includes('emergency')) ? (
-            <div className="flex items-center gap-2">
-              <div className="w-5 h-5 rounded border-2 border-dashed" style={{ background: 'rgba(251, 191, 36, 0.15)', borderColor: 'rgba(251, 191, 36, 0.5)' }} />
-              <span className="text-slate-600">Has access restrictions</span>
+          <div className="flex items-center gap-2">
+            <div className="w-5 h-5 rounded border-2 border-dashed" style={{ background: 'rgba(34, 197, 94, 0.05)', borderColor: 'rgba(34, 197, 94, 0.3)' }} />
+            <span className="text-slate-600 font-medium">Accessible Area</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-5 h-5 rounded border-2 border-slate-300 bg-slate-100 flex items-center justify-center text-[10px]">
+              🔒
             </div>
-          ) : (
-            <div className="flex items-center gap-2">
-              <div className="w-5 h-5 rounded border-2 border-dashed" style={{ background: 'rgba(251, 191, 36, 0.15)', borderColor: 'rgba(251, 191, 36, 0.5)' }} />
-              <span className="text-slate-600">Accessible area</span>
-            </div>
-          )}
+            <span className="text-slate-500 italic">Restricted (Outside Area)</span>
+          </div>
         </div>
         {clearanceGroups.length > 0 && (
-          <div className="mt-2 pt-2 border-t border-slate-200 text-slate-500">
-            {clearanceGroups.length} area(s)
+          <div className="mt-2 pt-2 border-t border-slate-200 text-slate-400 text-[10px]">
+            {clearanceGroups.length} accessible section(s) identified
           </div>
         )}
       </div>
