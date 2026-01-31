@@ -1,13 +1,15 @@
 import { Calendar, Pill, Activity, FileText, AlertCircle } from 'lucide-react';
-import type { TimelineItem } from '../lib/api';
+import type { TimelineItem, ClearanceRule } from '../lib/api';
+import { ClearanceBadge } from './ClearanceBadge';
 
 interface TimelineCardProps {
   item: TimelineItem;
   isSelected: boolean;
   onClick: () => void;
+  clearanceRules?: ClearanceRule[];
 }
 
-export function TimelineCard({ item, isSelected, onClick }: TimelineCardProps) {
+export function TimelineCard({ item, isSelected, onClick, clearanceRules }: TimelineCardProps) {
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
     return {
@@ -158,6 +160,9 @@ export function TimelineCard({ item, isSelected, onClick }: TimelineCardProps) {
         <span>{date}</span>
         <span className="text-slate-400">・</span>
         <span>{time}</span>
+        {clearanceRules && clearanceRules.length > 0 && (
+          <ClearanceBadge rules={clearanceRules} compact />
+        )}
       </div>
       <div className="flex items-start gap-4">
         <div className={`flex-shrink-0 w-12 h-12 ${colors.icon} rounded-xl flex items-center justify-center`}>

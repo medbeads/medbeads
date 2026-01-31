@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/sojin25/medbeads/core/types"
 
@@ -99,6 +100,42 @@ func InitDB() error {
 		// Ignore if column already exists
 		fmt.Printf("ℹ️ Column check: %v\n", err)
 	}
+
+	// 4. Clearance Rules Table (Security Clearance feature)
+	clearanceQuery := `
+	CREATE TABLE IF NOT EXISTS clearance_rules (
+		id TEXT PRIMARY KEY,
+		bead_id TEXT NOT NULL,
+		denied_roles TEXT NOT NULL,
+		created_by TEXT NOT NULL,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		reason TEXT,
+		expires_at DATETIME
+	);
+	CREATE INDEX IF NOT EXISTS idx_clearance_bead ON clearance_rules(bead_id);
+	`
+	if _, err := DB.Exec(clearanceQuery); err != nil {
+		return fmt.Errorf("failed to create clearance_rules table: %w", err)
+	}
+
+	// 5. Clearance Audit Log Table
+	auditQuery := `
+	CREATE TABLE IF NOT EXISTS clearance_audit (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		bead_id TEXT NOT NULL,
+		action TEXT NOT NULL,
+		user_id TEXT NOT NULL,
+		user_roles TEXT NOT NULL,
+		timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+		details TEXT
+	);
+	CREATE INDEX IF NOT EXISTS idx_audit_bead ON clearance_audit(bead_id);
+	`
+	if _, err := DB.Exec(auditQuery); err != nil {
+		return fmt.Errorf("failed to create clearance_audit table: %w", err)
+	}
+
+	fmt.Println("🔒 Security Clearance tables initialized.")
 
 	return nil
 }
@@ -817,6 +854,279 @@ func GetContext(startID string, depth int) ([]types.Bead, error) {
 type ResourceTypeCount struct {
 	ResourceType string `json:"resourceType"`
 	PatientCount int    `json:"patientCount"`
+}
+
+// ============================================================
+// Security Clearance Functions
+// ============================================================
+
+// SaveClearanceRule saves a clearance rule to the database
+func SaveClearanceRule(rule types.ClearanceRule) error {
+	deniedRolesJSON, err := json.Marshal(rule.DeniedRoles)
+	if err != nil {
+		return fmt.Errorf("failed to marshal denied_roles: %w", err)
+	}
+
+	query := `INSERT OR REPLACE INTO clearance_rules (id, bead_id, denied_roles, created_by, created_at, reason, expires_at)
+	          VALUES (?, ?, ?, ?, ?, ?, ?)`
+	_, err = DB.Exec(query, rule.ID, rule.BeadID, string(deniedRolesJSON), rule.CreatedBy, rule.CreatedAt, rule.Reason, rule.ExpiresAt)
+	if err != nil {
+		return fmt.Errorf("failed to save clearance rule: %w", err)
+	}
+	return nil
+}
+
+// GetClearanceRules retrieves all clearance rules for a bead
+func GetClearanceRules(beadID string) ([]types.ClearanceRule, error) {
+	query := `SELECT id, bead_id, denied_roles, created_by, created_at, reason, expires_at
+	          FROM clearance_rules WHERE bead_id = ?`
+	rows, err := DB.Query(query, beadID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query clearance rules: %w", err)
+	}
+	defer rows.Close()
+
+	var rules []types.ClearanceRule
+	for rows.Next() {
+		var rule types.ClearanceRule
+		var deniedRolesStr string
+		var expiresAt sql.NullString
+		var reason sql.NullString
+
+		if err := rows.Scan(&rule.ID, &rule.BeadID, &deniedRolesStr, &rule.CreatedBy, &rule.CreatedAt, &reason, &expiresAt); err != nil {
+			continue
+		}
+
+		if err := json.Unmarshal([]byte(deniedRolesStr), &rule.DeniedRoles); err != nil {
+			continue
+		}
+
+		if reason.Valid {
+			rule.Reason = reason.String
+		}
+		if expiresAt.Valid {
+			rule.ExpiresAt = &expiresAt.String
+		}
+
+		rules = append(rules, rule)
+	}
+
+	return rules, nil
+}
+
+// GetAllClearanceRulesForBeads retrieves clearance rules for multiple beads efficiently
+func GetAllClearanceRulesForBeads(beadIDs []string) (map[string][]types.ClearanceRule, error) {
+	if len(beadIDs) == 0 {
+		return make(map[string][]types.ClearanceRule), nil
+	}
+
+	// Build placeholders for IN clause
+	placeholders := make([]string, len(beadIDs))
+	args := make([]interface{}, len(beadIDs))
+	for i, id := range beadIDs {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+
+	query := fmt.Sprintf(`SELECT id, bead_id, denied_roles, created_by, created_at, reason, expires_at
+	          FROM clearance_rules WHERE bead_id IN (%s)`, strings.Join(placeholders, ","))
+	rows, err := DB.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query clearance rules: %w", err)
+	}
+	defer rows.Close()
+
+	result := make(map[string][]types.ClearanceRule)
+	for rows.Next() {
+		var rule types.ClearanceRule
+		var deniedRolesStr string
+		var expiresAt sql.NullString
+		var reason sql.NullString
+
+		if err := rows.Scan(&rule.ID, &rule.BeadID, &deniedRolesStr, &rule.CreatedBy, &rule.CreatedAt, &reason, &expiresAt); err != nil {
+			continue
+		}
+
+		if err := json.Unmarshal([]byte(deniedRolesStr), &rule.DeniedRoles); err != nil {
+			continue
+		}
+
+		if reason.Valid {
+			rule.Reason = reason.String
+		}
+		if expiresAt.Valid {
+			rule.ExpiresAt = &expiresAt.String
+		}
+
+		result[rule.BeadID] = append(result[rule.BeadID], rule)
+	}
+
+	return result, nil
+}
+
+// DeleteClearanceRule deletes a clearance rule by ID
+func DeleteClearanceRule(ruleID string) error {
+	query := `DELETE FROM clearance_rules WHERE id = ?`
+	_, err := DB.Exec(query, ruleID)
+	if err != nil {
+		return fmt.Errorf("failed to delete clearance rule: %w", err)
+	}
+	return nil
+}
+
+// HasAccess checks if a viewer has access to a bead based on clearance rules
+// Returns true if access is allowed, false otherwise
+func HasAccess(beadID string, viewerRoles []string) (bool, error) {
+	// Emergency role always has access
+	for _, role := range viewerRoles {
+		if role == types.RoleEmergency || role == types.RoleSystem {
+			return true, nil
+		}
+	}
+
+	rules, err := GetClearanceRules(beadID)
+	if err != nil {
+		return false, err
+	}
+
+	// No rules = no restrictions (Blacklist model)
+	if len(rules) == 0 {
+		return true, nil
+	}
+
+	// Check each rule
+	now := currentTime()
+	for _, rule := range rules {
+		// Skip expired rules
+		if rule.ExpiresAt != nil && *rule.ExpiresAt != "" {
+			expiresAt, err := parseTime(*rule.ExpiresAt)
+			if err == nil && now.After(expiresAt) {
+				continue
+			}
+		}
+
+		// Check if any of viewer's roles are denied
+		for _, viewerRole := range viewerRoles {
+			for _, deniedRole := range rule.DeniedRoles {
+				if viewerRole == deniedRole {
+					return false, nil
+				}
+			}
+		}
+	}
+
+	return true, nil
+}
+
+// HasAccessWithRules checks access using pre-fetched rules (for efficiency with bulk operations)
+func HasAccessWithRules(rules []types.ClearanceRule, viewerRoles []string) bool {
+	// Emergency role always has access
+	for _, role := range viewerRoles {
+		if role == types.RoleEmergency || role == types.RoleSystem {
+			return true
+		}
+	}
+
+	// No rules = no restrictions (Blacklist model)
+	if len(rules) == 0 {
+		return true
+	}
+
+	// Check each rule
+	now := currentTime()
+	for _, rule := range rules {
+		// Skip expired rules
+		if rule.ExpiresAt != nil && *rule.ExpiresAt != "" {
+			expiresAt, err := parseTime(*rule.ExpiresAt)
+			if err == nil && now.After(expiresAt) {
+				continue
+			}
+		}
+
+		// Check if any of viewer's roles are denied
+		for _, viewerRole := range viewerRoles {
+			for _, deniedRole := range rule.DeniedRoles {
+				if viewerRole == deniedRole {
+					return false
+				}
+			}
+		}
+	}
+
+	return true
+}
+
+// FilterByAccess filters a list of beads based on viewer's access permissions
+func FilterByAccess(beads []types.Bead, viewerRoles []string) ([]types.Bead, error) {
+	if len(beads) == 0 {
+		return beads, nil
+	}
+
+	// Emergency/System role sees everything
+	for _, role := range viewerRoles {
+		if role == types.RoleEmergency || role == types.RoleSystem {
+			return beads, nil
+		}
+	}
+
+	// Collect all bead IDs
+	beadIDs := make([]string, len(beads))
+	for i, bead := range beads {
+		beadIDs[i] = bead.ID
+	}
+
+	// Fetch all rules at once
+	rulesMap, err := GetAllClearanceRulesForBeads(beadIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	// Filter beads
+	var filtered []types.Bead
+	for _, bead := range beads {
+		rules := rulesMap[bead.ID]
+		if HasAccessWithRules(rules, viewerRoles) {
+			filtered = append(filtered, bead)
+		}
+	}
+
+	return filtered, nil
+}
+
+// LogClearanceAction logs a clearance-related action for audit purposes
+func LogClearanceAction(beadID, action, userID string, userRoles []string, details string) error {
+	rolesJSON, err := json.Marshal(userRoles)
+	if err != nil {
+		return fmt.Errorf("failed to marshal user_roles: %w", err)
+	}
+
+	query := `INSERT INTO clearance_audit (bead_id, action, user_id, user_roles, details) VALUES (?, ?, ?, ?, ?)`
+	_, err = DB.Exec(query, beadID, action, userID, string(rolesJSON), details)
+	if err != nil {
+		return fmt.Errorf("failed to log clearance action: %w", err)
+	}
+	return nil
+}
+
+// Helper function to get current time (can be mocked for testing)
+func currentTime() time.Time {
+	return time.Now()
+}
+
+// Helper function to parse time strings
+func parseTime(s string) (time.Time, error) {
+	formats := []string{
+		time.RFC3339,
+		"2006-01-02T15:04:05Z",
+		"2006-01-02 15:04:05",
+		"2006-01-02",
+	}
+	for _, format := range formats {
+		if t, err := time.Parse(format, s); err == nil {
+			return t, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("unable to parse time: %s", s)
 }
 
 // GetResourceTypeCounts returns the number of patients that have each resource type

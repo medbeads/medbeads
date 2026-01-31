@@ -1,6 +1,8 @@
 package api
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -19,15 +21,216 @@ func StartServer(port string) error {
 	http.HandleFunc("/patients", handlePatients)
 	http.HandleFunc("/search", handleSearch)
 	http.HandleFunc("/resource-counts", handleResourceCounts)
+	http.HandleFunc("/clearance", handleClearance)
+	http.HandleFunc("/clearance/check", handleClearanceCheck)
+	http.HandleFunc("/roles", handleRoles)
 	fmt.Printf("🚀 MedBeads Core Server running on port %s\n", port)
 	return http.ListenAndServe(port, nil)
 }
 
-func handleSearch(w http.ResponseWriter, r *http.Request) {
-	// CORS Headers
+// parseViewerRoles extracts viewer roles from X-Viewer-Roles header
+// If not present, returns system role (full access for backward compatibility)
+func parseViewerRoles(r *http.Request) []string {
+	header := r.Header.Get("X-Viewer-Roles")
+	if header == "" {
+		return []string{types.RoleSystem}
+	}
+
+	var roles []string
+	for _, role := range strings.Split(header, ",") {
+		role = strings.TrimSpace(role)
+		if role != "" {
+			roles = append(roles, role)
+		}
+	}
+
+	if len(roles) == 0 {
+		return []string{types.RoleSystem}
+	}
+	return roles
+}
+
+// setCORSHeaders sets standard CORS headers
+func setCORSHeaders(w http.ResponseWriter) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Viewer-Roles, X-User-ID")
+}
+
+// handleRoles returns available roles
+func handleRoles(w http.ResponseWriter, r *http.Request) {
+	setCORSHeaders(w)
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(types.AllRoles)
+}
+
+// handleClearance handles CRUD operations for clearance rules
+func handleClearance(w http.ResponseWriter, r *http.Request) {
+	setCORSHeaders(w)
+
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	switch r.Method {
+	case "GET":
+		getClearanceHandler(w, r)
+	case "POST":
+		createClearanceHandler(w, r)
+	case "DELETE":
+		deleteClearanceHandler(w, r)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func getClearanceHandler(w http.ResponseWriter, r *http.Request) {
+	beadID := r.URL.Query().Get("bead_id")
+	if beadID == "" {
+		http.Error(w, "Missing 'bead_id' parameter", http.StatusBadRequest)
+		return
+	}
+
+	rules, err := store.GetClearanceRules(beadID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to get clearance rules: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(rules)
+}
+
+type CreateClearanceRequest struct {
+	BeadID      string   `json:"bead_id"`
+	DeniedRoles []string `json:"denied_roles"`
+	Reason      string   `json:"reason,omitempty"`
+	ExpiresAt   *string  `json:"expires_at,omitempty"`
+}
+
+func createClearanceHandler(w http.ResponseWriter, r *http.Request) {
+	var req CreateClearanceRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	if req.BeadID == "" || len(req.DeniedRoles) == 0 {
+		http.Error(w, "bead_id and denied_roles are required", http.StatusBadRequest)
+		return
+	}
+
+	userID := r.Header.Get("X-User-ID")
+	if userID == "" {
+		userID = "unknown"
+	}
+
+	// Generate unique ID using sha256
+	idData := fmt.Sprintf("%s-%s-%d", req.BeadID, userID, time.Now().UnixNano())
+	hash := sha256.Sum256([]byte(idData))
+	ruleID := hex.EncodeToString(hash[:16]) // Use first 16 bytes (32 hex chars)
+
+	rule := types.ClearanceRule{
+		ID:          ruleID,
+		BeadID:      req.BeadID,
+		DeniedRoles: req.DeniedRoles,
+		CreatedBy:   userID,
+		CreatedAt:   time.Now().Format(time.RFC3339),
+		Reason:      req.Reason,
+		ExpiresAt:   req.ExpiresAt,
+	}
+
+	if err := store.SaveClearanceRule(rule); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to save clearance rule: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Log the action
+	viewerRoles := parseViewerRoles(r)
+	store.LogClearanceAction(req.BeadID, "created", userID, viewerRoles, fmt.Sprintf("Denied roles: %v", req.DeniedRoles))
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(rule)
+}
+
+func deleteClearanceHandler(w http.ResponseWriter, r *http.Request) {
+	ruleID := r.URL.Query().Get("id")
+	if ruleID == "" {
+		http.Error(w, "Missing 'id' parameter", http.StatusBadRequest)
+		return
+	}
+
+	if err := store.DeleteClearanceRule(ruleID); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to delete clearance rule: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	userID := r.Header.Get("X-User-ID")
+	if userID == "" {
+		userID = "unknown"
+	}
+
+	// Log the action
+	viewerRoles := parseViewerRoles(r)
+	store.LogClearanceAction(ruleID, "deleted", userID, viewerRoles, "Rule deleted")
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleClearanceCheck checks if a viewer has access to a bead
+func handleClearanceCheck(w http.ResponseWriter, r *http.Request) {
+	setCORSHeaders(w)
+
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	if r.Method != "GET" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	beadID := r.URL.Query().Get("bead_id")
+	if beadID == "" {
+		http.Error(w, "Missing 'bead_id' parameter", http.StatusBadRequest)
+		return
+	}
+
+	viewerRoles := parseViewerRoles(r)
+	hasAccess, err := store.HasAccess(beadID, viewerRoles)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to check access: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Log emergency access
+	if !hasAccess {
+		for _, role := range viewerRoles {
+			if role == types.RoleEmergency {
+				userID := r.Header.Get("X-User-ID")
+				if userID == "" {
+					userID = "unknown"
+				}
+				store.LogClearanceAction(beadID, "emergency_access", userID, viewerRoles, "Emergency access override")
+				break
+			}
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"has_access": hasAccess})
+}
+
+func handleSearch(w http.ResponseWriter, r *http.Request) {
+	setCORSHeaders(w)
 
 	if r.Method == "OPTIONS" {
 		w.WriteHeader(http.StatusOK)
@@ -35,11 +238,6 @@ func handleSearch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	query := r.URL.Query().Get("q")
-	// Allow empty query if resource types are specified
-	// if query == "" {
-	// 	http.Error(w, "Missing 'q' parameter", http.StatusBadRequest)
-	// 	return
-	// }
 
 	// Get resource types filter
 	resourceTypesStr := r.URL.Query().Get("resourceTypes")
@@ -70,15 +268,20 @@ func handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Filter by viewer roles
+	viewerRoles := parseViewerRoles(r)
+	patients, err = store.FilterByAccess(patients, viewerRoles)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Access filter failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(patients)
 }
 
 func handleContext(w http.ResponseWriter, r *http.Request) {
-	// CORS Headers
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+	setCORSHeaders(w)
 
 	if r.Method == "OPTIONS" {
 		w.WriteHeader(http.StatusOK)
@@ -118,15 +321,20 @@ func handleContext(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Filter by viewer roles
+	viewerRoles := parseViewerRoles(r)
+	beads, err = store.FilterByAccess(beads, viewerRoles)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Access filter failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(beads)
 }
 
 func handleBeads(w http.ResponseWriter, r *http.Request) {
-	// CORS Middleware-like headers
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+	setCORSHeaders(w)
 
 	if r.Method == "OPTIONS" {
 		w.WriteHeader(http.StatusOK)
@@ -139,7 +347,7 @@ func handleBeads(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method == "GET" {
-		getHandler(w, r)
+		getBeadHandler(w, r)
 		return
 	}
 
@@ -180,10 +388,23 @@ func saveHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Printf("📥 Received & Saved: %s (Type: %s)\n", hashID, bead.Type)
 }
 
-func getHandler(w http.ResponseWriter, r *http.Request) {
+func getBeadHandler(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("id")
 	if id == "" {
 		http.Error(w, "Missing 'id' parameter", http.StatusBadRequest)
+		return
+	}
+
+	// Check access before returning the bead
+	viewerRoles := parseViewerRoles(r)
+	hasAccess, err := store.HasAccess(id, viewerRoles)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Access check failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	if !hasAccess {
+		http.Error(w, "Access denied", http.StatusForbidden)
 		return
 	}
 
@@ -198,10 +419,7 @@ func getHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func handlePatients(w http.ResponseWriter, r *http.Request) {
-	// CORS Headers
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+	setCORSHeaders(w)
 
 	if r.Method == "OPTIONS" {
 		w.WriteHeader(http.StatusOK)
@@ -219,15 +437,20 @@ func handlePatients(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Filter by viewer roles
+	viewerRoles := parseViewerRoles(r)
+	patients, err = store.FilterByAccess(patients, viewerRoles)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Access filter failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(patients)
 }
 
 func handleResourceCounts(w http.ResponseWriter, r *http.Request) {
-	// CORS Headers
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+	setCORSHeaders(w)
 
 	if r.Method == "OPTIONS" {
 		w.WriteHeader(http.StatusOK)

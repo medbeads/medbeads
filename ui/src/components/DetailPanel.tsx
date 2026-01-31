@@ -3,6 +3,7 @@ import { Sparkles, Info, AlertTriangle, Code, ChevronDown, ChevronRight } from '
 import ReactMarkdown from 'react-markdown';
 import { fetchAIInsight } from '../lib/api';
 import type { TimelineItem, Patient, BeadUsed } from '../lib/api';
+import { ClearanceEditor } from './ClearanceEditor';
 
 interface DetailPanelProps {
   selectedItem: TimelineItem | null;
@@ -217,7 +218,7 @@ export function DetailPanel({ selectedItem }: DetailPanelProps) {
 
         {/* Raw Data Expander */}
         <div className="mt-8 pt-4 border-t border-slate-100">
-            <button 
+            <button
                 onClick={() => setShowRaw(!showRaw)}
                 className="flex items-center gap-2 text-xs font-medium text-slate-400 hover:text-slate-600 transition-colors"
             >
@@ -225,7 +226,7 @@ export function DetailPanel({ selectedItem }: DetailPanelProps) {
                 <Code className="w-4 h-4" />
                 {showRaw ? 'Hide Raw Data' : 'View Raw Data'}
             </button>
-            
+
             {showRaw && (
                 <div className="mt-2 bg-slate-900 rounded-lg p-4 overflow-x-auto shadow-inner">
                     <pre className="text-xs font-mono text-cyan-300 leading-relaxed">
@@ -235,6 +236,14 @@ export function DetailPanel({ selectedItem }: DetailPanelProps) {
             )}
         </div>
       </div>
+
+      {/* Security Clearance Editor */}
+      {selectedItem.data?.id && (
+        <ClearanceEditor
+          beadId={selectedItem.data.id}
+          beadType={selectedItem.type}
+        />
+      )}
 
       <div className="bg-gradient-to-br from-cyan-50 to-blue-50 border-2 border-cyan-200 rounded-xl p-6">
         <div className="flex items-center gap-3 mb-4">

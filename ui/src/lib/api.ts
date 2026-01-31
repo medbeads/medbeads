@@ -17,6 +17,65 @@ export const aiApi = axios.create({
   },
 });
 
+// --- Security Clearance Types ---
+
+export type ViewerRole =
+  | 'patient'      // 患者本人
+  | 'family'       // 家族
+  | 'primary_care' // 主治医
+  | 'specialist'   // 専門医
+  | 'nurse'        // 看護師
+  | 'admin'        // 事務
+  | 'insurance'    // 保険会社
+  | 'researcher'   // 研究者
+  | 'emergency'    // 緊急時オーバーライド
+  | 'system';      // システム/AI
+
+export const VIEWER_ROLES: { value: ViewerRole; label: string; labelJa: string }[] = [
+  { value: 'patient', label: 'Patient', labelJa: '患者本人' },
+  { value: 'family', label: 'Family', labelJa: '家族' },
+  { value: 'primary_care', label: 'Primary Care', labelJa: '主治医' },
+  { value: 'specialist', label: 'Specialist', labelJa: '専門医' },
+  { value: 'nurse', label: 'Nurse', labelJa: '看護師' },
+  { value: 'admin', label: 'Admin', labelJa: '事務' },
+  { value: 'insurance', label: 'Insurance', labelJa: '保険会社' },
+  { value: 'researcher', label: 'Researcher', labelJa: '研究者' },
+  { value: 'emergency', label: 'Emergency', labelJa: '緊急時' },
+  { value: 'system', label: 'System', labelJa: 'システム' },
+];
+
+export interface ClearanceRule {
+  id: string;
+  bead_id: string;
+  denied_roles: ViewerRole[];
+  created_by: string;
+  created_at: string;
+  reason?: string;
+  expires_at?: string | null;
+}
+
+export interface ViewerContext {
+  user_id: string;
+  roles: ViewerRole[];
+  patient_id?: string;
+}
+
+// Current viewer context (global state for simplicity)
+let currentViewerRoles: ViewerRole[] = ['system'];
+
+export const setViewerRoles = (roles: ViewerRole[]) => {
+  currentViewerRoles = roles;
+};
+
+export const getViewerRoles = (): ViewerRole[] => {
+  return currentViewerRoles;
+};
+
+// Helper to add viewer roles header to requests
+const getViewerHeaders = () => ({
+  'X-Viewer-Roles': currentViewerRoles.join(','),
+});
+
 // --- Type Definitions ---
 
 export interface Bead {
@@ -58,7 +117,9 @@ const mapBeadToPatient = (bead: Bead): Patient => ({
 });
 
 export const fetchAllPatients = async (): Promise<Patient[]> => {
-  const response = await api.get<Bead[]>('/patients');
+  const response = await api.get<Bead[]>('/patients', {
+    headers: getViewerHeaders(),
+  });
   return response.data.map(mapBeadToPatient);
 };
 
@@ -68,7 +129,10 @@ export const searchPatients = async (query: string, resourceTypes?: string[]): P
   if (resourceTypes && resourceTypes.length > 0) {
     params.resourceTypes = resourceTypes.join(',');
   }
-  const response = await api.get<Bead[]>('/search', { params });
+  const response = await api.get<Bead[]>('/search', {
+    params,
+    headers: getViewerHeaders(),
+  });
   return response.data.map(mapBeadToPatient);
 };
 
@@ -85,14 +149,15 @@ export const fetchResourceCounts = async (): Promise<ResourceTypeCount[]> => {
 export const fetchPatientTimeline = async (patientId: string): Promise<TimelineItem[]> => {
   console.log(`Fetching timeline for patient: ${patientId}`);
   const response = await api.get<Bead[]>('/beads/context', {
-    params: { id: patientId, depth: 50, lookup: 'reverse' }
+    params: { id: patientId, depth: 50, lookup: 'reverse' },
+    headers: getViewerHeaders(),
   });
   console.log('Raw beads response length:', response.data.length);
-  
+
   const items: TimelineItem[] = response.data
     .map(bead => mapBeadToTimelineItem(bead))
     .filter((item): item is TimelineItem => item !== null);
-  
+
   return items.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 };
 
@@ -333,5 +398,49 @@ export const fetchAIInsight = async (targetBeadId: string): Promise<AIInsightRes
   const response = await aiApi.post<AIInsightResponse>('/ai/insight', {
     target_bead_id: targetBeadId
   });
+  return response.data;
+};
+
+// --- Clearance API Functions ---
+
+export const fetchClearanceRules = async (beadId: string): Promise<ClearanceRule[]> => {
+  const response = await api.get<ClearanceRule[]>('/clearance', {
+    params: { bead_id: beadId },
+    headers: getViewerHeaders(),
+  });
+  return response.data || [];
+};
+
+export interface CreateClearanceRequest {
+  bead_id: string;
+  denied_roles: ViewerRole[];
+  reason?: string;
+  expires_at?: string | null;
+}
+
+export const createClearanceRule = async (request: CreateClearanceRequest): Promise<ClearanceRule> => {
+  const response = await api.post<ClearanceRule>('/clearance', request, {
+    headers: getViewerHeaders(),
+  });
+  return response.data;
+};
+
+export const deleteClearanceRule = async (ruleId: string): Promise<void> => {
+  await api.delete('/clearance', {
+    params: { id: ruleId },
+    headers: getViewerHeaders(),
+  });
+};
+
+export const checkAccess = async (beadId: string): Promise<boolean> => {
+  const response = await api.get<{ has_access: boolean }>('/clearance/check', {
+    params: { bead_id: beadId },
+    headers: getViewerHeaders(),
+  });
+  return response.data.has_access;
+};
+
+export const fetchAvailableRoles = async (): Promise<ViewerRole[]> => {
+  const response = await api.get<ViewerRole[]>('/roles');
   return response.data;
 };

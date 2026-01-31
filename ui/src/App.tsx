@@ -1,11 +1,12 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Activity, Pill, FileText, AlertCircle, Stethoscope, User, LayoutList, Network } from 'lucide-react';
-import { fetchPatientTimeline } from './lib/api';
-import type { Patient, TimelineItem } from './lib/api';
+import { fetchPatientTimeline, fetchClearanceRules, setViewerRoles, getViewerRoles } from './lib/api';
+import type { Patient, TimelineItem, ViewerRole, ClearanceRule } from './lib/api';
 import { TimelineCard } from './components/TimelineCard';
 import { DetailPanel } from './components/DetailPanel';
 import { PatientSidebar } from './components/PatientSidebar';
 import GraphView from './components/GraphView';
+import { ViewerRoleSelector } from './components/ViewerRoleSelector';
 
 type TabType = 'timeline' | 'medications' | 'observations' | 'reports' | 'conditions';
 
@@ -16,6 +17,17 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<TabType>('timeline');
   const [viewMode, setViewMode] = useState<'list' | 'graph'>('list');
+  const [viewerRoles, setViewerRolesState] = useState<ViewerRole[]>(getViewerRoles());
+  const [clearanceRulesMap, setClearanceRulesMap] = useState<Record<string, ClearanceRule[]>>({});
+
+  const handleViewerRolesChange = useCallback((roles: ViewerRole[]) => {
+    setViewerRolesState(roles);
+    setViewerRoles(roles);
+    // Re-fetch data with new roles
+    if (selectedPatient) {
+      fetchTimelineData();
+    }
+  }, [selectedPatient]);
 
   useEffect(() => {
     if (selectedPatient) {
@@ -23,11 +35,36 @@ function App() {
     }
   }, [selectedPatient?.id]);
 
+  // Fetch clearance rules for all timeline items
+  useEffect(() => {
+    async function fetchAllClearanceRules() {
+      const rulesMap: Record<string, ClearanceRule[]> = {};
+      for (const item of timelineItems) {
+        if (item.data?.id) {
+          try {
+            const rules = await fetchClearanceRules(item.data.id);
+            if (rules.length > 0) {
+              rulesMap[item.data.id] = rules;
+            }
+          } catch (error) {
+            // Silently ignore errors for individual items
+          }
+        }
+      }
+      setClearanceRulesMap(rulesMap);
+    }
+
+    if (timelineItems.length > 0) {
+      fetchAllClearanceRules();
+    }
+  }, [timelineItems]);
+
   async function fetchTimelineData() {
     if (!selectedPatient) return;
 
     try {
       setLoading(true);
+      setClearanceRulesMap({});
       const items = await fetchPatientTimeline(selectedPatient.id);
       setTimelineItems(items);
     } catch (error) {
@@ -69,8 +106,12 @@ function App() {
     <div className="h-screen flex overflow-hidden bg-slate-50">
       <div className="flex-1 flex flex-col overflow-hidden">
         <div className="flex-none bg-white border-b border-slate-200 shadow-sm">
-          <div className="px-6 py-4">
+          <div className="px-6 py-4 flex items-center justify-between">
             <h1 className="text-2xl font-bold text-slate-900">MedBeads Patient Overview</h1>
+            <ViewerRoleSelector
+              selectedRoles={viewerRoles}
+              onRolesChange={handleViewerRolesChange}
+            />
           </div>
         </div>
 
@@ -178,6 +219,7 @@ function App() {
                                     item={item}
                                     isSelected={selectedItem === item}
                                     onClick={() => setSelectedItem(item)}
+                                    clearanceRules={item.data?.id ? clearanceRulesMap[item.data.id] : undefined}
                                     />
                                 ))}
                             </div>
