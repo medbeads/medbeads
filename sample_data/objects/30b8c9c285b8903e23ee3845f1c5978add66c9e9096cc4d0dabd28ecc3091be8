@@ -1,0 +1,50 @@
+{
+  "type": "fhir_encounter",
+  "timestamp": "2016-05-22T12:58:06-04:00",
+  "parents": [
+    "a23906a5e61bcaf893b711f75f74f270d7df08cf840958e733d014a570b1a09a"
+  ],
+  "content": {
+    "class": {
+      "code": "emergency"
+    },
+    "id": "e663e202-a261-4de5-acf7-a85e59dc1480",
+    "meta": {
+      "profile": [
+        "http://standardhealthrecord.org/fhir/StructureDefinition/shr-encounter-Encounter"
+      ]
+    },
+    "period": {
+      "end": "2016-05-22T12:58:06-04:00",
+      "start": "2016-05-22T12:58:06-04:00"
+    },
+    "reason": {
+      "coding": [
+        {
+          "code": "72892002",
+          "display": "Normal pregnancy",
+          "system": "http://snomed.info/sct"
+        }
+      ]
+    },
+    "resourceType": "Encounter",
+    "serviceProvider": {
+      "reference": "urn:uuid:80c464e2-e180-483f-bfcb-aa90b7a8e7b9"
+    },
+    "status": "finished",
+    "subject": {
+      "reference": "urn:uuid:d6ee689c-8142-433e-9e8f-5643620cd5e3"
+    },
+    "type": [
+      {
+        "coding": [
+          {
+            "code": "183460006",
+            "system": "http://snomed.info/sct"
+          }
+        ],
+        "text": "Obstetric emergency hospital admission"
+      }
+    ]
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "type": "fhir_organization",
+  "timestamp": "2099-01-01",
+  "parents": [
+    "a23906a5e61bcaf893b711f75f74f270d7df08cf840958e733d014a570b1a09a"
+  ],
+  "content": {
+    "id": "80c464e2-e180-483f-bfcb-aa90b7a8e7b9",
+    "meta": {
+      "profile": [
+        "http://standardhealthrecord.org/fhir/StructureDefinition/shr-actor-Organization"
+      ]
+    },
+    "name": "Synthetic Provider",
+    "resourceType": "Organization",
+    "type": [
+      {
+        "coding": [
+          {
+            "code": "prov",
+            "display": "Healthcare Provider",
+            "system": "http://hl7.org/fhir/ValueSet/organization-type"
+          }
+        ],
+        "text": "Healthcare Provider"
+      }
+    ]
+  }
+}

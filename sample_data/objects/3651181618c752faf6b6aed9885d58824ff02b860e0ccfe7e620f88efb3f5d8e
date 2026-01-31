@@ -1,0 +1,53 @@
+{
+  "type": "fhir_observation",
+  "timestamp": "2010-11-28T04:38:01-05:00",
+  "parents": [
+    "e4618cc162889be35ecc58a07812b2fe16334a000c9b96a1daf89015bc553260"
+  ],
+  "content": {
+    "category": [
+      {
+        "coding": [
+          {
+            "code": "vital-signs",
+            "system": "http://hl7.org/fhir/observation-category"
+          }
+        ]
+      }
+    ],
+    "code": {
+      "coding": [
+        {
+          "code": "29463-7",
+          "display": "Body Weight",
+          "system": "http://loinc.org"
+        }
+      ],
+      "text": "Body Weight"
+    },
+    "context": {
+      "reference": "urn:uuid:b4b30dae-6234-4b60-8ade-1ea65d783b80"
+    },
+    "effectiveDateTime": "2010-11-28T04:38:01-05:00",
+    "id": "2de3698b-f364-4009-90ef-7a5c605b3f76",
+    "issued": "2010-11-28T04:38:01-05:00",
+    "meta": {
+      "profile": [
+        "http://standardhealthrecord.org/fhir/StructureDefinition/shr-observation-Observation",
+        "http://standardhealthrecord.org/fhir/StructureDefinition/shr-vital-VitalSign",
+        "http://standardhealthrecord.org/fhir/StructureDefinition/shr-vital-BodyWeight"
+      ]
+    },
+    "resourceType": "Observation",
+    "status": "final",
+    "subject": {
+      "reference": "urn:uuid:bccd5886-4ceb-4eb2-85f6-b8bafbbd1f1b"
+    },
+    "valueQuantity": {
+      "code": "kg",
+      "system": "http://unitsofmeasure.org/",
+      "unit": "kg",
+      "value": 13.29110714588941
+    }
+  }
+}

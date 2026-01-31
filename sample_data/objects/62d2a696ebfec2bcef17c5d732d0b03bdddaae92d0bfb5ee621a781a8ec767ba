@@ -1,0 +1,37 @@
+{
+  "type": "fhir_condition",
+  "timestamp": "2099-01-01",
+  "parents": [
+    "436df3ff3ce5f727dc7b320f70d6c314bcd91925243aea8ee4d81b20e8865747"
+  ],
+  "content": {
+    "abatementDateTime": "2015-01-07T18:56:15-05:00",
+    "assertedDate": "2014-10-27",
+    "clinicalStatus": "active",
+    "code": {
+      "coding": [
+        {
+          "code": "62564004",
+          "display": "Concussion with loss of consciousness",
+          "system": "http://snomed.info/sct"
+        }
+      ],
+      "text": "Concussion with loss of consciousness"
+    },
+    "context": {
+      "reference": "urn:uuid:8e8ff10d-6e81-4766-8976-6e8eed9b4e81"
+    },
+    "id": "d72f79a2-1e79-4657-93ad-5434ff5ca517",
+    "meta": {
+      "profile": [
+        "http://standardhealthrecord.org/fhir/StructureDefinition/shr-problem-Problem"
+      ]
+    },
+    "onsetDateTime": "2014-10-27T06:41:02-04:00",
+    "resourceType": "Condition",
+    "subject": {
+      "reference": "urn:uuid:a8c67f30-eca3-489f-8d00-63604faf9638"
+    },
+    "verificationStatus": "confirmed"
+  }
+}

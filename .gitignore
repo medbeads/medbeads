@@ -36,3 +36,7 @@ core/medbeads-core
 .idea/
 core/medbeads_data.zip
 
+# Internal Documentation (not for public)
+SPEC_DOCS/
+../SPEC_DOCS/
+

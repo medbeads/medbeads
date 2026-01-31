@@ -1,0 +1,136 @@
+{
+  "resourceType": "Bundle",
+  "type": "transaction",
+  "entry": [
+    {
+      "fullUrl": "urn:uuid:patient-d-001",
+      "resource": {
+        "resourceType": "Patient",
+        "id": "patient-d-001",
+        "name": [{ "given": ["Hanako"], "family": "Sato", "text": "Sato Hanako" }],
+        "gender": "female",
+        "birthDate": "1962-05-10"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:encounter-d-001",
+      "resource": {
+        "resourceType": "Encounter",
+        "id": "encounter-d-001",
+        "status": "finished",
+        "class": { "code": "AMB", "display": "ambulatory" },
+        "subject": { "reference": "urn:uuid:patient-d-001" },
+        "period": { "start": "2026-01-12T10:00:00Z", "end": "2026-01-12T10:30:00Z" },
+        "type": [{ "coding": [{ "display": "General checkup" }], "text": "Annual health checkup" }],
+        "serviceProvider": { "display": "Tokyo General Hospital" }
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:condition-d-001",
+      "resource": {
+        "resourceType": "Condition",
+        "id": "condition-d-001",
+        "clinicalStatus": { "coding": [{ "code": "active", "display": "Active" }] },
+        "code": {
+          "coding": [{ "system": "http://snomed.info/sct", "code": "38341003", "display": "Hypertensive disorder" }],
+          "text": "Essential hypertension, well controlled"
+        },
+        "subject": { "reference": "urn:uuid:patient-d-001" },
+        "encounter": { "reference": "urn:uuid:encounter-d-001" },
+        "onsetDateTime": "2020-03-01",
+        "recordedDate": "2026-01-12"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:observation-d-001",
+      "resource": {
+        "resourceType": "Observation",
+        "id": "observation-d-001",
+        "status": "final",
+        "code": {
+          "coding": [{ "system": "http://loinc.org", "code": "85354-9", "display": "Blood pressure" }],
+          "text": "Blood pressure panel"
+        },
+        "subject": { "reference": "urn:uuid:patient-d-001" },
+        "encounter": { "reference": "urn:uuid:encounter-d-001" },
+        "effectiveDateTime": "2026-01-12T10:15:00Z",
+        "component": [
+          {
+            "code": { "coding": [{ "code": "8480-6", "display": "Systolic BP" }] },
+            "valueQuantity": { "value": 128, "unit": "mmHg" }
+          },
+          {
+            "code": { "coding": [{ "code": "8462-4", "display": "Diastolic BP" }] },
+            "valueQuantity": { "value": 82, "unit": "mmHg" }
+          }
+        ]
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:observation-d-002",
+      "resource": {
+        "resourceType": "Observation",
+        "id": "observation-d-002",
+        "status": "final",
+        "code": {
+          "coding": [{ "system": "http://loinc.org", "code": "2093-3", "display": "Total Cholesterol" }],
+          "text": "Total Cholesterol"
+        },
+        "subject": { "reference": "urn:uuid:patient-d-001" },
+        "encounter": { "reference": "urn:uuid:encounter-d-001" },
+        "effectiveDateTime": "2026-01-12T10:20:00Z",
+        "valueQuantity": { "value": 195, "unit": "mg/dL" }
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:observation-d-003",
+      "resource": {
+        "resourceType": "Observation",
+        "id": "observation-d-003",
+        "status": "final",
+        "code": {
+          "coding": [{ "system": "http://loinc.org", "code": "4548-4", "display": "HbA1c" }],
+          "text": "Hemoglobin A1c"
+        },
+        "subject": { "reference": "urn:uuid:patient-d-001" },
+        "encounter": { "reference": "urn:uuid:encounter-d-001" },
+        "effectiveDateTime": "2026-01-12T10:20:00Z",
+        "valueQuantity": { "value": 5.8, "unit": "%" },
+        "interpretation": [{ "coding": [{ "code": "N", "display": "Normal" }] }]
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:medication-d-001",
+      "resource": {
+        "resourceType": "MedicationRequest",
+        "id": "medication-d-001",
+        "status": "active",
+        "intent": "order",
+        "medicationCodeableConcept": {
+          "coding": [{ "display": "Amlodipine 5mg" }],
+          "text": "Amlodipine besylate 5mg tablets"
+        },
+        "subject": { "reference": "urn:uuid:patient-d-001" },
+        "encounter": { "reference": "urn:uuid:encounter-d-001" },
+        "authoredOn": "2026-01-12T10:30:00Z",
+        "dosageInstruction": [{ "text": "Take 1 tablet once daily" }]
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:immunization-d-001",
+      "resource": {
+        "resourceType": "Immunization",
+        "id": "immunization-d-001",
+        "status": "completed",
+        "vaccineCode": {
+          "coding": [{ "display": "Influenza vaccine" }],
+          "text": "Seasonal influenza vaccine 2025-2026"
+        },
+        "patient": { "reference": "urn:uuid:patient-d-001" },
+        "encounter": { "reference": "urn:uuid:encounter-d-001" },
+        "occurrenceDateTime": "2026-01-12T10:25:00Z",
+        "lotNumber": "FLU2026-A001"
+      }
+    }
+  ]
+}

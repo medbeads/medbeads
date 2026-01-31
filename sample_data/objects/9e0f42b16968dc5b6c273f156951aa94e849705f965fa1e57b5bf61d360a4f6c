@@ -1,0 +1,34 @@
+{
+  "type": "fhir_diagnosticreport",
+  "timestamp": "2010-11-28T04:38:01-05:00",
+  "parents": [
+    "e4618cc162889be35ecc58a07812b2fe16334a000c9b96a1daf89015bc553260"
+  ],
+  "content": {
+    "code": {
+      "coding": [
+        {
+          "code": "24627-2",
+          "display": "CT Chest",
+          "system": "http://loinc.org"
+        }
+      ]
+    },
+    "conclusion": "Normal Chest CT. No acute abnormalities.",
+    "effectiveDateTime": "2010-11-28T04:38:01-05:00",
+    "id": "synthetic-report-6623",
+    "issued": "2010-11-28T04:38:01-05:00",
+    "presentedForm": [
+      {
+        "contentType": "text/markdown",
+        "data": "IyBDaGVzdCBDVCBTY2FuIFJlcG9ydAoKKipFeGFtaW5hdGlvbiBEYXRlOioqIDIwMTAtMTEtMjhUMDQ6Mzg6MDEtMDU6MDAKKipNb2RhbGl0eToqKiBDb21wdXRlZCBUb21vZ3JhcGh5IChDVCkKKipSZWdpb246KiogQ2hlc3QgKFRob3JheCkKCiMjIENsaW5pY2FsIEhpc3RvcnkKUGF0aWVudCBwcmVzZW50cyB3aXRoIHBlcnNpc3RlbnQgY291Z2ggYW5kIHNob3J0bmVzcyBvZiBicmVhdGguIE5vIGhpc3Rvcnkgb2Ygc21va2luZy4KCiMjIEZpbmRpbmdzCioqTHVuZ3M6KiogVGhlIGx1bmdzIGFyZSBjbGVhci4gTm8gcHVsbW9uYXJ5IG5vZHVsZXMgb3IgbWFzc2VzLiBObyBjb25zb2xpZGF0aW9uLCBhdGVsZWN0YXNpcywgb3IgZWZmdXNpb24uCioqUGxldXJhOioqIE5vIHBsZXVyYWwgdGhpY2tlbmluZyBvciBwbmV1bW90aG9yYXguCioqTWVkaWFzdGludW06KiogVGhlIGhlYXJ0IHNpemUgaXMgbm9ybWFsLiBObyBtZWRpYXN0aW5hbCBvciBoaWxhciBseW1waGFkZW5vcGF0aHkuIFRoZSBhb3J0YSBhbmQgcHVsbW9uYXJ5IHZlc3NlbHMgYXJlIHVucmVtYXJrYWJsZS4KKipCb25lczoqKiBObyBhZ2dyZXNzaXZlIG9zc2VvdXMgbGVzaW9ucy4KKipVcHBlciBBYmRvbWVuOioqIExpbWl0ZWQgdmlldyBvZiB0aGUgdXBwZXIgYWJkb21lbiBzaG93cyBubyBncm9zcyBhYm5vcm1hbGl0aWVzLgoKIyMgQ29uY2x1c2lvbgoxLiBOb3JtYWwgQ1Qgb2YgdGhlIGNoZXN0LgoyLiBObyBldmlkZW5jZSBvZiBwdWxtb25hcnkgZW1ib2xpc20gb3IgcG5ldW1vbmlhLgoKIyMgUmVjb21tZW5kYXRpb24KRm9sbG93IHVwIGlmIHN5bXB0b21zIHBlcnNpc3QuIENvbnNpZGVyIFBGVHMuCg==",
+        "title": "Radiology Report Details"
+      }
+    ],
+    "resourceType": "DiagnosticReport",
+    "status": "final",
+    "subject": {
+      "reference": "urn:uuid:bccd5886-4ceb-4eb2-85f6-b8bafbbd1f1b"
+    }
+  }
+}

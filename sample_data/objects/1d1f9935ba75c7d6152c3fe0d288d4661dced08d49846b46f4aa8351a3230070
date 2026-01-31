@@ -1,0 +1,37 @@
+{
+  "type": "fhir_condition",
+  "timestamp": "2099-01-01",
+  "parents": [
+    "a23906a5e61bcaf893b711f75f74f270d7df08cf840958e733d014a570b1a09a"
+  ],
+  "content": {
+    "abatementDateTime": "2016-05-22T12:58:06-04:00",
+    "assertedDate": "2016-04-10",
+    "clinicalStatus": "active",
+    "code": {
+      "coding": [
+        {
+          "code": "198992004",
+          "display": "Antepartum eclampsia",
+          "system": "http://snomed.info/sct"
+        }
+      ],
+      "text": "Antepartum eclampsia"
+    },
+    "context": {
+      "reference": "urn:uuid:07d2ccec-27a2-48aa-886c-824abcaa69a2"
+    },
+    "id": "14d99baf-b9b6-47a1-af40-9f8588c4508e",
+    "meta": {
+      "profile": [
+        "http://standardhealthrecord.org/fhir/StructureDefinition/shr-problem-Problem"
+      ]
+    },
+    "onsetDateTime": "2016-04-10T12:58:06-04:00",
+    "resourceType": "Condition",
+    "subject": {
+      "reference": "urn:uuid:d6ee689c-8142-433e-9e8f-5643620cd5e3"
+    },
+    "verificationStatus": "confirmed"
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "type": "fhir_immunization",
+  "timestamp": "2099-01-01",
+  "parents": [
+    "942ee9608b25e5ebfafc63c2c5fe3c8245b2b10049a90b737363ffc765896af1"
+  ],
+  "content": {
+    "date": "2010-11-08T23:22:52-05:00",
+    "encounter": {
+      "reference": "urn:uuid:274f1db7-b858-44b4-a3da-c80407bfee99"
+    },
+    "meta": {
+      "profile": [
+        "http://standardhealthrecord.org/fhir/StructureDefinition/shr-immunization-Immunization"
+      ]
+    },
+    "notGiven": false,
+    "patient": {
+      "reference": "urn:uuid:a8c67f30-eca3-489f-8d00-63604faf9638"
+    },
+    "primarySource": true,
+    "resourceType": "Immunization",
+    "status": "completed",
+    "vaccineCode": {
+      "coding": [
+        {
+          "code": "140",
+          "display": "Influenza, seasonal, injectable, preservative free",
+          "system": "http://hl7.org/fhir/sid/cvx"
+        }
+      ],
+      "text": "Influenza, seasonal, injectable, preservative free"
+    }
+  }
+}

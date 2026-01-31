@@ -1,0 +1,37 @@
+{
+  "type": "fhir_condition",
+  "timestamp": "2099-01-01",
+  "parents": [
+    "e4618cc162889be35ecc58a07812b2fe16334a000c9b96a1daf89015bc553260"
+  ],
+  "content": {
+    "abatementDateTime": "2016-01-24T00:15:12-05:00",
+    "assertedDate": "2015-12-26",
+    "clinicalStatus": "active",
+    "code": {
+      "coding": [
+        {
+          "code": "444814009",
+          "display": "Viral sinusitis (disorder)",
+          "system": "http://snomed.info/sct"
+        }
+      ],
+      "text": "Viral sinusitis (disorder)"
+    },
+    "context": {
+      "reference": "urn:uuid:163ef4fd-fa1b-4b98-b4e7-59fad33d86a5"
+    },
+    "id": "786e9156-0709-410e-9251-1cb0d6141613",
+    "meta": {
+      "profile": [
+        "http://standardhealthrecord.org/fhir/StructureDefinition/shr-problem-Problem"
+      ]
+    },
+    "onsetDateTime": "2015-12-26T18:28:23-05:00",
+    "resourceType": "Condition",
+    "subject": {
+      "reference": "urn:uuid:bccd5886-4ceb-4eb2-85f6-b8bafbbd1f1b"
+    },
+    "verificationStatus": "confirmed"
+  }
+}

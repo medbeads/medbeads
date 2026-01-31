@@ -1,0 +1,52 @@
+{
+  "type": "fhir_procedure",
+  "timestamp": "2099-01-01",
+  "parents": [
+    "436df3ff3ce5f727dc7b320f70d6c314bcd91925243aea8ee4d81b20e8865747"
+  ],
+  "content": {
+    "code": {
+      "coding": [
+        {
+          "code": "85548006",
+          "display": "Episiotomy",
+          "system": "http://snomed.info/sct"
+        }
+      ],
+      "text": "Episiotomy"
+    },
+    "context": {
+      "reference": "urn:uuid:b0d265a8-9455-424d-b03d-ab86c0d293e7"
+    },
+    "extension": [
+      {
+        "url": "http://standardhealthrecord.org/fhir/StructureDefinition/shr-core-CodeableConcept-extension",
+        "valueCodeableConcept": {
+          "coding": [
+            {
+              "code": "85548006",
+              "display": "Episiotomy",
+              "system": "http://snomed.info/sct"
+            }
+          ],
+          "text": "Episiotomy"
+        }
+      }
+    ],
+    "meta": {
+      "profile": [
+        "http://standardhealthrecord.org/fhir/StructureDefinition/shr-procedure-Procedure"
+      ]
+    },
+    "performedDateTime": "2010-11-18T20:34:02-05:00",
+    "reasonReference": {
+      "display": "Normal pregnancy",
+      "reference": "urn:uuid:91034a58-0eeb-4c37-9d7f-e219ec3f0e5d"
+    },
+    "resourceType": "Procedure",
+    "status": "completed",
+    "subject": {
+      "reference": "urn:uuid:a8c67f30-eca3-489f-8d00-63604faf9638"
+    }
+  }
+}

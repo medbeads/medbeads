@@ -53,9 +53,18 @@ COPY --from=build-ui /app/ui/dist /app/ui/dist
 COPY deploy/hf/nginx.conf /etc/nginx/nginx.conf
 COPY deploy/hf/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
-# 5. Sample Data (Optional: Copy if needed, or user mounts it)
-# For HF Space demo, we WANT the sample data pre-loaded
+# 5. Sample Data (Pre-populated Bead objects + FHIR source files for ingestion)
+# For HF Space demo, we include both pre-existing objects and new FHIR data
 COPY sample_data/objects /app/core/medbeads_data/objects
+COPY sample_data/fhir /app/sample_data/fhir
+COPY sample_data/setup_clearance_rules.py /app/sample_data/
+
+# 6. Ingestion scripts (for processing FHIR data)
+COPY scripts/mass_ingest.py /app/scripts/
+
+# 7. Startup script
+COPY deploy/hf/startup.sh /app/startup.sh
+RUN chmod +x /app/startup.sh
 
 # Permissions (HF Spaces runs as user 1000 usually, but root is fine for initial setup)
 # Ensure data dir is writable
@@ -64,5 +73,5 @@ RUN chmod -R 777 /app/core/medbeads_data
 # Hugging Face Spaces exposes port 7860
 EXPOSE 7860
 
-# Start Supervisor
-CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
+# Start with initialization script (ingests data, then starts supervisor)
+CMD ["/app/startup.sh"]

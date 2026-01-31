@@ -1,0 +1,35 @@
+{
+  "type": "fhir_immunization",
+  "timestamp": "2099-01-01",
+  "parents": [
+    "df09225db2081d57bf0513bce4037e8c388a82066288631100b369687f38cf66"
+  ],
+  "content": {
+    "date": "2017-04-03T03:55:46-04:00",
+    "encounter": {
+      "reference": "urn:uuid:6ce1cee6-1913-45ca-bbfe-543e432eb2f9"
+    },
+    "meta": {
+      "profile": [
+        "http://standardhealthrecord.org/fhir/StructureDefinition/shr-immunization-Immunization"
+      ]
+    },
+    "notGiven": false,
+    "patient": {
+      "reference": "urn:uuid:a8c67f30-eca3-489f-8d00-63604faf9638"
+    },
+    "primarySource": true,
+    "resourceType": "Immunization",
+    "status": "completed",
+    "vaccineCode": {
+      "coding": [
+        {
+          "code": "113",
+          "display": "Td (adult) preservative free",
+          "system": "http://hl7.org/fhir/sid/cvx"
+        }
+      ],
+      "text": "Td (adult) preservative free"
+    }
+  }
+}

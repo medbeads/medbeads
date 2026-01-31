@@ -1,0 +1,52 @@
+{
+  "type": "fhir_observation",
+  "timestamp": "2013-02-13T10:19:15-05:00",
+  "parents": [
+    "436df3ff3ce5f727dc7b320f70d6c314bcd91925243aea8ee4d81b20e8865747"
+  ],
+  "content": {
+    "category": [
+      {
+        "coding": [
+          {
+            "code": "vital-signs",
+            "system": "http://hl7.org/fhir/observation-category"
+          }
+        ]
+      }
+    ],
+    "code": {
+      "coding": [
+        {
+          "code": "8331-1",
+          "display": "Oral temperature",
+          "system": "http://loinc.org"
+        }
+      ],
+      "text": "Oral temperature"
+    },
+    "context": {
+      "reference": "urn:uuid:774fd959-eec0-427e-89fc-a281f144118c"
+    },
+    "effectiveDateTime": "2013-02-13T10:19:15-05:00",
+    "id": "443df0dd-32f8-4913-956e-44338151943f",
+    "issued": "2013-02-13T10:19:15-05:00",
+    "meta": {
+      "profile": [
+        "http://standardhealthrecord.org/fhir/StructureDefinition/shr-observation-Observation",
+        "http://standardhealthrecord.org/fhir/StructureDefinition/shr-vital-VitalSign"
+      ]
+    },
+    "resourceType": "Observation",
+    "status": "final",
+    "subject": {
+      "reference": "urn:uuid:a8c67f30-eca3-489f-8d00-63604faf9638"
+    },
+    "valueQuantity": {
+      "code": "Cel",
+      "system": "http://unitsofmeasure.org/",
+      "unit": "Cel",
+      "value": 38
+    }
+  }
+}
