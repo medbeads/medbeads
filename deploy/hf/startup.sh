@@ -39,7 +39,7 @@ if [ -d "/app/sample_data/fhir" ] && [ "$(ls -A /app/sample_data/fhir 2>/dev/nul
         for f in /app/sample_data/fhir/*.json; do
             if [ -f "$f" ]; then
                 echo "    Processing $(basename $f)..."
-                python3 mass_ingest.py "$f" --limit 1 2>/dev/null || true
+                python3 mass_ingest.py "$f" --limit 1 || echo "    Warning: Failed to ingest $(basename $f)"
             fi
         done
         echo "  Sample data ingestion complete."
@@ -54,7 +54,7 @@ fi
 echo "[4/5] Setting up security clearance rules..."
 if [ -f "/app/sample_data/setup_clearance_rules.py" ]; then
     cd /app/sample_data
-    python3 setup_clearance_rules.py --api-url http://127.0.0.1:8080 2>/dev/null || echo "  Clearance setup skipped (may already exist or API not ready)"
+    python3 setup_clearance_rules.py --api-url http://127.0.0.1:8080 || echo "  Warning: Clearance setup failed or already exists"
 else
     echo "  Clearance setup script not found, skipping."
 fi

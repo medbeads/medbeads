@@ -53,9 +53,9 @@ COPY --from=build-ui /app/ui/dist /app/ui/dist
 COPY deploy/hf/nginx.conf /etc/nginx/nginx.conf
 COPY deploy/hf/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
-# 5. Sample Data (Pre-populated Bead objects + FHIR source files for ingestion)
-# For HF Space demo, we include both pre-existing objects and new FHIR data
-COPY sample_data/objects /app/core/medbeads_data/objects
+# 5. Sample Data (FHIR source files for ingestion at startup)
+# Objects will be created during startup via mass_ingest.py from FHIR data
+# (Pre-generated objects are NOT copied because SQLite index is needed)
 COPY sample_data/fhir /app/sample_data/fhir
 COPY sample_data/setup_clearance_rules.py /app/sample_data/
 
