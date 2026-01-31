@@ -57,6 +57,24 @@ const isRestrictedForViewer = (rules: ClearanceRule[] | undefined, viewerRoles: 
   return false;
 };
 
+// Get the denied roles for display (as a sorted string key for grouping)
+const getDeniedRolesKey = (rules: ClearanceRule[] | undefined): string => {
+  if (!rules || rules.length === 0) return '';
+
+  const deniedSet = new Set<string>();
+  const now = new Date();
+
+  for (const rule of rules) {
+    if (rule.expires_at) {
+      const expiresAt = new Date(rule.expires_at);
+      if (now > expiresAt) continue;
+    }
+    rule.denied_roles.forEach(r => deniedSet.add(r));
+  }
+
+  return Array.from(deniedSet).sort().join(',');
+};
+
 // Get the denied roles for display
 const getDeniedRoles = (rules: ClearanceRule[] | undefined): string[] => {
   if (!rules || rules.length === 0) return [];
@@ -75,12 +93,25 @@ const getDeniedRoles = (rules: ClearanceRule[] | undefined): string[] => {
   return Array.from(deniedSet);
 };
 
+// Color palette for different clearance groups
+const clearanceColors = [
+  { bg: 'rgba(251, 191, 36, 0.15)', border: 'rgba(251, 191, 36, 0.5)' },   // amber
+  { bg: 'rgba(239, 68, 68, 0.12)', border: 'rgba(239, 68, 68, 0.4)' },     // red
+  { bg: 'rgba(168, 85, 247, 0.12)', border: 'rgba(168, 85, 247, 0.4)' },   // purple
+  { bg: 'rgba(34, 197, 94, 0.12)', border: 'rgba(34, 197, 94, 0.4)' },     // green
+  { bg: 'rgba(59, 130, 246, 0.12)', border: 'rgba(59, 130, 246, 0.4)' },   // blue
+  { bg: 'rgba(236, 72, 153, 0.12)', border: 'rgba(236, 72, 153, 0.4)' },   // pink
+];
+
 // Custom layout: Group by Date (Y axis = Time, X axis = Items in same date)
 const getLayoutedElements = (nodes: Node[], edges: Edge[], items: TimelineItem[]) => {
   // 1. Group nodes by date
   const nodesByDate: Record<string, Node[]> = {};
 
   nodes.forEach(node => {
+    // Skip group nodes
+    if (node.id.startsWith('clearance-group-')) return;
+
     const item = items.find(i => i.data.id === node.id);
     if (item && item.date) {
         const dateKey = item.date.length >= 10 ? item.date.substring(0, 10) : 'unknown';
@@ -134,10 +165,13 @@ const getLayoutedElements = (nodes: Node[], edges: Edge[], items: TimelineItem[]
 function GraphViewInner({ items, onNodeClick, selectedId, clearanceRulesMap = {} }: GraphViewProps) {
   const viewerRoles = getViewerRoles();
 
-  const { nodes: initialNodes, edges: initialEdges } = useMemo(() => {
+  const { nodes: initialNodes, edges: initialEdges, clearanceGroups } = useMemo(() => {
     const newNodes: Node[] = [];
     const newEdges: Edge[] = [];
     const idSet = new Set(items.map(item => item.data.id));
+
+    // Track nodes by their clearance group
+    const clearanceGroupNodes: Record<string, { nodeIds: string[], deniedRoles: string[] }> = {};
 
     items.forEach((item) => {
       const itemId = item.data.id;
@@ -145,7 +179,16 @@ function GraphViewInner({ items, onNodeClick, selectedId, clearanceRulesMap = {}
       const rules = clearanceRulesMap[itemId];
       const isRestricted = isRestrictedForViewer(rules, viewerRoles);
       const deniedRoles = getDeniedRoles(rules);
+      const deniedRolesKey = getDeniedRolesKey(rules);
       const hasClearance = deniedRoles.length > 0;
+
+      // Track clearance groups
+      if (hasClearance && deniedRolesKey) {
+        if (!clearanceGroupNodes[deniedRolesKey]) {
+          clearanceGroupNodes[deniedRolesKey] = { nodeIds: [], deniedRoles };
+        }
+        clearanceGroupNodes[deniedRolesKey].nodeIds.push(itemId);
+      }
 
       let label = item.type.toUpperCase();
       let bgColor = "rgba(255, 255, 255, 0.95)";
@@ -182,32 +225,15 @@ function GraphViewInner({ items, onNodeClick, selectedId, clearanceRulesMap = {}
 
       if (detail && detail.length > 20) detail = detail.substring(0, 18) + "...";
 
-      // Add clearance indicator to label
-      let clearanceLabel = '';
+      // Add small lock icon for nodes with clearance
+      let clearanceIndicator = '';
       if (hasClearance) {
-        const roleStr = deniedRoles.slice(0, 2).join(', ');
-        clearanceLabel = `\n🔒 ${roleStr}${deniedRoles.length > 2 ? '...' : ''}`;
-      }
-
-      // Apply restricted overlay style
-      let overlayStyle = {};
-      if (isRestricted) {
-        // Red transparent overlay for restricted items
-        bgColor = 'rgba(254, 202, 202, 0.9)'; // red-200 with opacity
-        borderColor = '#ef4444'; // red-500
-        overlayStyle = {
-          backgroundImage: 'repeating-linear-gradient(45deg, transparent, transparent 5px, rgba(239, 68, 68, 0.1) 5px, rgba(239, 68, 68, 0.1) 10px)',
-        };
-      } else if (hasClearance) {
-        // Yellow transparent overlay for items with clearance (but viewer has access)
-        overlayStyle = {
-          backgroundImage: 'linear-gradient(135deg, rgba(251, 191, 36, 0.15) 0%, transparent 50%)',
-        };
+        clearanceIndicator = isRestricted ? ' 🔒' : ' 🔓';
       }
 
       newNodes.push({
         id: itemId,
-        data: { label: `${label}\n${detail}\n${new Date(item.date).toLocaleDateString()}${clearanceLabel}` },
+        data: { label: `${label}${clearanceIndicator}\n${detail}\n${new Date(item.date).toLocaleDateString()}` },
         position: { x: 0, y: 0 },
         style: {
             background: bgColor,
@@ -222,8 +248,8 @@ function GraphViewInner({ items, onNodeClick, selectedId, clearanceRulesMap = {}
             fontWeight: '500',
             boxShadow: isSelected ? '0 0 0 3px rgba(37, 99, 235, 0.3)' : '0 1px 3px rgba(0,0,0,0.1)',
             cursor: 'pointer',
-            opacity: isRestricted ? 0.7 : 1,
-            ...overlayStyle,
+            opacity: isRestricted ? 0.6 : 1,
+            zIndex: 10,
         },
       });
 
@@ -248,10 +274,75 @@ function GraphViewInner({ items, onNodeClick, selectedId, clearanceRulesMap = {}
       });
     });
 
-    return getLayoutedElements(newNodes, newEdges, items);
+    // Apply layout first to get positions
+    const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(newNodes, newEdges, items);
+
+    // Create clearance group rectangles after layout
+    const groupNodes: Node[] = [];
+    let colorIndex = 0;
+
+    Object.entries(clearanceGroupNodes).forEach(([key, group]) => {
+      if (group.nodeIds.length === 0) return;
+
+      // Find bounding box for this group
+      const groupItemNodes = layoutedNodes.filter(n => group.nodeIds.includes(n.id));
+      if (groupItemNodes.length === 0) return;
+
+      const padding = 15;
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+
+      groupItemNodes.forEach(node => {
+        minX = Math.min(minX, node.position.x);
+        minY = Math.min(minY, node.position.y);
+        maxX = Math.max(maxX, node.position.x + nodeWidth);
+        maxY = Math.max(maxY, node.position.y + nodeHeight);
+      });
+
+      const color = clearanceColors[colorIndex % clearanceColors.length];
+      colorIndex++;
+
+      // Create background rectangle node
+      groupNodes.push({
+        id: `clearance-group-${key}`,
+        data: {
+          label: `🔒 ${group.deniedRoles.slice(0, 3).join(', ')}${group.deniedRoles.length > 3 ? '...' : ''}`,
+        },
+        position: { x: minX - padding, y: minY - padding - 20 },
+        style: {
+          width: maxX - minX + padding * 2,
+          height: maxY - minY + padding * 2 + 20,
+          background: color.bg,
+          border: `2px dashed ${color.border}`,
+          borderRadius: '12px',
+          zIndex: -1,
+          pointerEvents: 'none' as const,
+          fontSize: '10px',
+          fontWeight: '600',
+          color: color.border.replace('0.4', '1').replace('0.5', '1'),
+          padding: '4px 8px',
+          display: 'flex',
+          alignItems: 'flex-start',
+          justifyContent: 'flex-start',
+        },
+        selectable: false,
+        draggable: false,
+      });
+    });
+
+    // Add group nodes at the beginning (so they render behind)
+    const allNodes = [...groupNodes, ...layoutedNodes];
+
+    return {
+      nodes: allNodes,
+      edges: layoutedEdges,
+      clearanceGroups: Object.keys(clearanceGroupNodes)
+    };
   }, [items, selectedId, clearanceRulesMap, viewerRoles]);
 
   const handleNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
+    // Ignore clicks on group nodes
+    if (node.id.startsWith('clearance-group-')) return;
+
     const item = items.find(i => i.data.id === node.id);
     if (item && onNodeClick) onNodeClick(item);
   }, [items, onNodeClick]);
@@ -274,6 +365,9 @@ function GraphViewInner({ items, onNodeClick, selectedId, clearanceRulesMap = {}
       <Controls showInteractive={false} className="bg-white border border-slate-200 shadow-sm" />
       <MiniMap
           nodeColor={(n) => {
+              if (n.id.startsWith('clearance-group-')) {
+                return n.style?.background as string || 'rgba(251, 191, 36, 0.2)';
+              }
               if (n.style?.background) return n.style.background as string;
               return '#fff';
           }}
@@ -286,14 +380,23 @@ function GraphViewInner({ items, onNodeClick, selectedId, clearanceRulesMap = {}
         <div className="font-semibold text-slate-700 mb-2">クリアランス凡例</div>
         <div className="space-y-1.5">
           <div className="flex items-center gap-2">
-            <div className="w-4 h-4 rounded bg-amber-100 border border-amber-300" style={{ backgroundImage: 'linear-gradient(135deg, rgba(251, 191, 36, 0.3) 0%, transparent 50%)' }} />
-            <span className="text-slate-600">制限あり（アクセス可）</span>
+            <div className="w-5 h-5 rounded border-2 border-dashed" style={{ background: 'rgba(251, 191, 36, 0.15)', borderColor: 'rgba(251, 191, 36, 0.5)' }} />
+            <span className="text-slate-600">制限グループ（点線矩形）</span>
           </div>
           <div className="flex items-center gap-2">
-            <div className="w-4 h-4 rounded bg-red-200 border border-red-400" style={{ backgroundImage: 'repeating-linear-gradient(45deg, transparent, transparent 2px, rgba(239, 68, 68, 0.2) 2px, rgba(239, 68, 68, 0.2) 4px)' }} />
+            <span className="text-sm">🔓</span>
+            <span className="text-slate-600">アクセス可（制限あり）</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-sm">🔒</span>
             <span className="text-slate-600">アクセス不可</span>
           </div>
         </div>
+        {clearanceGroups.length > 0 && (
+          <div className="mt-2 pt-2 border-t border-slate-200 text-slate-500">
+            {clearanceGroups.length} グループ検出
+          </div>
+        )}
       </div>
     </ReactFlow>
   );
