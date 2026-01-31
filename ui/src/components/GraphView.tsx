@@ -349,16 +349,6 @@ function GraphViewInner({ items, onNodeClick, selectedId, clearanceRulesMap = {}
     };
   }, [items, selectedId, clearanceRulesMap, viewerRoles]);
 
-    // Add group nodes at the beginning (so they render behind)
-    const allNodes = [...groupNodes, ...layoutedNodes];
-
-    return {
-      nodes: allNodes,
-      edges: layoutedEdges,
-      clearanceGroups: Object.keys(clearanceGroupNodes)
-    };
-  }, [items, selectedId, clearanceRulesMap, viewerRoles]);
-
   const handleNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
     // Ignore clicks on group nodes
     if (node.id.startsWith('clearance-group-')) return;
