@@ -166,16 +166,59 @@ uv run --with requests scripts/mass_ingest.py FHIR_sample --limit 5
 ## 数据架构与摄入流程
 
 1. **FHIR 源数据**
-   - 位于 `medbeads/FHIR_sample/`。
+   - 位于 `medbeads/FHIR_sample/`（通用样本）或 `sample_data/fhir/`（安全许可测试数据）。
    - 包含原始 FHIR JSON 文件。
 
 2. **摄入流程 (Python)**
    - 运行 `python scripts/mass_ingest.py` (或通过 `uv run`)。
-   - 脚本读取 JSON 文件，将其转换为 **Beads** (Merkle Graph Nodes)，并发送到 Core Server。
+   - 脚本读取 JSON 文件，将其转换为 **Beads** (Merkle Graph Nodes)，并通过 API 发送到 Core Server。
+   - **重要:** Beads 必须通过 API 摄入才能在 SQLite 中建立索引。仅复制对象文件不会将其注册到数据库中。
 
 3. **存储 (Core Engine)**
    - **内容寻址存储 (CAS):** 原始数据作为不可变文件存储在 `medbeads/core/medbeads_data/objects/` 中。
    - **元数据索引 (SQLite):** 可搜索索引存储在 `medbeads/core/medbeads_data/metadata.db` 中。
+
+4. **Docker 启动时摄入**
+   - 通过 Docker（`deploy/hf/Dockerfile`）运行时，启动脚本会自动执行：
+     1. 临时启动 Core 服务器
+     2. 使用 `mass_ingest.py` 从 `sample_data/fhir/` 摄入 FHIR 数据
+     3. 设置安全许可规则
+     4. 通过 supervisord 重启服务
+
+## 安全许可 (Security Clearance)
+
+MedBeads 支持 **安全许可**，用于控制谁可以查看特定的医疗记录。采用 **黑名单模式**（默认：所有人可查看，明确拒绝特定角色）。
+
+### 查看者角色
+
+| 角色 | 标签（英文） | 说明 |
+|------|-------------|------|
+| `patient` | Patient | 患者本人 |
+| `family` | Family | 家属 |
+| `primary_care` | Primary Care | 主治医生 |
+| `specialist` | Specialist | 专科医生 |
+| `nurse` | Nurse | 护士 |
+| `admin` | Admin | 行政人员 |
+| `insurance` | Insurance | 保险公司 |
+| `researcher` | Researcher | 研究人员 |
+| `emergency` | Emergency | 紧急覆盖（绕过所有限制） |
+| `system` | System | 系统/AI（完全访问） |
+
+### 样本测试患者
+
+`sample_data/fhir/` 目录包含5名具有不同许可场景的测试患者：
+
+| 患者 | 场景 | 许可 |
+|------|------|------|
+| 患者A (30多岁女性) | 妇科就诊 | 对家属隐藏 |
+| 患者B (50多岁男性) | 癌症疑似 | 暂时对患者/家属隐藏（2周） |
+| 患者C (40多岁男性) | 精神科就诊 | 对保险公司/行政隐藏 |
+| 患者D (60多岁女性) | 普通内科 | 无限制 |
+| 患者E (20多岁男性) | 复杂/急诊 | 多重限制（药物筛查、酒精） |
+
+### 测试许可
+
+使用 UI 头部的 **Viewer Role 选择器** 切换角色，观察受限记录如何显示或隐藏。
 
 ## 填充种子数据
 

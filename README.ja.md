@@ -166,16 +166,59 @@ Docker を使用せずに個別にサービスを実行したい場合は、以�
 ## データアーキテクチャと取り込みフロー
 
 1. **FHIR ソースデータ**
-   - `medbeads/FHIR_sample/` に配置されています。
-   -生の FHIR JSON ファイルが含まれます。
+   - `medbeads/FHIR_sample/`（一般サンプル）または `sample_data/fhir/`（セキュリティクリアランステストデータ）に配置されています。
+   - 生の FHIR JSON ファイルが含まれます。
 
 2. **取り込みプロセス (Python)**
    - `python scripts/mass_ingest.py` (または `uv run`) を実行します。
-   - スクリプトは JSON ファイルを読み込み、**Beads** (マークルグラフノード) に変換して Core Server に送信します。
+   - スクリプトは JSON ファイルを読み込み、**Beads** (マークルグラフノード) に変換して Core Server の API 経由で送信します。
+   - **重要:** Beads は SQLite にインデックス登録されるために、必ず API 経由で取り込む必要があります。オブジェクトファイルを単にコピーしただけではデータベースに登録されません。
 
 3. **ストレージ (Core Engine)**
    - **Content Addressable Storage (CAS):** 生データは `medbeads/core/medbeads_data/objects/` に不変ファイルとして保存されます。
    - **Metadata Index (SQLite):** 検索可能なインデックスが `medbeads/core/medbeads_data/metadata.db` に保存されます。
+
+4. **Docker 起動時の取り込み**
+   - Docker（`deploy/hf/Dockerfile`）で実行する場合、スタートアップスクリプトが自動的に以下を実行します：
+     1. Core サーバーを一時的に起動
+     2. `mass_ingest.py` を使用して `sample_data/fhir/` から FHIR データを取り込み
+     3. セキュリティクリアランスルールを設定
+     4. supervisord でサービスを再起動
+
+## セキュリティクリアランス
+
+MedBeads は、特定の医療記録を誰が閲覧できるかを制御する **セキュリティクリアランス** をサポートしています。**ブラックリストモデル**（デフォルト：全員閲覧可、特定のロールを明示的に拒否）を採用しています。
+
+### 閲覧者ロール
+
+| ロール | ラベル（英語） | 説明 |
+|--------|---------------|------|
+| `patient` | Patient | 患者本人 |
+| `family` | Family | 家族 |
+| `primary_care` | Primary Care | 主治医 |
+| `specialist` | Specialist | 専門医 |
+| `nurse` | Nurse | 看護師 |
+| `admin` | Admin | 事務 |
+| `insurance` | Insurance | 保険会社 |
+| `researcher` | Researcher | 研究者 |
+| `emergency` | Emergency | 緊急時オーバーライド（全制限を無視） |
+| `system` | System | システム/AI（フルアクセス） |
+
+### サンプルテスト患者
+
+`sample_data/fhir/` ディレクトリには、さまざまなクリアランスシナリオを持つ5名のテスト患者が含まれています：
+
+| 患者 | シナリオ | クリアランス |
+|------|----------|-------------|
+| 患者A (30代女性) | 婦人科受診 | 家族から隠す |
+| 患者B (50代男性) | がん疑い | 患者・家族から一時的に隠す（2週間） |
+| 患者C (40代男性) | 精神科通院 | 保険会社・事務から隠す |
+| 患者D (60代女性) | 一般内科 | 制限なし |
+| 患者E (20代男性) | 複合/緊急 | 複数の制限（薬物検査、アルコール） |
+
+### クリアランスのテスト
+
+UIヘッダーの **Viewer Role セレクター** を使用してロールを切り替え、制限された記録がどのように表示または非表示になるかを確認できます。
 
 ## シードデータ（初期データ）の投入
 
