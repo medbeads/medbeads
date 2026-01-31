@@ -3,7 +3,6 @@ import { Sparkles, Info, AlertTriangle, Code, ChevronDown, ChevronRight } from '
 import ReactMarkdown from 'react-markdown';
 import { fetchAIInsight } from '../lib/api';
 import type { TimelineItem, Patient, BeadUsed } from '../lib/api';
-import { ClearanceEditor } from './ClearanceEditor';
 
 interface DetailPanelProps {
   selectedItem: TimelineItem | null;
@@ -236,14 +235,6 @@ export function DetailPanel({ selectedItem }: DetailPanelProps) {
             )}
         </div>
       </div>
-
-      {/* Security Clearance Editor */}
-      {selectedItem.data?.id && (
-        <ClearanceEditor
-          beadId={selectedItem.data.id}
-          beadType={selectedItem.type}
-        />
-      )}
 
       <div className="bg-gradient-to-br from-cyan-50 to-blue-50 border-2 border-cyan-200 rounded-xl p-6">
         <div className="flex items-center gap-3 mb-4">
