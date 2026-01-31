@@ -1,7 +1,10 @@
 import axios from 'axios';
 
-const API_BASE_URL = 'http://localhost:8080'; // Core Server
-const AI_API_BASE_URL = 'http://localhost:8000'; // AI Server
+// Use environment variables if available, otherwise use relative paths for Docker
+// For local development: set VITE_API_BASE_URL=http://localhost:8080
+// For Docker: uses /api/core (proxied by Nginx)
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/core';
+const AI_API_BASE_URL = import.meta.env.VITE_AI_API_BASE_URL || '/api/ai';
 
 export const api = axios.create({
   baseURL: API_BASE_URL,
