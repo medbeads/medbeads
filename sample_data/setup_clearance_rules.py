@@ -196,11 +196,26 @@ def main():
 
     print(f"\nFound {len(patients)} patients")
 
-    # Build patient name -> ID mapping
+    # Build patient name -> ID mapping (support both full and abbreviated names)
     patient_map = {}
     for patient in patients:
         name = patient.get("content", {}).get("name", "Unknown")
         patient_map[name] = patient["id"]
+        # Also add mapping for "Given Family" format (e.g., "Tanaka Yuki")
+        parts = name.split()
+        if len(parts) >= 2:
+            # "Yuki T" -> also map as "Tanaka Yuki" pattern
+            given = parts[0]
+            family_initial = parts[-1]
+            # Guess full family name from CLEARANCE_SCENARIOS
+            for scenario in CLEARANCE_SCENARIOS:
+                scenario_name = scenario["patient_name"]
+                scenario_parts = scenario_name.split()
+                if len(scenario_parts) >= 2:
+                    scenario_family = scenario_parts[0]
+                    scenario_given = scenario_parts[1]
+                    if given == scenario_given and scenario_family.startswith(family_initial.rstrip('.')):
+                        patient_map[scenario_name] = patient["id"]
         print(f"  - {name}: {patient['id'][:16]}...")
 
     # Process each clearance scenario

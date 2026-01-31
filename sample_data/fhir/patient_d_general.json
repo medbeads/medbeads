@@ -131,6 +131,144 @@
         "occurrenceDateTime": "2026-01-12T10:25:00Z",
         "lotNumber": "FLU2026-A001"
       }
+    },
+    {
+      "fullUrl": "urn:uuid:encounter-d-002",
+      "resource": {
+        "resourceType": "Encounter",
+        "id": "encounter-d-002",
+        "status": "finished",
+        "class": { "code": "AMB", "display": "ambulatory" },
+        "subject": { "reference": "urn:uuid:patient-d-001" },
+        "period": { "start": "2025-09-05T14:00:00Z", "end": "2025-09-05T14:20:00Z" },
+        "type": [{ "coding": [{ "display": "Dermatology consultation" }], "text": "Dermatology visit" }],
+        "serviceProvider": { "display": "Tokyo Dermatology Clinic" }
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:condition-d-002",
+      "resource": {
+        "resourceType": "Condition",
+        "id": "condition-d-002",
+        "clinicalStatus": { "coding": [{ "code": "active", "display": "Active" }] },
+        "code": {
+          "coding": [{ "system": "http://snomed.info/sct", "code": "24079001", "display": "Atopic dermatitis" }],
+          "text": "Atopic dermatitis, mild, arms and legs"
+        },
+        "subject": { "reference": "urn:uuid:patient-d-001" },
+        "encounter": { "reference": "urn:uuid:encounter-d-002" },
+        "onsetDateTime": "2025-08-01",
+        "recordedDate": "2025-09-05"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:medication-d-002",
+      "resource": {
+        "resourceType": "MedicationRequest",
+        "id": "medication-d-002",
+        "status": "completed",
+        "intent": "order",
+        "medicationCodeableConcept": {
+          "coding": [{ "display": "Hydrocortisone cream 1%" }],
+          "text": "Hydrocortisone topical cream 1%"
+        },
+        "subject": { "reference": "urn:uuid:patient-d-001" },
+        "encounter": { "reference": "urn:uuid:encounter-d-002" },
+        "authoredOn": "2025-09-05T14:15:00Z",
+        "dosageInstruction": [{ "text": "Apply to affected areas twice daily" }]
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:encounter-d-003",
+      "resource": {
+        "resourceType": "Encounter",
+        "id": "encounter-d-003",
+        "status": "finished",
+        "class": { "code": "AMB", "display": "ambulatory" },
+        "subject": { "reference": "urn:uuid:patient-d-001" },
+        "period": { "start": "2025-11-20T09:00:00Z", "end": "2025-11-20T09:15:00Z" },
+        "type": [{ "coding": [{ "display": "Acute care visit" }], "text": "Common cold visit" }],
+        "serviceProvider": { "display": "Neighborhood Clinic" }
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:condition-d-003",
+      "resource": {
+        "resourceType": "Condition",
+        "id": "condition-d-003",
+        "clinicalStatus": { "coding": [{ "code": "resolved", "display": "Resolved" }] },
+        "code": {
+          "coding": [{ "system": "http://snomed.info/sct", "code": "82272006", "display": "Common cold" }],
+          "text": "Acute upper respiratory infection (common cold)"
+        },
+        "subject": { "reference": "urn:uuid:patient-d-001" },
+        "encounter": { "reference": "urn:uuid:encounter-d-003" },
+        "onsetDateTime": "2025-11-18",
+        "recordedDate": "2025-11-20",
+        "abatementDateTime": "2025-11-25"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:medication-d-003",
+      "resource": {
+        "resourceType": "MedicationRequest",
+        "id": "medication-d-003",
+        "status": "completed",
+        "intent": "order",
+        "medicationCodeableConcept": {
+          "coding": [{ "display": "Acetaminophen 500mg" }],
+          "text": "Acetaminophen 500mg tablets"
+        },
+        "subject": { "reference": "urn:uuid:patient-d-001" },
+        "encounter": { "reference": "urn:uuid:encounter-d-003" },
+        "authoredOn": "2025-11-20T09:10:00Z",
+        "dosageInstruction": [{ "text": "Take 1-2 tablets every 6 hours as needed for fever or pain" }]
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:encounter-d-004",
+      "resource": {
+        "resourceType": "Encounter",
+        "id": "encounter-d-004",
+        "status": "finished",
+        "class": { "code": "AMB", "display": "ambulatory" },
+        "subject": { "reference": "urn:uuid:patient-d-001" },
+        "period": { "start": "2024-06-15T11:00:00Z", "end": "2024-06-15T11:45:00Z" },
+        "type": [{ "coding": [{ "display": "Gastroenterology consultation" }], "text": "GI screening" }],
+        "serviceProvider": { "display": "Tokyo University Hospital - Gastroenterology" }
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:procedure-d-001",
+      "resource": {
+        "resourceType": "Procedure",
+        "id": "procedure-d-001",
+        "status": "completed",
+        "code": {
+          "coding": [{ "system": "http://snomed.info/sct", "code": "73761001", "display": "Colonoscopy" }],
+          "text": "Screening colonoscopy"
+        },
+        "subject": { "reference": "urn:uuid:patient-d-001" },
+        "encounter": { "reference": "urn:uuid:encounter-d-004" },
+        "performedDateTime": "2024-06-15T11:30:00Z",
+        "outcome": { "text": "Normal findings, no polyps detected" }
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:observation-d-004",
+      "resource": {
+        "resourceType": "Observation",
+        "id": "observation-d-004",
+        "status": "final",
+        "code": {
+          "coding": [{ "system": "http://loinc.org", "code": "19113-0", "display": "Colonoscopy report" }],
+          "text": "Colonoscopy findings"
+        },
+        "subject": { "reference": "urn:uuid:patient-d-001" },
+        "encounter": { "reference": "urn:uuid:encounter-d-004" },
+        "effectiveDateTime": "2024-06-15T11:40:00Z",
+        "valueString": "Normal colonic mucosa throughout. No polyps, masses, or diverticula observed. Recommend repeat screening in 10 years."
+      }
     }
   ]
 }
