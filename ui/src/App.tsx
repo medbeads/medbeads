@@ -242,7 +242,7 @@ function App() {
                 </div>
                 <div className="flex-1 overflow-y-auto">
                   {selectedItem ? (
-                    <DetailPanel selectedItem={selectedItem} patient={selectedPatient} />
+                    <DetailPanel selectedItem={selectedItem} patient={selectedPatient} clearanceRulesMap={clearanceRulesMap} />
                   ) : (
                     <div className="flex items-center justify-center h-full p-6 text-slate-500">
                       <div className="text-center">

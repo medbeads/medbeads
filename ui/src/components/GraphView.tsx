@@ -278,14 +278,29 @@ function GraphViewInner({ items, onNodeClick, selectedId, clearanceRulesMap = {}
     const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(newNodes, newEdges, items);
 
     // Create clearance group rectangles after layout
+    // For 'system' role: show all clearance areas
+    // For other roles: only show clearance areas for beads the viewer CAN access
     const groupNodes: Node[] = [];
     let colorIndex = 0;
+    const isSystemView = viewerRoles.includes('system') || viewerRoles.includes('emergency');
 
     Object.entries(clearanceGroupNodes).forEach(([key, group]) => {
       if (group.nodeIds.length === 0) return;
 
+      // For non-system viewers, filter to only show beads they can access
+      let visibleNodeIds = group.nodeIds;
+      if (!isSystemView) {
+        visibleNodeIds = group.nodeIds.filter(nodeId => {
+          const rules = clearanceRulesMap[nodeId];
+          // Check if viewer is NOT denied
+          return !isRestrictedForViewer(rules, viewerRoles);
+        });
+      }
+
+      if (visibleNodeIds.length === 0) return;
+
       // Find bounding box for this group
-      const groupItemNodes = layoutedNodes.filter(n => group.nodeIds.includes(n.id));
+      const groupItemNodes = layoutedNodes.filter(n => visibleNodeIds.includes(n.id));
       if (groupItemNodes.length === 0) return;
 
       const padding = 15;
@@ -302,10 +317,15 @@ function GraphViewInner({ items, onNodeClick, selectedId, clearanceRulesMap = {}
       colorIndex++;
 
       // Create background rectangle node
+      // For system view: show denied roles; for other views: show "Accessible" indicator
+      const groupLabel = isSystemView
+        ? `🔒 ${group.deniedRoles.slice(0, 3).join(', ')}${group.deniedRoles.length > 3 ? '...' : ''}`
+        : `✓ Accessible (restricted for others)`;
+
       groupNodes.push({
         id: `clearance-group-${key}`,
         data: {
-          label: `🔒 ${group.deniedRoles.slice(0, 3).join(', ')}${group.deniedRoles.length > 3 ? '...' : ''}`,
+          label: groupLabel,
         },
         position: { x: minX - padding, y: minY - padding - 20 },
         style: {
@@ -377,20 +397,36 @@ function GraphViewInner({ items, onNodeClick, selectedId, clearanceRulesMap = {}
 
       {/* Legend for clearance colors */}
       <div className="absolute top-4 left-4 bg-white/90 backdrop-blur-sm rounded-lg shadow-md border border-slate-200 p-3 text-xs">
-        <div className="font-semibold text-slate-700 mb-2">Clearance Legend</div>
+        <div className="font-semibold text-slate-700 mb-2">
+          Clearance Legend
+          <span className="ml-2 font-normal text-slate-500">
+            ({viewerRoles.includes('system') || viewerRoles.includes('emergency') ? 'All areas' : `${viewerRoles[0]} view`})
+          </span>
+        </div>
         <div className="space-y-1.5">
-          <div className="flex items-center gap-2">
-            <div className="w-5 h-5 rounded border-2 border-dashed" style={{ background: 'rgba(251, 191, 36, 0.15)', borderColor: 'rgba(251, 191, 36, 0.5)' }} />
-            <span className="text-slate-600">Restricted Group</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="text-sm">🔓</span>
-            <span className="text-slate-600">Access Allowed (with restrictions)</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="text-sm">🔒</span>
-            <span className="text-slate-600">Access Denied</span>
-          </div>
+          {(viewerRoles.includes('system') || viewerRoles.includes('emergency')) ? (
+            <>
+              <div className="flex items-center gap-2">
+                <div className="w-5 h-5 rounded border-2 border-dashed" style={{ background: 'rgba(251, 191, 36, 0.15)', borderColor: 'rgba(251, 191, 36, 0.5)' }} />
+                <span className="text-slate-600">Restricted Group</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-sm">🔒</span>
+                <span className="text-slate-600">Access Denied (for some roles)</span>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="flex items-center gap-2">
+                <div className="w-5 h-5 rounded border-2 border-dashed" style={{ background: 'rgba(251, 191, 36, 0.15)', borderColor: 'rgba(251, 191, 36, 0.5)' }} />
+                <span className="text-slate-600">Accessible to you</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-sm">🔒</span>
+                <span className="text-slate-600">No access</span>
+              </div>
+            </>
+          )}
         </div>
         {clearanceGroups.length > 0 && (
           <div className="mt-2 pt-2 border-t border-slate-200 text-slate-500">

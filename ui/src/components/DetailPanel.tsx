@@ -1,19 +1,54 @@
 import { useState, useEffect, type ReactNode } from 'react';
-import { Sparkles, Info, AlertTriangle, Code, ChevronDown, ChevronRight } from 'lucide-react';
+import { Sparkles, Info, AlertTriangle, Code, ChevronDown, ChevronRight, ShieldX } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
-import { fetchAIInsight } from '../lib/api';
-import type { TimelineItem, Patient, BeadUsed } from '../lib/api';
+import { fetchAIInsight, getViewerRoles } from '../lib/api';
+import type { TimelineItem, Patient, BeadUsed, ClearanceRule, ViewerRole } from '../lib/api';
 
 interface DetailPanelProps {
   selectedItem: TimelineItem | null;
   patient: Patient;
+  clearanceRulesMap?: Record<string, ClearanceRule[]>;
 }
 
-export function DetailPanel({ selectedItem }: DetailPanelProps) {
+// Check if a bead is restricted for the current viewer
+const isRestrictedForViewer = (rules: ClearanceRule[] | undefined, viewerRoles: ViewerRole[]): boolean => {
+  if (!rules || rules.length === 0) return false;
+
+  // Emergency and system roles always have access
+  if (viewerRoles.includes('emergency') || viewerRoles.includes('system')) {
+    return false;
+  }
+
+  const now = new Date();
+
+  for (const rule of rules) {
+    // Check expiration
+    if (rule.expires_at) {
+      const expiresAt = new Date(rule.expires_at);
+      if (now > expiresAt) continue;
+    }
+
+    // Check if any viewer role is denied
+    for (const viewerRole of viewerRoles) {
+      if (rule.denied_roles.includes(viewerRole)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+};
+
+export function DetailPanel({ selectedItem, clearanceRulesMap = {} }: DetailPanelProps) {
   const [insight, setInsight] = useState<string | null>(null);
   const [beadsUsed, setBeadsUsed] = useState<BeadUsed[]>([]);
   const [loadingInsight, setLoadingInsight] = useState(false);
   const [showRaw, setShowRaw] = useState(false);
+
+  const viewerRoles = getViewerRoles();
+  const beadId = selectedItem?.data?.id;
+  const rules = beadId ? clearanceRulesMap[beadId] : undefined;
+  const isRestricted = isRestrictedForViewer(rules, viewerRoles);
 
   useEffect(() => {
     setInsight(null);
@@ -58,6 +93,37 @@ export function DetailPanel({ selectedItem }: DetailPanelProps) {
         <h3 className="text-xl font-bold text-slate-900 mb-2">Select an Item</h3>
         <p className="text-slate-600 max-w-md">
           Choose an item from the timeline to view details and AI analysis
+        </p>
+      </div>
+    );
+  }
+
+  // Show access denied message if viewer doesn't have permission
+  if (isRestricted) {
+    const deniedRoles = rules?.flatMap(r => r.denied_roles) || [];
+    const uniqueDeniedRoles = [...new Set(deniedRoles)];
+
+    return (
+      <div className="flex flex-col items-center justify-center h-full p-12 text-center">
+        <div className="w-24 h-24 bg-gradient-to-br from-red-100 to-orange-100 rounded-full flex items-center justify-center mb-6">
+          <ShieldX className="w-12 h-12 text-red-600" />
+        </div>
+        <h3 className="text-xl font-bold text-slate-900 mb-2">Access Denied</h3>
+        <p className="text-slate-600 max-w-md mb-4">
+          Your current role ({viewerRoles.join(', ')}) does not have permission to view this information.
+        </p>
+        <div className="bg-red-50 border border-red-200 rounded-lg p-4 max-w-md">
+          <p className="text-sm text-red-800">
+            <strong>Restricted for:</strong> {uniqueDeniedRoles.join(', ')}
+          </p>
+          {rules?.[0]?.reason && (
+            <p className="text-sm text-red-700 mt-2">
+              <strong>Reason:</strong> {rules[0].reason}
+            </p>
+          )}
+        </div>
+        <p className="text-xs text-slate-400 mt-4">
+          If you need access, switch to system or emergency role.
         </p>
       </div>
     );
