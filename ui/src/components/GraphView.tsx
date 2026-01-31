@@ -177,7 +177,6 @@ function GraphViewInner({ items, onNodeClick, selectedId, clearanceRulesMap = {}
       const itemId = item.data.id;
       const isSelected = selectedId === itemId;
       const rules = clearanceRulesMap[itemId];
-      const isRestricted = isRestrictedForViewer(rules, viewerRoles);
       const deniedRoles = getDeniedRoles(rules);
       const deniedRolesKey = getDeniedRolesKey(rules);
       const hasClearance = deniedRoles.length > 0;
@@ -225,23 +224,9 @@ function GraphViewInner({ items, onNodeClick, selectedId, clearanceRulesMap = {}
 
       if (detail && detail.length > 20) detail = detail.substring(0, 18) + "...";
 
-      // Add small lock icon for nodes with clearance
-      let clearanceIndicator = '';
-      if (hasClearance) {
-        clearanceIndicator = isRestricted ? ' 🔒' : ' 🔓';
-      }
-
-      // Style restricted beads with red dashed border to clearly show they are outside accessible area
-      const restrictedStyle = isRestricted ? {
-        background: 'rgba(254, 226, 226, 0.8)', // light red background
-        border: '2px dashed #dc2626', // red dashed border
-        color: '#991b1b',
-        opacity: 0.7,
-      } : {};
-
       newNodes.push({
         id: itemId,
-        data: { label: `${label}${clearanceIndicator}\n${detail}\n${new Date(item.date).toLocaleDateString()}` },
+        data: { label: `${label}\n${detail}\n${new Date(item.date).toLocaleDateString()}` },
         position: { x: 0, y: 0 },
         style: {
             background: bgColor,
@@ -257,7 +242,6 @@ function GraphViewInner({ items, onNodeClick, selectedId, clearanceRulesMap = {}
             boxShadow: isSelected ? '0 0 0 3px rgba(37, 99, 235, 0.3)' : '0 1px 3px rgba(0,0,0,0.1)',
             cursor: 'pointer',
             zIndex: 10,
-            ...restrictedStyle, // Override with restricted styling if applicable
         },
       });
 
@@ -325,11 +309,11 @@ function GraphViewInner({ items, onNodeClick, selectedId, clearanceRulesMap = {}
       colorIndex++;
 
       // Create background rectangle node
-      // For system view: show denied roles; for other views: show who is denied
+      // For system view: show denied roles; for other views: just show "Accessible"
       const deniedList = group.deniedRoles.slice(0, 3).join(', ') + (group.deniedRoles.length > 3 ? '...' : '');
       const groupLabel = isSystemView
         ? `🔒 Denied: ${deniedList}`
-        : `✓ You can access (denied: ${deniedList})`;
+        : `✓ Accessible`;
 
       groupNodes.push({
         id: `clearance-group-${key}`,
@@ -414,32 +398,20 @@ function GraphViewInner({ items, onNodeClick, selectedId, clearanceRulesMap = {}
         </div>
         <div className="space-y-1.5">
           {(viewerRoles.includes('system') || viewerRoles.includes('emergency')) ? (
-            <>
-              <div className="flex items-center gap-2">
-                <div className="w-5 h-5 rounded border-2 border-dashed" style={{ background: 'rgba(251, 191, 36, 0.15)', borderColor: 'rgba(251, 191, 36, 0.5)' }} />
-                <span className="text-slate-600">Has access restrictions</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-sm">🔒</span>
-                <span className="text-slate-600">Restricted for some roles</span>
-              </div>
-            </>
+            <div className="flex items-center gap-2">
+              <div className="w-5 h-5 rounded border-2 border-dashed" style={{ background: 'rgba(251, 191, 36, 0.15)', borderColor: 'rgba(251, 191, 36, 0.5)' }} />
+              <span className="text-slate-600">Has access restrictions</span>
+            </div>
           ) : (
-            <>
-              <div className="flex items-center gap-2">
-                <div className="w-5 h-5 rounded border-2 border-dashed" style={{ background: 'rgba(251, 191, 36, 0.15)', borderColor: 'rgba(251, 191, 36, 0.5)' }} />
-                <span className="text-slate-600">You can access (inside box)</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-5 h-5 rounded border-2 border-dashed" style={{ background: 'rgba(254, 226, 226, 0.8)', borderColor: '#dc2626' }} />
-                <span className="text-slate-600">Access denied (outside box)</span>
-              </div>
-            </>
+            <div className="flex items-center gap-2">
+              <div className="w-5 h-5 rounded border-2 border-dashed" style={{ background: 'rgba(251, 191, 36, 0.15)', borderColor: 'rgba(251, 191, 36, 0.5)' }} />
+              <span className="text-slate-600">Accessible area</span>
+            </div>
           )}
         </div>
         {clearanceGroups.length > 0 && (
           <div className="mt-2 pt-2 border-t border-slate-200 text-slate-500">
-            {clearanceGroups.length} clearance group(s)
+            {clearanceGroups.length} area(s)
           </div>
         )}
       </div>
