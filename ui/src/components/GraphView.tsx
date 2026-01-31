@@ -57,52 +57,6 @@ const isRestrictedForViewer = (rules: ClearanceRule[] | undefined, viewerRoles: 
   return false;
 };
 
-// Get the denied roles for display (as a sorted string key for grouping)
-const getDeniedRolesKey = (rules: ClearanceRule[] | undefined): string => {
-  if (!rules || rules.length === 0) return '';
-
-  const deniedSet = new Set<string>();
-  const now = new Date();
-
-  for (const rule of rules) {
-    if (rule.expires_at) {
-      const expiresAt = new Date(rule.expires_at);
-      if (now > expiresAt) continue;
-    }
-    rule.denied_roles.forEach(r => deniedSet.add(r));
-  }
-
-  return Array.from(deniedSet).sort().join(',');
-};
-
-// Get the denied roles for display
-const getDeniedRoles = (rules: ClearanceRule[] | undefined): string[] => {
-  if (!rules || rules.length === 0) return [];
-
-  const deniedSet = new Set<string>();
-  const now = new Date();
-
-  for (const rule of rules) {
-    if (rule.expires_at) {
-      const expiresAt = new Date(rule.expires_at);
-      if (now > expiresAt) continue;
-    }
-    rule.denied_roles.forEach(r => deniedSet.add(r));
-  }
-
-  return Array.from(deniedSet);
-};
-
-// Color palette for different clearance groups
-const clearanceColors = [
-  { bg: 'rgba(251, 191, 36, 0.15)', border: 'rgba(251, 191, 36, 0.5)' },   // amber
-  { bg: 'rgba(239, 68, 68, 0.12)', border: 'rgba(239, 68, 68, 0.4)' },     // red
-  { bg: 'rgba(168, 85, 247, 0.12)', border: 'rgba(168, 85, 247, 0.4)' },   // purple
-  { bg: 'rgba(34, 197, 94, 0.12)', border: 'rgba(34, 197, 94, 0.4)' },     // green
-  { bg: 'rgba(59, 130, 246, 0.12)', border: 'rgba(59, 130, 246, 0.4)' },   // blue
-  { bg: 'rgba(236, 72, 153, 0.12)', border: 'rgba(236, 72, 153, 0.4)' },   // pink
-];
-
 // Custom layout: Group by Date (Y axis = Time, X axis = Items in same date)
 const getLayoutedElements = (nodes: Node[], edges: Edge[], items: TimelineItem[], restrictedNodeIds: Set<string>) => {
   // 1. Group nodes by date
