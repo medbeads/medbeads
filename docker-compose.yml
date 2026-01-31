@@ -4,10 +4,44 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      # Mount pre-populated sample data for demo.
-      # This directory contains processed Beads data ready for use.
-      - ./core/medbeads_data:/app/medbeads_data
+      # Data volume for persistence
+      - medbeads_data:/app/medbeads_data
     restart: unless-stopped
+
+  # One-time initialization service to ingest sample data
+  init:
+    build: ./api
+    depends_on:
+      - core
+    volumes:
+      - ./sample_data:/app/sample_data
+      - ./scripts:/app/scripts
+    environment:
+      - CORE_URL=http://core:8080
+    command: >
+      sh -c "
+        echo 'Waiting for core server...' &&
+        sleep 5 &&
+        for i in 1 2 3 4 5 6 7 8 9 10; do
+          curl -s http://core:8080/patients > /dev/null && break || sleep 2
+        done &&
+        echo 'Checking patient count...' &&
+        COUNT=$$(curl -s http://core:8080/patients | python3 -c 'import sys,json; print(len(json.load(sys.stdin)))' 2>/dev/null || echo '0') &&
+        echo \"Current patients: $$COUNT\" &&
+        if [ \"$$COUNT\" -lt 5 ]; then
+          echo 'Ingesting sample data...' &&
+          for f in /app/sample_data/fhir/*.json; do
+            echo \"Processing $$(basename $$f)...\" &&
+            python3 /app/scripts/mass_ingest.py $$f --limit 1 2>&1 || true
+          done &&
+          echo 'Setting up clearance rules...' &&
+          python3 /app/sample_data/setup_clearance_rules.py --api-url http://core:8080 2>&1 || true
+        else
+          echo 'Sample data already present.'
+        fi &&
+        echo 'Initialization complete!'
+      "
+    restart: "no"
 
   api:
     build: ./api
@@ -15,12 +49,12 @@ services:
       - "8000:8000"
     environment:
       - CORE_URL=http://core:8080
-      # User needs to provide GEMINI_API_KEY in .env
       # User can provide GEMINI_API_KEY in .env or environment variables
     # env_file:
     #   - .env
     depends_on:
       - core
+      - init
     restart: unless-stopped
 
   ui:
@@ -31,3 +65,6 @@ services:
       - core
       - api
     restart: unless-stopped
+
+volumes:
+  medbeads_data:

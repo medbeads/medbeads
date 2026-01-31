@@ -14,7 +14,7 @@ export function ViewerRoleSelector({ selectedRoles, onRolesChange }: ViewerRoleS
 
   return (
     <div className="flex items-center gap-2 text-sm">
-      <span className="text-slate-500 font-medium mr-1">Viewer:</span>
+      <span className="text-slate-500 font-medium mr-1">Security Clearance:</span>
       <div className="flex items-center gap-1 flex-wrap">
         {VIEWER_ROLES.map(role => {
           const isSelected = currentRole === role.value;

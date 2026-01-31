@@ -12,9 +12,10 @@ Usage:
 import requests
 import json
 import argparse
+import os
 from datetime import datetime, timedelta
 
-API_BASE = "http://localhost:8080"
+API_BASE = os.environ.get("CORE_URL", "http://localhost:8080")
 
 # Sample clearance rules to create
 # These will be matched to beads by searching for specific content

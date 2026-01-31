@@ -7,8 +7,9 @@ import argparse
 import sys
 import io
 
-# Goサーバーのエンドポイント
-MEDBEADS_API = "http://localhost:8080/beads"
+# Goサーバーのエンドポイント (環境変数CORE_URLで上書き可能)
+CORE_URL = os.environ.get("CORE_URL", "http://localhost:8080")
+MEDBEADS_API = f"{CORE_URL}/beads"
 
 # ID変換テーブル (FHIRのUUID -> medbeadsのHash)
 # ファイルごとにリセットすべきだが、参照解決のためにメモリに保持
