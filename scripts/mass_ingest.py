@@ -174,18 +174,32 @@ def process_directory(path, limit):
 
     print(f"\n🎉 Finished! Imported {count} patients.")
 
+def process_single_file(file_path, limit):
+    """Process a single JSON file."""
+    print(f"📄 Processing single file: {file_path}")
+    print(f"🎯 Target limit: {limit} patients")
+
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+            count = process_bundle(content, os.path.basename(file_path), limit, 0)
+        print(f"\n🎉 Finished! Imported {count} patients.")
+    except Exception as e:
+        print(f"❌ Error reading {file_path}: {e}")
+
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Ingest Synthea FHIR data from tar.gz or directory")
-    parser.add_argument("path", help="Path to the tar.gz file or directory")
+    parser = argparse.ArgumentParser(description="Ingest Synthea FHIR data from JSON file or directory")
+    parser.add_argument("path", help="Path to the JSON file or directory")
     parser.add_argument("--limit", type=int, default=5, help="Number of patients to import (default: 5)")
-    
+
     args = parser.parse_args()
-    
+
     if not os.path.exists(args.path):
         print(f"Error: Path not found: {args.path}")
         sys.exit(1)
-        
+
     if os.path.isdir(args.path):
         process_directory(args.path, args.limit)
     else:
-        process_tar(args.path, args.limit)
+        process_single_file(args.path, args.limit)

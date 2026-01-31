@@ -123,7 +123,7 @@ export const fetchAllPatients = async (): Promise<Patient[]> => {
   const response = await api.get<Bead[]>('/patients', {
     headers: getViewerHeaders(),
   });
-  return response.data.map(mapBeadToPatient);
+  return (response.data || []).map(mapBeadToPatient);
 };
 
 export const searchPatients = async (query: string, resourceTypes?: string[]): Promise<Patient[]> => {
