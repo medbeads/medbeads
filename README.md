@@ -1,7 +1,16 @@
-# MedBeads
+# MedBeads: An Agent-Native, Immutable Data Substrate for Trustworthy Medical AI
 
-MedBeads is an **Immutable, Agent-Native Data Infrastructure** for medical AI.
+MedBeads is an **Immutable, Agent-Native Data Infrastructure** designed to address the "Context Mismatch" in medical AI. By restructuring medical records from mutable relational databases into a **Merkle Directed Acyclic Graph (DAG)**, MedBeads provides explicit causal linking, tamper-evidence, and deterministic context retrieval for autonomous agents.
 
+![MedBeads Concept](docs/concept-image.jpeg)
+
+**The Context Mismatch Problem:**
+Current Electronic Medical Records (EMRs) and FHIR standards are designed for human review, relying on implicit context and probabilistic search (like Vector RAG) which can lead to AI hallucinations. MedBeads shifts this paradigm:
+*   **From Probabilistic to Deterministic:** Instead of guessing context, AI agents traverse explicit cryptographic links.
+*   **From Mutable to Immutable:** Every record ("Bead") is content-addressed and unchangeable, guaranteeing auditability.
+*   **From Verbose to Token-Efficient:** The structured graph serves as a compressed "AI-native language."
+
+---
 
 [English](README.md) | [日本語](README.ja.md) | [中文](README.zh.md)
 
@@ -149,7 +158,7 @@ You can use the helper script to verify the environment, ingest sample data, and
    uv run --with requests scripts/mass_ingest.py medbeads/FHIR_sample --limit 5
    ```
 
-3. **Start AI API (Python):
+3. **Start AI API (Python):**
    This service provides AI analysis features.
    ```bash
    cd api
