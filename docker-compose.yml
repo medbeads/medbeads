@@ -32,10 +32,10 @@ services:
           echo 'Ingesting sample data...' &&
           for f in /app/sample_data/fhir/*.json; do
             echo \"Processing $$(basename $$f)...\" &&
-            python3 /app/scripts/mass_ingest.py $$f --limit 1 2>&1 || true
+            uv run --with requests /app/scripts/mass_ingest.py $$f --limit 1 2>&1 || true
           done &&
           echo 'Setting up clearance rules...' &&
-          python3 /app/sample_data/setup_clearance_rules.py --api-url http://core:8080 2>&1 || true
+          uv run --with requests /app/sample_data/setup_clearance_rules.py --api-url http://core:8080 2>&1 || true
         else
           echo 'Sample data already present.'
         fi &&
