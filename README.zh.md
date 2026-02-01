@@ -1,6 +1,16 @@
-# MedBeads
+# MedBeads: 医疗 AI 的原生代理 (Agent-Native)、不可变数据基石
 
-MedBeads 是一个用于医疗 AI 的 **不可变 (Immutable)、原生代理 (Agent-Native) 数据基础设施**。
+MedBeads 是一个 **不可变 (Immutable)、原生代理 (Agent-Native) 数据基础设施**，旨在解决医疗 AI 中的“上下文不匹配 (Context Mismatch)”问题。通过将医疗记录从可变的关系数据库重构为 **Merkle 有向无环图 (DAG)**，MedBeads 为自主代理提供了明确的因果链接、防篡改证据和确定性的上下文检索。
+
+![MedBeads Concept](docs/concept-image.jpeg)
+
+**上下文不匹配问题 (The Context Mismatch Problem):**
+当前的电子病历 (EMR) 和 FHIR 标准是为人类审查设计的，依赖于隐式上下文和概率搜索（如 Vector RAG），这可能导致 AI 产生幻觉。MedBeads 改变了这一范式：
+*   **从概率到确定:** AI 代理不再猜测上下文，而是遍历明确的加密链接。
+*   **从可变到不可变:** 每条记录 (“Bead”) 都是内容寻址且不可更改的，保证了可审计性。
+*   **从冗余到 Token 高效:** 结构化图表作为一种压缩的“AI 原生语言”发挥作用。
+
+---
 
 [English](README.md) | [日本語](README.ja.md) | [中文](README.zh.md)
 
