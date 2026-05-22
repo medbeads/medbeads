@@ -1,12 +1,15 @@
 package store
 
 import (
+	"bytes"
+	"compress/gzip"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -72,8 +75,7 @@ func InitDB() error {
 		type TEXT NOT NULL,
 		timestamp TEXT NOT NULL,
 		parents TEXT,
-		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-		content_text TEXT
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
 	CREATE INDEX IF NOT EXISTS idx_type ON beads(type);
 	CREATE INDEX IF NOT EXISTS idx_timestamp ON beads(timestamp);
@@ -112,11 +114,13 @@ func InitDB() error {
 
 	fmt.Println("🗄️  SQLite Metadata Index & FTS initialized.")
 
-	// Migration: Ensure content_text exists (for existing DBs)
-	_, err = DB.Exec("ALTER TABLE beads ADD COLUMN content_text TEXT")
-	if err != nil && !strings.Contains(err.Error(), "duplicate column name") {
-		// Ignore if column already exists
-		fmt.Printf("ℹ️ Column check: %v\n", err)
+	// Migration: drop the legacy content_text column. The bead content is
+	// already stored in the CAS object and the beads_fts index, so this column
+	// was a third redundant copy. Dropping it reclaims space on existing DBs.
+	_, err = DB.Exec("ALTER TABLE beads DROP COLUMN content_text")
+	if err != nil && !strings.Contains(err.Error(), "no such column") {
+		// Ignore if the column was already dropped / never existed.
+		fmt.Printf("ℹ️ content_text drop: %v\n", err)
 	}
 
 	// 4. Clearance Rules Table (Security Clearance feature)
@@ -177,7 +181,14 @@ func SaveToCAS(b types.Bead) (string, error) {
 
 	filePath := filepath.Join(StorageDir, hashString)
 
-	if err := os.WriteFile(filePath, data, 0644); err != nil {
+	// Store the object gzip-compressed. The hash above is computed over the
+	// uncompressed JSON, so the file name (= Bead ID) is unchanged; only the
+	// on-disk bytes shrink. GetFromCAS transparently decompresses on read.
+	compressed, err := gzipBytes(data)
+	if err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(filePath, compressed, 0644); err != nil {
 		return "", err
 	}
 
@@ -235,9 +246,9 @@ func indexMetadata(id string, b types.Bead) error {
 		return err
 	}
 
-	// 1. Main Table
-	query := `INSERT OR REPLACE INTO beads (id, type, timestamp, parents, content_text) VALUES (?, ?, ?, ?, ?)`
-	if _, err := tx.Exec(query, id, b.Type, b.Timestamp, string(parentsJSON), contentStr); err != nil {
+	// 1. Main Table (metadata only; content lives in CAS + beads_fts)
+	query := `INSERT OR REPLACE INTO beads (id, type, timestamp, parents) VALUES (?, ?, ?, ?)`
+	if _, err := tx.Exec(query, id, b.Type, b.Timestamp, string(parentsJSON)); err != nil {
 		tx.Rollback()
 		return err
 	}
@@ -270,9 +281,43 @@ func indexMetadata(id string, b types.Bead) error {
 }
 
 // GetFromCAS retrieves raw Bead data from the Content Addressable Storage by ID.
+// Objects are stored gzip-compressed; legacy uncompressed objects are still
+// readable because the gzip magic bytes are checked before decompressing.
 func GetFromCAS(id string) ([]byte, error) {
 	filePath := filepath.Join(StorageDir, id)
-	return os.ReadFile(filePath)
+	raw, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, err
+	}
+	// gzip magic number: 0x1f 0x8b. Legacy objects are plain JSON ('{').
+	if len(raw) >= 2 && raw[0] == 0x1f && raw[1] == 0x8b {
+		return gunzipBytes(raw)
+	}
+	return raw, nil
+}
+
+// gzipBytes returns data compressed with gzip.
+func gzipBytes(data []byte) ([]byte, error) {
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	if _, err := gw.Write(data); err != nil {
+		gw.Close()
+		return nil, err
+	}
+	if err := gw.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// gunzipBytes returns data decompressed from gzip.
+func gunzipBytes(data []byte) ([]byte, error) {
+	gr, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	defer gr.Close()
+	return io.ReadAll(gr)
 }
 
 // LoadFromCAS loads a Bead from CAS by ID
@@ -305,11 +350,7 @@ func ReindexStorage() error {
 
 		id := file.Name()
 
-		// Check if beads table has content_text AND if edges presumably exist
-		// We use a heuristic: if bead exists and has content_text, we assume it was indexed.
-		// However, for the new edge table, we might want to force check edges.
-		// For simplicity/performance in this fix, we'll check if edges exist for this ID.
-		// Check if edges exist for this bead to avoid re-processing.
+		// Heuristic: if edges exist for this ID, assume it is already indexed.
 		// NOTE: This causes re-indexing for beads with no parents (orphans) because they won't have edges.
 		// This is acceptable overhead for ensuring correctness during this migration.
 		var edgeExists int
@@ -337,6 +378,29 @@ func ReindexStorage() error {
 	}
 
 	fmt.Printf("✅ Re-indexing complete. Processed %d entries.\n", count)
+	if err := Compact(); err != nil {
+		fmt.Printf("⚠️ Compact after reindex failed: %v\n", err)
+	}
+	return nil
+}
+
+// Compact reclaims storage and defragments the metadata DB. It optimizes the
+// FTS5 index, folds the write-ahead log back into the main database file, and
+// runs VACUUM to release space freed by deletes (e.g. the dropped content_text
+// column). Safe to call while the DB is idle; intended for shutdown / post-bulk.
+func Compact() error {
+	if DB == nil {
+		return errors.New("Compact: DB is not initialized")
+	}
+	if _, err := DB.Exec("INSERT INTO beads_fts(beads_fts) VALUES('optimize')"); err != nil {
+		return fmt.Errorf("FTS optimize failed: %w", err)
+	}
+	if _, err := DB.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+		return fmt.Errorf("wal_checkpoint failed: %w", err)
+	}
+	if _, err := DB.Exec("VACUUM"); err != nil {
+		return fmt.Errorf("VACUUM failed: %w", err)
+	}
 	return nil
 }
 
@@ -490,9 +554,11 @@ func searchWithTypeFilter(queryText string, typeFilter string) ([]types.Bead, er
 		if err != nil {
 			// Fallback to LIKE with type filter
 			fmt.Printf("⚠️ FTS failed for '%s', falling back to LIKE: %v\n", term, err)
-			likeSQL := "SELECT id, content_text FROM beads WHERE content_text LIKE ?"
+			likeSQL := "SELECT f.id, f.content FROM beads_fts f"
 			if typeFilter != "" {
-				likeSQL += typeFilter
+				likeSQL += " JOIN beads b ON f.id = b.id WHERE f.content LIKE ?" + typeFilter
+			} else {
+				likeSQL += " WHERE f.content LIKE ?"
 			}
 			rows, err = DB.Query(likeSQL, "%"+term+"%")
 			if err != nil {
@@ -629,7 +695,7 @@ func SearchPatientsByContent(queryText string) ([]types.Bead, error) {
 		if err != nil {
 			// Fallback to LIKE
 			fmt.Printf("⚠️ FTS failed for '%s', falling back to LIKE: %v\n", term, err)
-			rows, err = DB.Query("SELECT id, content_text FROM beads WHERE content_text LIKE ?", "%"+term+"%")
+			rows, err = DB.Query("SELECT id, content FROM beads_fts WHERE content LIKE ?", "%"+term+"%")
 			if err != nil {
 				return nil, err
 			}
