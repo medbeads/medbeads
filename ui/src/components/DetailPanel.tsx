@@ -2,42 +2,14 @@ import { useState, useEffect, type ReactNode } from 'react';
 import { Sparkles, Info, AlertTriangle, Code, ChevronDown, ChevronRight, ShieldX } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { fetchAIInsight, getViewerRoles } from '../lib/api';
-import type { TimelineItem, Patient, BeadUsed, ClearanceRule, ViewerRole } from '../lib/api';
+import type { TimelineItem, Patient, BeadUsed, ClearanceRule } from '../lib/api';
+import { isRestrictedForViewer } from '../lib/clearance';
 
 interface DetailPanelProps {
   selectedItem: TimelineItem | null;
   patient: Patient;
   clearanceRulesMap?: Record<string, ClearanceRule[]>;
 }
-
-// Check if a bead is restricted for the current viewer
-const isRestrictedForViewer = (rules: ClearanceRule[] | undefined, viewerRoles: ViewerRole[]): boolean => {
-  if (!rules || rules.length === 0) return false;
-
-  // Emergency and system roles always have access
-  if (viewerRoles.includes('emergency') || viewerRoles.includes('system')) {
-    return false;
-  }
-
-  const now = new Date();
-
-  for (const rule of rules) {
-    // Check expiration
-    if (rule.expires_at) {
-      const expiresAt = new Date(rule.expires_at);
-      if (now > expiresAt) continue;
-    }
-
-    // Check if any viewer role is denied
-    for (const viewerRole of viewerRoles) {
-      if (rule.denied_roles.includes(viewerRole)) {
-        return true;
-      }
-    }
-  }
-
-  return false;
-};
 
 export function DetailPanel({ selectedItem, clearanceRulesMap = {} }: DetailPanelProps) {
   const [insight, setInsight] = useState<string | null>(null);
@@ -102,6 +74,8 @@ export function DetailPanel({ selectedItem, clearanceRulesMap = {} }: DetailPane
   if (isRestricted) {
     const deniedRoles = rules?.flatMap(r => r.denied_roles) || [];
     const uniqueDeniedRoles = [...new Set(deniedRoles)];
+    const allowedRoles = rules?.flatMap(r => r.allowed_roles || []) || [];
+    const uniqueAllowedRoles = [...new Set(allowedRoles)];
 
     return (
       <div className="flex flex-col items-center justify-center h-full p-12 text-center">
@@ -113,9 +87,16 @@ export function DetailPanel({ selectedItem, clearanceRulesMap = {} }: DetailPane
           Your current role ({viewerRoles.join(', ')}) does not have permission to view this information.
         </p>
         <div className="bg-red-50 border border-red-200 rounded-lg p-4 max-w-md">
-          <p className="text-sm text-red-800">
-            <strong>Restricted for:</strong> {uniqueDeniedRoles.join(', ')}
-          </p>
+          {uniqueDeniedRoles.length > 0 && (
+            <p className="text-sm text-red-800">
+              <strong>Restricted for:</strong> {uniqueDeniedRoles.join(', ')}
+            </p>
+          )}
+          {uniqueAllowedRoles.length > 0 && (
+            <p className="text-sm text-red-800">
+              <strong>Viewable only by:</strong> {uniqueAllowedRoles.join(', ')}
+            </p>
+          )}
           {rules?.[0]?.reason && (
             <p className="text-sm text-red-700 mt-2">
               <strong>Reason:</strong> {rules[0].reason}

@@ -12,7 +12,9 @@ sample_data/
 │   ├── patient_b_cancer_suspicion.json
 │   ├── patient_c_psychiatry.json
 │   ├── patient_d_general.json
-│   └── patient_e_complex.json
+│   ├── patient_e_complex.json
+│   ├── patient_f_lifraumeni.json
+│   └── patient_g_brca.json
 ├── setup_clearance_rules.py  # Script to set up security clearance rules
 └── README.md
 ```
@@ -49,6 +51,21 @@ sample_data/
   - Drug screen: Hide from **all except primary care**
   - Social work notes: **Primary care only**
 - **Use Case**: Complex case with legal/employment implications
+
+### Patient F: Sato Hana (30s Female) - Medical Genetics (Li-Fraumeni)
+- **Scenario**: Germline testing for a hereditary cancer predisposition
+  - Family history of multiple early-onset cancers
+  - TP53 germline pathogenic variant → Li-Fraumeni syndrome
+- **Clearance**: Whitelist — genetic findings viewable **only by `dept:genetics`**
+- **Use Case**: Hereditary findings affect blood relatives; access is confined to
+  the clinical genetics department (demonstrates the `allowed_roles` whitelist)
+
+### Patient G: Kobayashi Aoi (40s Female) - Medical Genetics (BRCA1)
+- **Scenario**: Germline BRCA1/BRCA2 testing and genetic counseling
+  - Family history of breast and ovarian cancer
+  - BRCA1 germline pathogenic variant → hereditary breast and ovarian cancer syndrome
+- **Clearance**: Whitelist — genetic findings viewable **only by `dept:genetics`**
+- **Use Case**: Department-scoped access to highly sensitive germline results
 
 ## Usage
 
@@ -95,3 +112,16 @@ curl -H "X-Viewer-Roles: emergency" http://localhost:8080/beads/context?id=PATIE
 | `researcher` | Research access |
 | `emergency` | Emergency override (bypasses all) |
 | `system` | System/AI processes (full access) |
+
+### Department-scoped roles
+
+In addition to the functional roles above, a viewer may hold a department role
+of the form `dept:<name>` (e.g. `dept:genetics`, `dept:psychiatry`). A viewer
+can present both at once, e.g. `X-Viewer-Roles: specialist,dept:genetics`.
+Clearance rules support a **whitelist** (`allowed_roles`): when set, only the
+listed roles may access the bead. Patients F and G use
+`allowed_roles: ["dept:genetics"]` so their germline findings are visible only
+to the clinical genetics department.
+
+Recognized departments: `psychiatry`, `obstetrics_gynecology`, `genetics`,
+`oncology`, `cardiology`, `radiology`, `general_medicine`.

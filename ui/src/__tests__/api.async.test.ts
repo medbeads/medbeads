@@ -96,6 +96,17 @@ describe('clearance API', () => {
     expect(body).toEqual({ bead_id: 'bead-1', denied_roles: ['insurance'] });
   });
 
+  it('createClearanceRule forwards allowed_roles (whitelist) and dept roles', async () => {
+    const post = vi.spyOn(api, 'post').mockResolvedValue({ data: { id: 'r2' } });
+    await createClearanceRule({
+      bead_id: 'bead-2',
+      denied_roles: [],
+      allowed_roles: ['dept:genetics'],
+    });
+    const [, body] = post.mock.calls[0];
+    expect(body).toEqual({ bead_id: 'bead-2', denied_roles: [], allowed_roles: ['dept:genetics'] });
+  });
+
   it('checkAccess returns the has_access boolean', async () => {
     vi.spyOn(api, 'get').mockResolvedValue({ data: { has_access: false } });
     expect(await checkAccess('bead-1')).toBe(false);

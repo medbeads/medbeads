@@ -1,0 +1,99 @@
+{
+  "resourceType": "Bundle",
+  "type": "transaction",
+  "entry": [
+    {
+      "fullUrl": "urn:uuid:patient-g-001",
+      "resource": {
+        "resourceType": "Patient",
+        "id": "patient-g-001",
+        "name": [{ "given": ["Aoi"], "family": "Kobayashi", "text": "Kobayashi Aoi" }],
+        "gender": "female",
+        "birthDate": "1985-07-22"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:encounter-g-001",
+      "resource": {
+        "resourceType": "Encounter",
+        "id": "encounter-g-001",
+        "status": "finished",
+        "class": { "code": "AMB", "display": "ambulatory" },
+        "subject": { "reference": "urn:uuid:patient-g-001" },
+        "period": { "start": "2026-02-12T13:00:00Z", "end": "2026-02-12T14:15:00Z" },
+        "type": [{ "coding": [{ "display": "Medical genetics consultation" }], "text": "Medical genetics consultation - genetic counseling" }],
+        "serviceProvider": { "display": "Department of Clinical Genetics" }
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:observation-g-001",
+      "resource": {
+        "resourceType": "Observation",
+        "id": "observation-g-001",
+        "status": "final",
+        "code": {
+          "coding": [{ "system": "http://loinc.org", "code": "10157-6", "display": "Family history of cancer" }],
+          "text": "Family history assessment"
+        },
+        "subject": { "reference": "urn:uuid:patient-g-001" },
+        "encounter": { "reference": "urn:uuid:encounter-g-001" },
+        "effectiveDateTime": "2026-02-12T13:10:00Z",
+        "valueString": "Mother and maternal aunt with breast cancer (ages 44 and 49); maternal grandmother with ovarian cancer. Pedigree suggestive of hereditary breast and ovarian cancer syndrome.",
+        "note": [{ "text": "Referred for BRCA1/BRCA2 germline testing and genetic counseling." }]
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:observation-g-002",
+      "resource": {
+        "resourceType": "Observation",
+        "id": "observation-g-002",
+        "status": "final",
+        "code": {
+          "coding": [{ "system": "http://loinc.org", "code": "21636-6", "display": "BRCA1 gene mutation analysis" }],
+          "text": "BRCA1 germline genetic test"
+        },
+        "subject": { "reference": "urn:uuid:patient-g-001" },
+        "encounter": { "reference": "urn:uuid:encounter-g-001" },
+        "effectiveDateTime": "2026-02-12T13:50:00Z",
+        "valueString": "Germline pathogenic variant detected: BRCA1 c.68_69delAG (p.Glu23ValfsTer17), heterozygous.",
+        "interpretation": [{ "coding": [{ "code": "A", "display": "Abnormal" }] }],
+        "note": [{ "text": "Pathogenic BRCA1 germline variant - confirms hereditary breast and ovarian cancer syndrome." }],
+        "_clearance_note": "GENETIC: Germline pathogenic variant. Restrict to the medical genetics department."
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:condition-g-001",
+      "resource": {
+        "resourceType": "Condition",
+        "id": "condition-g-001",
+        "clinicalStatus": { "coding": [{ "code": "active", "display": "Active" }] },
+        "verificationStatus": { "coding": [{ "code": "confirmed", "display": "Confirmed" }] },
+        "code": {
+          "coding": [{ "system": "http://snomed.info/sct", "code": "412734009", "display": "Hereditary breast and ovarian cancer syndrome" }],
+          "text": "Hereditary breast and ovarian cancer syndrome (BRCA1)"
+        },
+        "subject": { "reference": "urn:uuid:patient-g-001" },
+        "encounter": { "reference": "urn:uuid:encounter-g-001" },
+        "recordedDate": "2026-02-12",
+        "_clearance_note": "GENETIC: Hereditary syndrome affecting blood relatives. Restrict to the medical genetics department."
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:diagnosticreport-g-001",
+      "resource": {
+        "resourceType": "DiagnosticReport",
+        "id": "diagnosticreport-g-001",
+        "status": "final",
+        "code": {
+          "coding": [{ "display": "BRCA1/BRCA2 gene sequencing" }],
+          "text": "BRCA1/BRCA2 gene sequencing (germline)"
+        },
+        "subject": { "reference": "urn:uuid:patient-g-001" },
+        "encounter": { "reference": "urn:uuid:encounter-g-001" },
+        "effectiveDateTime": "2026-02-12T14:00:00Z",
+        "conclusion": "Germline pathogenic variant in BRCA1 (c.68_69delAG) identified. Result confirms hereditary breast and ovarian cancer syndrome. Risk-reducing surveillance and cascade testing of at-risk relatives recommended.",
+        "_clearance_note": "GENETIC: Restrict to the medical genetics department."
+      }
+    }
+  ]
+}

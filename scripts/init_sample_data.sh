@@ -24,7 +24,7 @@ PATIENT_COUNT=$(curl -s http://localhost:8080/patients | python3 -c "import sys,
 echo "  Current patient count: $PATIENT_COUNT"
 
 # Ingest sample data if needed
-if [ "$PATIENT_COUNT" -lt "5" ]; then
+if [ "$PATIENT_COUNT" -lt "7" ]; then
     echo "[2/3] Ingesting sample FHIR data..."
 
     if [ -d "sample_data/fhir" ]; then

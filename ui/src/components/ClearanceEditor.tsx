@@ -5,6 +5,7 @@ import {
   createClearanceRule,
   deleteClearanceRule,
   VIEWER_ROLES,
+  DEPARTMENTS,
   type ClearanceRule,
   type ViewerRole,
 } from '../lib/api';
@@ -14,11 +15,17 @@ interface ClearanceEditorProps {
   beadType: string;
 }
 
+// Functional roles that can be restricted (emergency/system always bypass).
+const restrictableRoles = VIEWER_ROLES.filter(
+  r => r.value !== 'emergency' && r.value !== 'system'
+);
+
 export function ClearanceEditor({ beadId, beadType }: ClearanceEditorProps) {
   const [rules, setRules] = useState<ClearanceRule[]>([]);
   const [loading, setLoading] = useState(true);
   const [isAdding, setIsAdding] = useState(false);
   const [selectedRoles, setSelectedRoles] = useState<ViewerRole[]>([]);
+  const [selectedAllowedRoles, setSelectedAllowedRoles] = useState<ViewerRole[]>([]);
   const [reason, setReason] = useState('');
   const [expiresAt, setExpiresAt] = useState('');
   const [saving, setSaving] = useState(false);
@@ -39,21 +46,27 @@ export function ClearanceEditor({ beadId, beadType }: ClearanceEditorProps) {
     }
   };
 
+  const resetForm = () => {
+    setSelectedRoles([]);
+    setSelectedAllowedRoles([]);
+    setReason('');
+    setExpiresAt('');
+  };
+
   const handleAddRule = async () => {
-    if (selectedRoles.length === 0) return;
+    if (selectedRoles.length === 0 && selectedAllowedRoles.length === 0) return;
 
     try {
       setSaving(true);
       const newRule = await createClearanceRule({
         bead_id: beadId,
         denied_roles: selectedRoles,
+        allowed_roles: selectedAllowedRoles.length > 0 ? selectedAllowedRoles : undefined,
         reason: reason || undefined,
         expires_at: expiresAt || null,
       });
       setRules([...rules, newRule]);
-      setSelectedRoles([]);
-      setReason('');
-      setExpiresAt('');
+      resetForm();
       setIsAdding(false);
     } catch (error) {
       console.error('Failed to create clearance rule:', error);
@@ -71,22 +84,45 @@ export function ClearanceEditor({ beadId, beadType }: ClearanceEditorProps) {
     }
   };
 
-  const toggleRole = (role: ViewerRole) => {
-    if (selectedRoles.includes(role)) {
-      setSelectedRoles(selectedRoles.filter(r => r !== role));
-    } else {
-      setSelectedRoles([...selectedRoles, role]);
-    }
+  const toggle = (
+    role: ViewerRole,
+    list: ViewerRole[],
+    setList: (r: ViewerRole[]) => void,
+  ) => {
+    setList(list.includes(role) ? list.filter(r => r !== role) : [...list, role]);
   };
 
   const getRoleLabel = (role: ViewerRole) => {
-    const found = VIEWER_ROLES.find(r => r.value === role);
+    const found = VIEWER_ROLES.find(r => r.value === role)
+      || DEPARTMENTS.find(d => d.value === role);
     return found ? found.labelJa : role;
   };
 
-  // Don't show clearance for emergency/system bypassed items
-  const restrictableRoles = VIEWER_ROLES.filter(
-    r => r.value !== 'emergency' && r.value !== 'system'
+  // A picker for roles + departments, used for both the deny and allow lists.
+  const RolePicker = ({
+    selected,
+    setSelected,
+    activeClass,
+  }: {
+    selected: ViewerRole[];
+    setSelected: (r: ViewerRole[]) => void;
+    activeClass: string;
+  }) => (
+    <div className="flex flex-wrap gap-2">
+      {[...restrictableRoles, ...DEPARTMENTS].map(role => (
+        <button
+          key={role.value}
+          onClick={() => toggle(role.value, selected, setSelected)}
+          className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+            selected.includes(role.value)
+              ? activeClass
+              : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+          }`}
+        >
+          {role.labelJa}
+        </button>
+      ))}
+    </div>
   );
 
   return (
@@ -122,7 +158,15 @@ export function ClearanceEditor({ beadId, beadType }: ClearanceEditorProps) {
                           key={role}
                           className="px-2 py-0.5 bg-red-100 text-red-700 rounded text-xs font-medium"
                         >
-                          {getRoleLabel(role)}
+                          🚫 {getRoleLabel(role)}
+                        </span>
+                      ))}
+                      {(rule.allowed_roles || []).map(role => (
+                        <span
+                          key={role}
+                          className="px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded text-xs font-medium"
+                        >
+                          ✓ {getRoleLabel(role)} のみ
                         </span>
                       ))}
                       {rule.expires_at && (
@@ -165,23 +209,24 @@ export function ClearanceEditor({ beadId, beadType }: ClearanceEditorProps) {
 
               <div className="mb-4">
                 <label className="text-xs font-medium text-slate-600 mb-2 block">
-                  Block access for:
+                  Block access for (blacklist):
                 </label>
-                <div className="flex flex-wrap gap-2">
-                  {restrictableRoles.map(role => (
-                    <button
-                      key={role.value}
-                      onClick={() => toggleRole(role.value)}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                        selectedRoles.includes(role.value)
-                          ? 'bg-red-500 text-white'
-                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                      }`}
-                    >
-                      {role.labelJa}
-                    </button>
-                  ))}
-                </div>
+                <RolePicker
+                  selected={selectedRoles}
+                  setSelected={setSelectedRoles}
+                  activeClass="bg-red-500 text-white"
+                />
+              </div>
+
+              <div className="mb-4">
+                <label className="text-xs font-medium text-slate-600 mb-2 block">
+                  Allow access ONLY for (whitelist, optional):
+                </label>
+                <RolePicker
+                  selected={selectedAllowedRoles}
+                  setSelected={setSelectedAllowedRoles}
+                  activeClass="bg-emerald-500 text-white"
+                />
               </div>
 
               <div className="mb-4">
@@ -212,7 +257,7 @@ export function ClearanceEditor({ beadId, beadType }: ClearanceEditorProps) {
               <div className="flex gap-2">
                 <button
                   onClick={handleAddRule}
-                  disabled={selectedRoles.length === 0 || saving}
+                  disabled={(selectedRoles.length === 0 && selectedAllowedRoles.length === 0) || saving}
                   className="flex-1 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                 >
                   {saving ? 'Saving...' : 'Save Restriction'}
@@ -220,9 +265,7 @@ export function ClearanceEditor({ beadId, beadType }: ClearanceEditorProps) {
                 <button
                   onClick={() => {
                     setIsAdding(false);
-                    setSelectedRoles([]);
-                    setReason('');
-                    setExpiresAt('');
+                    resetForm();
                   }}
                   className="px-4 py-2 bg-slate-100 text-slate-600 text-sm font-medium rounded-lg hover:bg-slate-200 transition-colors"
                 >

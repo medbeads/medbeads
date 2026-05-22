@@ -35,25 +35,59 @@ var AllRoles = []string{
 	RoleSystem,
 }
 
-// IsValidRole reports whether role is one of the recognized clearance roles.
+// DeptRolePrefix is the namespace prefix for department-scoped roles, e.g.
+// "dept:psychiatry". Department roles are an axis orthogonal to the functional
+// roles above: a viewer may hold both (e.g. "specialist" and "dept:psychiatry").
+const DeptRolePrefix = "dept:"
+
+// Department describes a clinical department that can scope a clearance role.
+type Department struct {
+	Value   string `json:"value"`    // identifier used in the dept:<value> role string
+	LabelJa string `json:"label_ja"` // Japanese display label
+}
+
+// Departments is the list of recognized clinical departments. A department
+// role string is DeptRolePrefix + Value (e.g. "dept:genetics").
+var Departments = []Department{
+	{Value: "psychiatry", LabelJa: "精神科"},
+	{Value: "obstetrics_gynecology", LabelJa: "産婦人科"},
+	{Value: "genetics", LabelJa: "遺伝診療科"},
+	{Value: "oncology", LabelJa: "腫瘍内科"},
+	{Value: "cardiology", LabelJa: "循環器内科"},
+	{Value: "radiology", LabelJa: "放射線科"},
+	{Value: "general_medicine", LabelJa: "総合診療科"},
+}
+
+// IsValidRole reports whether role is a recognized clearance role: either one
+// of the functional roles in AllRoles, or a department-scoped role of the form
+// "dept:<known department>".
 func IsValidRole(role string) bool {
 	for _, r := range AllRoles {
 		if r == role {
 			return true
 		}
 	}
+	for _, d := range Departments {
+		if DeptRolePrefix+d.Value == role {
+			return true
+		}
+	}
 	return false
 }
 
-// ClearanceRule defines access restrictions for a Bead (Blacklist model)
+// ClearanceRule defines access restrictions for a Bead. It supports a hybrid
+// model: DeniedRoles is a blacklist (those roles are blocked), and the optional
+// AllowedRoles is a whitelist (when non-empty, ONLY those roles may access the
+// bead). The roles `system`/`emergency` always bypass both.
 type ClearanceRule struct {
-	ID          string   `json:"id"`
-	BeadID      string   `json:"bead_id"`
-	DeniedRoles []string `json:"denied_roles"` // Roles that are blocked from accessing this bead
-	CreatedBy   string   `json:"created_by"`
-	CreatedAt   string   `json:"created_at"`
-	Reason      string   `json:"reason,omitempty"`
-	ExpiresAt   *string  `json:"expires_at,omitempty"` // nil = permanent
+	ID           string   `json:"id"`
+	BeadID       string   `json:"bead_id"`
+	DeniedRoles  []string `json:"denied_roles"`            // Roles blocked from this bead
+	AllowedRoles []string `json:"allowed_roles,omitempty"` // If non-empty, ONLY these roles may access
+	CreatedBy    string   `json:"created_by"`
+	CreatedAt    string   `json:"created_at"`
+	Reason       string   `json:"reason,omitempty"`
+	ExpiresAt    *string  `json:"expires_at,omitempty"` // nil = permanent
 }
 
 // ViewerContext represents the current viewer's access context

@@ -20,4 +20,23 @@ describe('ViewerRoleSelector', () => {
 
     expect(onRolesChange).toHaveBeenCalledWith(['insurance']);
   });
+
+  it('adds a department role alongside the functional role', async () => {
+    const onRolesChange = vi.fn();
+    render(<ViewerRoleSelector selectedRoles={['specialist']} onRolesChange={onRolesChange} />);
+
+    await userEvent.selectOptions(screen.getByRole('combobox'), 'dept:psychiatry');
+
+    expect(onRolesChange).toHaveBeenCalledWith(['specialist', 'dept:psychiatry']);
+  });
+
+  it('shows the currently selected department', () => {
+    render(
+      <ViewerRoleSelector
+        selectedRoles={['specialist', 'dept:genetics']}
+        onRolesChange={() => {}}
+      />,
+    );
+    expect(screen.getByRole('combobox')).toHaveValue('dept:genetics');
+  });
 });

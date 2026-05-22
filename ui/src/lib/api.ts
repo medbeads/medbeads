@@ -22,6 +22,9 @@ export const aiApi = axios.create({
 
 // --- Security Clearance Types ---
 
+// Functional roles, plus department-scoped roles of the form `dept:<name>`.
+// Department roles are an axis orthogonal to the functional roles: a viewer
+// may hold both (e.g. 'specialist' and 'dept:psychiatry').
 export type ViewerRole =
   | 'patient'      // 患者本人
   | 'family'       // 家族
@@ -31,7 +34,8 @@ export type ViewerRole =
   | 'insurance'    // 保険会社
   | 'researcher'   // 研究者
   | 'emergency'    // 緊急時オーバーライド
-  | 'system';      // システム/AI
+  | 'system'       // システム/AI
+  | `dept:${string}`; // 診療科スコープロール
 
 export const VIEWER_ROLES: { value: ViewerRole; label: string; labelJa: string }[] = [
   { value: 'patient', label: 'Patient', labelJa: '患者本人' },
@@ -45,10 +49,22 @@ export const VIEWER_ROLES: { value: ViewerRole; label: string; labelJa: string }
   { value: 'system', label: 'System', labelJa: 'システム' },
 ];
 
+// DEPARTMENTS must mirror types.Departments in the Go core (core/types/bead.go).
+export const DEPARTMENTS: { value: ViewerRole; label: string; labelJa: string }[] = [
+  { value: 'dept:psychiatry', label: 'Psychiatry', labelJa: '精神科' },
+  { value: 'dept:obstetrics_gynecology', label: 'Obstetrics & Gynecology', labelJa: '産婦人科' },
+  { value: 'dept:genetics', label: 'Medical Genetics', labelJa: '遺伝診療科' },
+  { value: 'dept:oncology', label: 'Oncology', labelJa: '腫瘍内科' },
+  { value: 'dept:cardiology', label: 'Cardiology', labelJa: '循環器内科' },
+  { value: 'dept:radiology', label: 'Radiology', labelJa: '放射線科' },
+  { value: 'dept:general_medicine', label: 'General Medicine', labelJa: '総合診療科' },
+];
+
 export interface ClearanceRule {
   id: string;
   bead_id: string;
   denied_roles: ViewerRole[];
+  allowed_roles?: ViewerRole[] | null; // If non-empty, ONLY these roles may access
   created_by: string;
   created_at: string;
   reason?: string;
@@ -417,6 +433,7 @@ export const fetchClearanceRules = async (beadId: string): Promise<ClearanceRule
 export interface CreateClearanceRequest {
   bead_id: string;
   denied_roles: ViewerRole[];
+  allowed_roles?: ViewerRole[];
   reason?: string;
   expires_at?: string | null;
 }
