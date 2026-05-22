@@ -6,6 +6,15 @@ services:
     volumes:
       # Data volume for persistence
       - medbeads_data:/app/medbeads_data
+    environment:
+      # Shared secret that lets internal services assert the privileged
+      # `system` role. Define MEDBEADS_SERVICE_TOKEN in a .env file next to
+      # this compose file. When empty, the `system` role cannot be asserted.
+      - MEDBEADS_SERVICE_TOKEN=${MEDBEADS_SERVICE_TOKEN:-}
+      # CORS allowlist (comma-separated); "*" restores allow-all.
+      - MEDBEADS_CORS_ORIGINS=${MEDBEADS_CORS_ORIGINS:-http://localhost:5173,http://localhost:5174,http://localhost:3000}
+      # Per-IP request limit per minute.
+      - MEDBEADS_RATE_LIMIT=${MEDBEADS_RATE_LIMIT:-600}
     restart: unless-stopped
 
   # One-time initialization service to ingest sample data
@@ -18,6 +27,8 @@ services:
       - ./scripts:/app/scripts
     environment:
       - CORE_URL=http://core:8080
+      # The setup script needs full access to locate beads it should restrict.
+      - MEDBEADS_SERVICE_TOKEN=${MEDBEADS_SERVICE_TOKEN:-}
     command: >
       sh -c "
         echo 'Waiting for core server...' &&
@@ -49,6 +60,7 @@ services:
       - "8000:8000"
     environment:
       - CORE_URL=http://core:8080
+      - MEDBEADS_CORS_ORIGINS=${MEDBEADS_CORS_ORIGINS:-http://localhost:5173,http://localhost:5174,http://localhost:3000}
       # User can provide GEMINI_API_KEY in .env or environment variables
     # env_file:
     #   - .env

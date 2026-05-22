@@ -10,7 +10,7 @@ export function ViewerRoleSelector({ selectedRoles, onRolesChange }: ViewerRoleS
     onRolesChange([role]);
   };
 
-  const currentRole = selectedRoles[0] || 'system';
+  const currentRole = selectedRoles[0] || 'primary_care';
 
   return (
     <div className="flex items-center gap-2 text-sm">

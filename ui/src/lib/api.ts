@@ -61,8 +61,10 @@ export interface ViewerContext {
   patient_id?: string;
 }
 
-// Current viewer context (global state for simplicity)
-let currentViewerRoles: ViewerRole[] = ['system'];
+// Current viewer context (global state for simplicity).
+// Defaults to a normal clinical role: the browser cannot assert the
+// privileged `system` role (the Core server strips it without a service token).
+let currentViewerRoles: ViewerRole[] = ['primary_care'];
 
 export const setViewerRoles = (roles: ViewerRole[]) => {
   currentViewerRoles = roles;
@@ -107,7 +109,7 @@ export interface TimelineItem {
 
 // --- API Functions ---
 
-const mapBeadToPatient = (bead: Bead): Patient => ({
+export const mapBeadToPatient = (bead: Bead): Patient => ({
   id: bead.id,
   patient_identifier: bead.id.substring(0, 8),
   family_name: (bead.content?.name || 'Unknown').split(' ')[0],
@@ -162,7 +164,7 @@ export const fetchPatientTimeline = async (patientId: string): Promise<TimelineI
   return items.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 };
 
-function mapBeadToTimelineItem(bead: Bead): TimelineItem | null {
+export function mapBeadToTimelineItem(bead: Bead): TimelineItem | null {
   const content = bead.content || {};
   const type = bead.type;
 
