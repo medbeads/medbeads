@@ -10,7 +10,8 @@ import ReactFlow, {
   type Edge
 } from 'reactflow';
 import 'reactflow/dist/style.css';
-import { type TimelineItem, type ClearanceRule, type ViewerRole, getViewerRoles } from '../lib/api';
+import { type TimelineItem, type ClearanceRule, getViewerRoles } from '../lib/api';
+import { isRestrictedForViewer } from '../lib/clearance';
 
 interface GraphViewProps {
   items: TimelineItem[];
@@ -27,35 +28,6 @@ const yGap = 120;
 // Define nodeTypes and edgeTypes outside component to avoid React Flow warning
 const nodeTypes = {};
 const edgeTypes = {};
-
-// Check if a bead is restricted for the current viewer
-const isRestrictedForViewer = (rules: ClearanceRule[] | undefined, viewerRoles: ViewerRole[]): boolean => {
-  if (!rules || rules.length === 0) return false;
-
-  // Emergency and system roles always have access
-  if (viewerRoles.includes('emergency') || viewerRoles.includes('system')) {
-    return false;
-  }
-
-  const now = new Date();
-
-  for (const rule of rules) {
-    // Check expiration
-    if (rule.expires_at) {
-      const expiresAt = new Date(rule.expires_at);
-      if (now > expiresAt) continue;
-    }
-
-    // Check if any viewer role is denied
-    for (const viewerRole of viewerRoles) {
-      if (rule.denied_roles.includes(viewerRole)) {
-        return true;
-      }
-    }
-  }
-
-  return false;
-};
 
 // Custom layout: Group by Date (Y axis = Time, X axis = Items in same date)
 const getLayoutedElements = (nodes: Node[], edges: Edge[], items: TimelineItem[], restrictedNodeIds: Set<string>) => {
