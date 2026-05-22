@@ -23,9 +23,18 @@ export const isRestrictedForViewer = (
       if (now > expiresAt) continue;
     }
 
-    // Restricted if any of the viewer's roles is denied.
+    // Blacklist: restricted if any of the viewer's roles is denied.
     for (const viewerRole of viewerRoles) {
       if (rule.denied_roles.includes(viewerRole)) {
+        return true;
+      }
+    }
+
+    // Whitelist: when allowed_roles is set, the viewer must hold at least one
+    // of those roles, otherwise the bead is restricted.
+    if (rule.allowed_roles && rule.allowed_roles.length > 0) {
+      const inAllowList = viewerRoles.some((role) => rule.allowed_roles!.includes(role));
+      if (!inAllowList) {
         return true;
       }
     }

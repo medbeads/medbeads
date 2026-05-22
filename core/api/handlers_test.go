@@ -138,6 +138,34 @@ func TestCreateClearanceHandler_Validation(t *testing.T) {
 			t.Errorf("status = %d, want 201", w.Code)
 		}
 	})
+
+	t.Run("a department role is accepted in denied_roles", func(t *testing.T) {
+		w := postClearance(t, `{"bead_id":"`+bead+`","denied_roles":["dept:cardiology"]}`, "dr-smith")
+		if w.Code != 201 {
+			t.Errorf("status = %d, want 201", w.Code)
+		}
+	})
+
+	t.Run("an allowed_roles-only whitelist rule is accepted", func(t *testing.T) {
+		w := postClearance(t, `{"bead_id":"`+bead+`","allowed_roles":["dept:genetics"]}`, "dr-smith")
+		if w.Code != 201 {
+			t.Errorf("status = %d, want 201", w.Code)
+		}
+	})
+
+	t.Run("an invalid allowed role is rejected", func(t *testing.T) {
+		w := postClearance(t, `{"bead_id":"`+bead+`","allowed_roles":["wizard"]}`, "dr-smith")
+		if w.Code != 400 {
+			t.Errorf("status = %d, want 400", w.Code)
+		}
+	})
+
+	t.Run("a rule with neither denied nor allowed roles is rejected", func(t *testing.T) {
+		w := postClearance(t, `{"bead_id":"`+bead+`"}`, "dr-smith")
+		if w.Code != 400 {
+			t.Errorf("status = %d, want 400", w.Code)
+		}
+	})
 }
 
 // --- H5: handleContext depth validation ---

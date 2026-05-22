@@ -129,6 +129,7 @@ func InitDB() error {
 		id TEXT PRIMARY KEY,
 		bead_id TEXT NOT NULL,
 		denied_roles TEXT NOT NULL,
+		allowed_roles TEXT,
 		created_by TEXT NOT NULL,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		reason TEXT,
@@ -138,6 +139,12 @@ func InitDB() error {
 	`
 	if _, err := DB.Exec(clearanceQuery); err != nil {
 		return fmt.Errorf("failed to create clearance_rules table: %w", err)
+	}
+
+	// Migration: add allowed_roles (whitelist) to clearance_rules for existing DBs.
+	_, err = DB.Exec("ALTER TABLE clearance_rules ADD COLUMN allowed_roles TEXT")
+	if err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+		fmt.Printf("ℹ️ allowed_roles column check: %v\n", err)
 	}
 
 	// 5. Clearance Audit Log Table
@@ -992,9 +999,19 @@ func SaveClearanceRule(rule types.ClearanceRule) error {
 		return fmt.Errorf("failed to marshal denied_roles: %w", err)
 	}
 
-	query := `INSERT OR REPLACE INTO clearance_rules (id, bead_id, denied_roles, created_by, created_at, reason, expires_at)
-	          VALUES (?, ?, ?, ?, ?, ?, ?)`
-	_, err = DB.Exec(query, rule.ID, rule.BeadID, string(deniedRolesJSON), rule.CreatedBy, rule.CreatedAt, rule.Reason, rule.ExpiresAt)
+	// allowed_roles is nullable: an unset whitelist is stored as SQL NULL.
+	var allowedRolesArg interface{}
+	if len(rule.AllowedRoles) > 0 {
+		allowedRolesJSON, err := json.Marshal(rule.AllowedRoles)
+		if err != nil {
+			return fmt.Errorf("failed to marshal allowed_roles: %w", err)
+		}
+		allowedRolesArg = string(allowedRolesJSON)
+	}
+
+	query := `INSERT OR REPLACE INTO clearance_rules (id, bead_id, denied_roles, allowed_roles, created_by, created_at, reason, expires_at)
+	          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+	_, err = DB.Exec(query, rule.ID, rule.BeadID, string(deniedRolesJSON), allowedRolesArg, rule.CreatedBy, rule.CreatedAt, rule.Reason, rule.ExpiresAt)
 	if err != nil {
 		return fmt.Errorf("failed to save clearance rule: %w", err)
 	}
@@ -1003,7 +1020,7 @@ func SaveClearanceRule(rule types.ClearanceRule) error {
 
 // GetClearanceRules retrieves all clearance rules for a bead
 func GetClearanceRules(beadID string) ([]types.ClearanceRule, error) {
-	query := `SELECT id, bead_id, denied_roles, created_by, created_at, reason, expires_at
+	query := `SELECT id, bead_id, denied_roles, allowed_roles, created_by, created_at, reason, expires_at
 	          FROM clearance_rules WHERE bead_id = ?`
 	rows, err := DB.Query(query, beadID)
 	if err != nil {
@@ -1013,30 +1030,41 @@ func GetClearanceRules(beadID string) ([]types.ClearanceRule, error) {
 
 	var rules []types.ClearanceRule
 	for rows.Next() {
-		var rule types.ClearanceRule
-		var deniedRolesStr string
-		var expiresAt sql.NullString
-		var reason sql.NullString
-
-		if err := rows.Scan(&rule.ID, &rule.BeadID, &deniedRolesStr, &rule.CreatedBy, &rule.CreatedAt, &reason, &expiresAt); err != nil {
+		rule, err := scanClearanceRule(rows)
+		if err != nil {
 			continue
 		}
-
-		if err := json.Unmarshal([]byte(deniedRolesStr), &rule.DeniedRoles); err != nil {
-			continue
-		}
-
-		if reason.Valid {
-			rule.Reason = reason.String
-		}
-		if expiresAt.Valid {
-			rule.ExpiresAt = &expiresAt.String
-		}
-
 		rules = append(rules, rule)
 	}
 
 	return rules, nil
+}
+
+// scanClearanceRule scans one clearance_rules row (column order: id, bead_id,
+// denied_roles, allowed_roles, created_by, created_at, reason, expires_at).
+func scanClearanceRule(rows *sql.Rows) (types.ClearanceRule, error) {
+	var rule types.ClearanceRule
+	var deniedRolesStr string
+	var allowedRolesStr sql.NullString
+	var expiresAt sql.NullString
+	var reason sql.NullString
+
+	if err := rows.Scan(&rule.ID, &rule.BeadID, &deniedRolesStr, &allowedRolesStr, &rule.CreatedBy, &rule.CreatedAt, &reason, &expiresAt); err != nil {
+		return rule, err
+	}
+	if err := json.Unmarshal([]byte(deniedRolesStr), &rule.DeniedRoles); err != nil {
+		return rule, err
+	}
+	if allowedRolesStr.Valid && allowedRolesStr.String != "" {
+		_ = json.Unmarshal([]byte(allowedRolesStr.String), &rule.AllowedRoles)
+	}
+	if reason.Valid {
+		rule.Reason = reason.String
+	}
+	if expiresAt.Valid {
+		rule.ExpiresAt = &expiresAt.String
+	}
+	return rule, nil
 }
 
 // GetAllClearanceRulesForBeads retrieves clearance rules for multiple beads efficiently
@@ -1053,7 +1081,7 @@ func GetAllClearanceRulesForBeads(beadIDs []string) (map[string][]types.Clearanc
 		args[i] = id
 	}
 
-	query := fmt.Sprintf(`SELECT id, bead_id, denied_roles, created_by, created_at, reason, expires_at
+	query := fmt.Sprintf(`SELECT id, bead_id, denied_roles, allowed_roles, created_by, created_at, reason, expires_at
 	          FROM clearance_rules WHERE bead_id IN (%s)`, strings.Join(placeholders, ","))
 	rows, err := DB.Query(query, args...)
 	if err != nil {
@@ -1063,26 +1091,10 @@ func GetAllClearanceRulesForBeads(beadIDs []string) (map[string][]types.Clearanc
 
 	result := make(map[string][]types.ClearanceRule)
 	for rows.Next() {
-		var rule types.ClearanceRule
-		var deniedRolesStr string
-		var expiresAt sql.NullString
-		var reason sql.NullString
-
-		if err := rows.Scan(&rule.ID, &rule.BeadID, &deniedRolesStr, &rule.CreatedBy, &rule.CreatedAt, &reason, &expiresAt); err != nil {
+		rule, err := scanClearanceRule(rows)
+		if err != nil {
 			continue
 		}
-
-		if err := json.Unmarshal([]byte(deniedRolesStr), &rule.DeniedRoles); err != nil {
-			continue
-		}
-
-		if reason.Valid {
-			rule.Reason = reason.String
-		}
-		if expiresAt.Valid {
-			rule.ExpiresAt = &expiresAt.String
-		}
-
 		result[rule.BeadID] = append(result[rule.BeadID], rule)
 	}
 
@@ -1164,13 +1176,14 @@ func HasAccessWithRules(rules []types.ClearanceRule, viewerRoles []string) bool 
 		return true
 	}
 
-	// Check each active rule
+	// Check each active rule. Each rule is an independent constraint; the
+	// viewer must satisfy all of them.
 	for _, rule := range rules {
 		if !IsRuleActive(rule, now) {
 			continue
 		}
 
-		// Check if any of viewer's roles are denied
+		// Blacklist: any of the viewer's roles being denied blocks access.
 		for _, viewerRole := range viewerRoles {
 			for _, deniedRole := range rule.DeniedRoles {
 				if viewerRole == deniedRole {
@@ -1178,9 +1191,27 @@ func HasAccessWithRules(rules []types.ClearanceRule, viewerRoles []string) bool 
 				}
 			}
 		}
+
+		// Whitelist: when allowed_roles is set, the viewer must hold at least
+		// one of those roles, otherwise this rule blocks access.
+		if len(rule.AllowedRoles) > 0 && !rolesIntersect(viewerRoles, rule.AllowedRoles) {
+			return false
+		}
 	}
 
 	return true
+}
+
+// rolesIntersect reports whether the two role slices share at least one role.
+func rolesIntersect(a, b []string) bool {
+	for _, x := range a {
+		for _, y := range b {
+			if x == y {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // FilterByAccess masks the content of beads the viewer is not allowed to see.

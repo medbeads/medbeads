@@ -43,3 +43,28 @@ describe('isRestrictedForViewer (C1 clearance regression)', () => {
     expect(isRestrictedForViewer(active, ['insurance'])).toBe(true);
   });
 });
+
+describe('isRestrictedForViewer — department roles and allow-list', () => {
+  it('restricts a department denied via denied_roles', () => {
+    const r = [rule({ denied_roles: ['dept:cardiology'] })];
+    expect(isRestrictedForViewer(r, ['specialist', 'dept:cardiology'])).toBe(true);
+    expect(isRestrictedForViewer(r, ['specialist', 'dept:psychiatry'])).toBe(false);
+  });
+
+  it('allows only the whitelisted role when allowed_roles is set', () => {
+    const r = [rule({ denied_roles: [], allowed_roles: ['dept:genetics'] })];
+    expect(isRestrictedForViewer(r, ['specialist', 'dept:genetics'])).toBe(false);
+    expect(isRestrictedForViewer(r, ['specialist', 'dept:cardiology'])).toBe(true);
+    expect(isRestrictedForViewer(r, ['primary_care'])).toBe(true);
+  });
+
+  it('lets emergency bypass an allow-list rule', () => {
+    const r = [rule({ denied_roles: [], allowed_roles: ['dept:genetics'] })];
+    expect(isRestrictedForViewer(r, ['emergency'])).toBe(false);
+  });
+
+  it('treats an empty allowed_roles as no whitelist', () => {
+    const r = [rule({ denied_roles: ['insurance'], allowed_roles: [] })];
+    expect(isRestrictedForViewer(r, ['primary_care'])).toBe(false);
+  });
+});

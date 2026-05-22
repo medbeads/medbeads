@@ -115,6 +115,24 @@ CLEARANCE_SCENARIOS = [
         "denied_roles": ["family", "insurance", "specialist", "nurse"],
         "reason": "Confidential social work documentation",
         "expires_at": None
+    },
+    # --- Whitelist scenarios: germline genetic findings, viewable ONLY by the
+    # --- medical genetics department (dept:genetics). Demonstrates allowed_roles.
+    {
+        "patient_name": "Sato Hana",
+        "search_terms": ["Li-Fraumeni", "TP53", "hereditary cancer predisposition", "Hereditary cancer multigene panel"],
+        "denied_roles": [],
+        "allowed_roles": ["dept:genetics"],
+        "reason": "Germline genetic findings - viewable only by the medical genetics department",
+        "expires_at": None
+    },
+    {
+        "patient_name": "Kobayashi Aoi",
+        "search_terms": ["BRCA1", "Hereditary breast and ovarian cancer", "BRCA1/BRCA2 gene sequencing"],
+        "denied_roles": [],
+        "allowed_roles": ["dept:genetics"],
+        "reason": "Germline genetic findings - viewable only by the medical genetics department",
+        "expires_at": None
     }
 ]
 
@@ -157,8 +175,13 @@ def find_bead_by_content(beads: list, search_terms: list) -> list:
     return matching_beads
 
 
-def create_clearance_rule(bead_id: str, denied_roles: list, reason: str, expires_at: str = None):
-    """Create a clearance rule for a bead."""
+def create_clearance_rule(bead_id: str, denied_roles: list, reason: str,
+                           expires_at: str = None, allowed_roles: list = None):
+    """Create a clearance rule for a bead.
+
+    denied_roles is the blacklist; allowed_roles (optional) is the whitelist -
+    when set, only those roles may access the bead.
+    """
     import uuid
 
     rule = {
@@ -169,6 +192,8 @@ def create_clearance_rule(bead_id: str, denied_roles: list, reason: str, expires
         "created_at": datetime.now().isoformat(),
         "reason": reason,
     }
+    if allowed_roles:
+        rule["allowed_roles"] = allowed_roles
     if expires_at:
         rule["expires_at"] = expires_at
 
@@ -270,14 +295,19 @@ def main():
                 bead_id=bead_id,
                 denied_roles=scenario["denied_roles"],
                 reason=scenario["reason"],
-                expires_at=scenario.get("expires_at")
+                expires_at=scenario.get("expires_at"),
+                allowed_roles=scenario.get("allowed_roles")
             )
 
             if success:
                 rules_created += 1
-                denied_str = ", ".join(scenario["denied_roles"])
+                parts = []
+                if scenario["denied_roles"]:
+                    parts.append(f"Denied [{', '.join(scenario['denied_roles'])}]")
+                if scenario.get("allowed_roles"):
+                    parts.append(f"Allowed only [{', '.join(scenario['allowed_roles'])}]")
                 expires_str = f" (expires: {scenario['expires_at'][:10]})" if scenario.get("expires_at") else ""
-                print(f"  ✓ {bead_type}: Denied [{denied_str}]{expires_str}")
+                print(f"  ✓ {bead_type}: {' '.join(parts)}{expires_str}")
             else:
                 print(f"  ✗ Failed to create rule for {bead_type}")
 

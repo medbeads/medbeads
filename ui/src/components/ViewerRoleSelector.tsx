@@ -1,19 +1,23 @@
-import { VIEWER_ROLES, type ViewerRole } from '../lib/api';
+import { VIEWER_ROLES, DEPARTMENTS, type ViewerRole } from '../lib/api';
 
 interface ViewerRoleSelectorProps {
   selectedRoles: ViewerRole[];
   onRolesChange: (roles: ViewerRole[]) => void;
 }
 
+const isDeptRole = (role: ViewerRole) => role.startsWith('dept:');
+
 export function ViewerRoleSelector({ selectedRoles, onRolesChange }: ViewerRoleSelectorProps) {
-  const selectSingleRole = (role: ViewerRole) => {
-    onRolesChange([role]);
+  // A viewer holds one functional role plus an optional department role.
+  const currentRole: ViewerRole = selectedRoles.find(r => !isDeptRole(r)) || 'primary_care';
+  const currentDept: ViewerRole | '' = selectedRoles.find(isDeptRole) || '';
+
+  const emit = (role: ViewerRole, dept: ViewerRole | '') => {
+    onRolesChange(dept ? [role, dept] : [role]);
   };
 
-  const currentRole = selectedRoles[0] || 'primary_care';
-
   return (
-    <div className="flex items-center gap-2 text-sm">
+    <div className="flex items-center gap-2 text-sm flex-wrap">
       <span className="text-slate-500 font-medium mr-1">Security Clearance:</span>
       <div className="flex items-center gap-1 flex-wrap">
         {VIEWER_ROLES.map(role => {
@@ -39,7 +43,7 @@ export function ViewerRoleSelector({ selectedRoles, onRolesChange }: ViewerRoleS
                 name="viewerRole"
                 value={role.value}
                 checked={isSelected}
-                onChange={() => selectSingleRole(role.value)}
+                onChange={() => emit(role.value, currentDept)}
                 className="sr-only"
               />
               <span
@@ -58,6 +62,19 @@ export function ViewerRoleSelector({ selectedRoles, onRolesChange }: ViewerRoleS
           );
         })}
       </div>
+      <label className="inline-flex items-center gap-1.5 ml-1">
+        <span className="text-slate-500 font-medium">Dept:</span>
+        <select
+          value={currentDept}
+          onChange={e => emit(currentRole, e.target.value as ViewerRole | '')}
+          className="px-2 py-1 rounded-md border border-slate-200 text-xs font-medium text-slate-700 bg-white"
+        >
+          <option value="">— None —</option>
+          {DEPARTMENTS.map(dept => (
+            <option key={dept.value} value={dept.value}>{dept.label}</option>
+          ))}
+        </select>
+      </label>
     </div>
   );
 }

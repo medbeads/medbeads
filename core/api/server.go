@@ -287,10 +287,11 @@ func getClearanceHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 type CreateClearanceRequest struct {
-	BeadID      string   `json:"bead_id"`
-	DeniedRoles []string `json:"denied_roles"`
-	Reason      string   `json:"reason,omitempty"`
-	ExpiresAt   *string  `json:"expires_at,omitempty"`
+	BeadID       string   `json:"bead_id"`
+	DeniedRoles  []string `json:"denied_roles"`
+	AllowedRoles []string `json:"allowed_roles,omitempty"`
+	Reason       string   `json:"reason,omitempty"`
+	ExpiresAt    *string  `json:"expires_at,omitempty"`
 }
 
 func createClearanceHandler(w http.ResponseWriter, r *http.Request) {
@@ -300,8 +301,9 @@ func createClearanceHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.BeadID == "" || len(req.DeniedRoles) == 0 {
-		http.Error(w, "bead_id and denied_roles are required", http.StatusBadRequest)
+	// A rule must restrict something: either a blacklist or a whitelist.
+	if req.BeadID == "" || (len(req.DeniedRoles) == 0 && len(req.AllowedRoles) == 0) {
+		http.Error(w, "bead_id and at least one of denied_roles / allowed_roles are required", http.StatusBadRequest)
 		return
 	}
 
@@ -318,8 +320,8 @@ func createClearanceHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate denied roles: each must be a known, non-bypass role. Denying
-	// `system`/`emergency` is meaningless since they bypass clearance.
+	// Validate denied roles: each must be a known role (functional or dept:*).
+	// Denying `system`/`emergency` is meaningless since they bypass clearance.
 	for _, role := range req.DeniedRoles {
 		if !types.IsValidRole(role) {
 			http.Error(w, fmt.Sprintf("invalid role: %q", role), http.StatusBadRequest)
@@ -331,19 +333,28 @@ func createClearanceHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Validate allowed roles (whitelist): each must be a known role.
+	for _, role := range req.AllowedRoles {
+		if !types.IsValidRole(role) {
+			http.Error(w, fmt.Sprintf("invalid role: %q", role), http.StatusBadRequest)
+			return
+		}
+	}
+
 	// Generate unique ID using sha256
 	idData := fmt.Sprintf("%s-%s-%d", req.BeadID, userID, time.Now().UnixNano())
 	hash := sha256.Sum256([]byte(idData))
 	ruleID := hex.EncodeToString(hash[:16]) // Use first 16 bytes (32 hex chars)
 
 	rule := types.ClearanceRule{
-		ID:          ruleID,
-		BeadID:      req.BeadID,
-		DeniedRoles: req.DeniedRoles,
-		CreatedBy:   userID,
-		CreatedAt:   time.Now().Format(time.RFC3339),
-		Reason:      req.Reason,
-		ExpiresAt:   req.ExpiresAt,
+		ID:           ruleID,
+		BeadID:       req.BeadID,
+		DeniedRoles:  req.DeniedRoles,
+		AllowedRoles: req.AllowedRoles,
+		CreatedBy:    userID,
+		CreatedAt:    time.Now().Format(time.RFC3339),
+		Reason:       req.Reason,
+		ExpiresAt:    req.ExpiresAt,
 	}
 
 	if err := store.SaveClearanceRule(rule); err != nil {
@@ -353,7 +364,7 @@ func createClearanceHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Log the action
 	viewerRoles := parseViewerRoles(r)
-	store.LogClearanceAction(req.BeadID, "created", userID, viewerRoles, fmt.Sprintf("Denied roles: %v", req.DeniedRoles))
+	store.LogClearanceAction(req.BeadID, "created", userID, viewerRoles, fmt.Sprintf("Denied roles: %v, Allowed roles: %v", req.DeniedRoles, req.AllowedRoles))
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)

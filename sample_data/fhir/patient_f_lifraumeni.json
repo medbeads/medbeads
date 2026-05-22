@@ -1,0 +1,99 @@
+{
+  "resourceType": "Bundle",
+  "type": "transaction",
+  "entry": [
+    {
+      "fullUrl": "urn:uuid:patient-f-001",
+      "resource": {
+        "resourceType": "Patient",
+        "id": "patient-f-001",
+        "name": [{ "given": ["Hana"], "family": "Sato", "text": "Sato Hana" }],
+        "gender": "female",
+        "birthDate": "1990-03-15"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:encounter-f-001",
+      "resource": {
+        "resourceType": "Encounter",
+        "id": "encounter-f-001",
+        "status": "finished",
+        "class": { "code": "AMB", "display": "ambulatory" },
+        "subject": { "reference": "urn:uuid:patient-f-001" },
+        "period": { "start": "2026-02-10T09:30:00Z", "end": "2026-02-10T10:45:00Z" },
+        "type": [{ "coding": [{ "display": "Medical genetics consultation" }], "text": "Medical genetics consultation - department of clinical genetics" }],
+        "serviceProvider": { "display": "Department of Clinical Genetics" }
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:observation-f-001",
+      "resource": {
+        "resourceType": "Observation",
+        "id": "observation-f-001",
+        "status": "final",
+        "code": {
+          "coding": [{ "system": "http://loinc.org", "code": "10157-6", "display": "Family history of cancer" }],
+          "text": "Family history assessment"
+        },
+        "subject": { "reference": "urn:uuid:patient-f-001" },
+        "encounter": { "reference": "urn:uuid:encounter-f-001" },
+        "effectiveDateTime": "2026-02-10T09:40:00Z",
+        "valueString": "Mother diagnosed with breast cancer at age 38; younger brother with osteosarcoma at age 9; maternal aunt with adrenocortical carcinoma. Pedigree consistent with a hereditary cancer predisposition syndrome.",
+        "note": [{ "text": "Striking multi-generational early-onset cancer history - referred for germline testing." }]
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:observation-f-002",
+      "resource": {
+        "resourceType": "Observation",
+        "id": "observation-f-002",
+        "status": "final",
+        "code": {
+          "coding": [{ "system": "http://loinc.org", "code": "21636-6", "display": "TP53 gene mutation analysis" }],
+          "text": "TP53 germline genetic test"
+        },
+        "subject": { "reference": "urn:uuid:patient-f-001" },
+        "encounter": { "reference": "urn:uuid:encounter-f-001" },
+        "effectiveDateTime": "2026-02-10T10:20:00Z",
+        "valueString": "Germline pathogenic variant detected: TP53 c.733G>A (p.Gly245Ser), heterozygous.",
+        "interpretation": [{ "coding": [{ "code": "A", "display": "Abnormal" }] }],
+        "note": [{ "text": "Pathogenic TP53 germline variant - confirms a cancer predisposition syndrome." }],
+        "_clearance_note": "GENETIC: Germline pathogenic variant. Restrict to the medical genetics department."
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:condition-f-001",
+      "resource": {
+        "resourceType": "Condition",
+        "id": "condition-f-001",
+        "clinicalStatus": { "coding": [{ "code": "active", "display": "Active" }] },
+        "verificationStatus": { "coding": [{ "code": "confirmed", "display": "Confirmed" }] },
+        "code": {
+          "coding": [{ "system": "http://snomed.info/sct", "code": "428850001", "display": "Li-Fraumeni syndrome" }],
+          "text": "Li-Fraumeni syndrome (hereditary cancer predisposition)"
+        },
+        "subject": { "reference": "urn:uuid:patient-f-001" },
+        "encounter": { "reference": "urn:uuid:encounter-f-001" },
+        "recordedDate": "2026-02-10",
+        "_clearance_note": "GENETIC: Hereditary syndrome affecting blood relatives. Restrict to the medical genetics department."
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:diagnosticreport-f-001",
+      "resource": {
+        "resourceType": "DiagnosticReport",
+        "id": "diagnosticreport-f-001",
+        "status": "final",
+        "code": {
+          "coding": [{ "display": "Hereditary cancer multigene panel" }],
+          "text": "Hereditary cancer multigene panel (germline)"
+        },
+        "subject": { "reference": "urn:uuid:patient-f-001" },
+        "encounter": { "reference": "urn:uuid:encounter-f-001" },
+        "effectiveDateTime": "2026-02-10T10:30:00Z",
+        "conclusion": "Germline pathogenic variant in TP53 (c.733G>A, p.Gly245Ser) identified. Result is diagnostic of Li-Fraumeni syndrome. Cascade testing of first-degree relatives and high-risk surveillance recommended. BRCA1/BRCA2 and Lynch-associated genes: no pathogenic variant detected.",
+        "_clearance_note": "GENETIC: Restrict to the medical genetics department."
+      }
+    }
+  ]
+}
