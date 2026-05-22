@@ -35,6 +35,16 @@ var AllRoles = []string{
 	RoleSystem,
 }
 
+// IsValidRole reports whether role is one of the recognized clearance roles.
+func IsValidRole(role string) bool {
+	for _, r := range AllRoles {
+		if r == role {
+			return true
+		}
+	}
+	return false
+}
+
 // ClearanceRule defines access restrictions for a Bead (Blacklist model)
 type ClearanceRule struct {
 	ID          string   `json:"id"`

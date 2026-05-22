@@ -17,6 +17,18 @@ from datetime import datetime, timedelta
 
 API_BASE = os.environ.get("CORE_URL", "http://localhost:8080")
 
+# This setup script is an internal service: it must see full (unmasked) bead
+# content to locate the beads it should restrict. It authenticates as the
+# privileged `system` role using the shared service token.
+SERVICE_TOKEN = os.environ.get("MEDBEADS_SERVICE_TOKEN", "")
+
+
+def service_headers() -> dict:
+    headers = {"X-Viewer-Roles": "system", "X-User-ID": "system_setup"}
+    if SERVICE_TOKEN:
+        headers["X-Service-Token"] = SERVICE_TOKEN
+    return headers
+
 # Sample clearance rules to create
 # These will be matched to beads by searching for specific content
 CLEARANCE_SCENARIOS = [
@@ -110,7 +122,7 @@ CLEARANCE_SCENARIOS = [
 def search_beads(query: str) -> list:
     """Search for beads containing the query text."""
     try:
-        response = requests.get(f"{API_BASE}/search", params={"q": query})
+        response = requests.get(f"{API_BASE}/search", params={"q": query}, headers=service_headers())
         if response.status_code == 200:
             return response.json()
     except Exception as e:
@@ -123,7 +135,8 @@ def get_patient_timeline(patient_id: str) -> list:
     try:
         response = requests.get(
             f"{API_BASE}/beads/context",
-            params={"id": patient_id, "depth": 50, "lookup": "reverse"}
+            params={"id": patient_id, "depth": 50, "lookup": "reverse"},
+            headers=service_headers()
         )
         if response.status_code == 200:
             return response.json()
@@ -160,7 +173,7 @@ def create_clearance_rule(bead_id: str, denied_roles: list, reason: str, expires
         rule["expires_at"] = expires_at
 
     try:
-        response = requests.post(f"{API_BASE}/clearance", json=rule)
+        response = requests.post(f"{API_BASE}/clearance", json=rule, headers=service_headers())
         if response.status_code in [200, 201]:
             return True
         else:
@@ -184,7 +197,7 @@ def main():
 
     # First, get all patients
     try:
-        response = requests.get(f"{API_BASE}/patients")
+        response = requests.get(f"{API_BASE}/patients", headers=service_headers())
         if response.status_code != 200:
             print(f"Failed to get patients: {response.status_code}")
             return

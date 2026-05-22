@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,12 +17,29 @@ import (
 	_ "github.com/mattn/go-sqlite3" // SQLite Driver
 )
 
-const (
-	StorageDir = "./medbeads_data/objects"
-	DBSource   = "./medbeads_data/metadata.db"
+// ErrCycleDetected is returned by SaveToCAS when storing a bead would make it
+// its own ancestor (a cycle in the DAG).
+var ErrCycleDetected = errors.New("cycle detected: bead would be its own ancestor")
+
+// StorageDir and DBSource are vars (not consts) so that tests can point them
+// at an isolated temp location. They default to the production paths and can
+// also be overridden via the MEDBEADS_STORAGE_DIR / MEDBEADS_DB_SOURCE env
+// vars for non-default deployments.
+var (
+	StorageDir = envOr("MEDBEADS_STORAGE_DIR", "./medbeads_data/objects")
+	DBSource   = envOr("MEDBEADS_DB_SOURCE", "./medbeads_data/metadata.db")
 )
 
 var DB *sql.DB
+
+// envOr returns the value of the environment variable key, or fallback if it
+// is unset or empty.
+func envOr(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
 
 // EnsureStorageDir ensures the storage directory exists.
 func EnsureStorageDir() error {
@@ -149,6 +167,14 @@ func SaveToCAS(b types.Bead) (string, error) {
 	}
 	hash := sha256.Sum256(data)
 	hashString := hex.EncodeToString(hash[:])
+
+	// Cycle detection: a bead must never be reachable from its own parents.
+	// (Content-addressing makes this practically impossible, but a malformed
+	// or hand-crafted parents list is rejected here as a safety net.)
+	if hasAncestor(hashString, b.Parents) {
+		return "", ErrCycleDetected
+	}
+
 	filePath := filepath.Join(StorageDir, hashString)
 
 	if err := os.WriteFile(filePath, data, 0644); err != nil {
@@ -162,6 +188,39 @@ func SaveToCAS(b types.Bead) (string, error) {
 	}
 
 	return hashString, nil
+}
+
+// hasAncestor reports whether targetID is reachable by walking up the parent
+// edges starting from startParents. Used for cycle detection on save.
+func hasAncestor(targetID string, startParents []string) bool {
+	if targetID == "" {
+		return false
+	}
+	visited := make(map[string]bool)
+	queue := append([]string{}, startParents...)
+	for _, p := range startParents {
+		visited[p] = true
+	}
+	for len(queue) > 0 {
+		curr := queue[0]
+		queue = queue[1:]
+		if curr == targetID {
+			return true
+		}
+		var parentsStr string
+		if err := DB.QueryRow("SELECT parents FROM beads WHERE id = ?", curr).Scan(&parentsStr); err != nil {
+			continue
+		}
+		var parents []string
+		_ = json.Unmarshal([]byte(parentsStr), &parents)
+		for _, p := range parents {
+			if !visited[p] {
+				visited[p] = true
+				queue = append(queue, p)
+			}
+		}
+	}
+	return false
 }
 
 // indexMetadata inserts the bead metadata into SQLite (Main + FTS).
@@ -974,6 +1033,20 @@ func DeleteClearanceRule(ruleID string) error {
 	return nil
 }
 
+// IsRuleActive reports whether a clearance rule is currently in effect, i.e.
+// it has no expiry or its expiry is in the future. An unparseable expiry is
+// treated as active (fail-closed for security).
+func IsRuleActive(rule types.ClearanceRule, now time.Time) bool {
+	if rule.ExpiresAt == nil || *rule.ExpiresAt == "" {
+		return true
+	}
+	expiresAt, err := parseTime(*rule.ExpiresAt)
+	if err != nil {
+		return true
+	}
+	return !now.After(expiresAt)
+}
+
 // HasAccess checks if a viewer has access to a bead based on clearance rules
 // Returns true if access is allowed, false otherwise
 func HasAccess(beadID string, viewerRoles []string) (bool, error) {
@@ -994,28 +1067,7 @@ func HasAccess(beadID string, viewerRoles []string) (bool, error) {
 		return true, nil
 	}
 
-	// Check each rule
-	now := currentTime()
-	for _, rule := range rules {
-		// Skip expired rules
-		if rule.ExpiresAt != nil && *rule.ExpiresAt != "" {
-			expiresAt, err := parseTime(*rule.ExpiresAt)
-			if err == nil && now.After(expiresAt) {
-				continue
-			}
-		}
-
-		// Check if any of viewer's roles are denied
-		for _, viewerRole := range viewerRoles {
-			for _, deniedRole := range rule.DeniedRoles {
-				if viewerRole == deniedRole {
-					return false, nil
-				}
-			}
-		}
-	}
-
-	return true, nil
+	return HasAccessWithRules(rules, viewerRoles), nil
 }
 
 // HasAccessWithRules checks access using pre-fetched rules (for efficiency with bulk operations)
@@ -1032,15 +1084,24 @@ func HasAccessWithRules(rules []types.ClearanceRule, viewerRoles []string) bool 
 		return true
 	}
 
-	// Check each rule
 	now := currentTime()
-	for _, rule := range rules {
-		// Skip expired rules
-		if rule.ExpiresAt != nil && *rule.ExpiresAt != "" {
-			expiresAt, err := parseTime(*rule.ExpiresAt)
-			if err == nil && now.After(expiresAt) {
-				continue
+
+	// A viewer with no identified role may not view any bead that has an
+	// active clearance rule. This closes the bypass where omitting the
+	// X-Viewer-Roles header would otherwise expose restricted data.
+	if len(viewerRoles) == 0 {
+		for _, rule := range rules {
+			if IsRuleActive(rule, now) {
+				return false
 			}
+		}
+		return true
+	}
+
+	// Check each active rule
+	for _, rule := range rules {
+		if !IsRuleActive(rule, now) {
+			continue
 		}
 
 		// Check if any of viewer's roles are denied
@@ -1056,13 +1117,41 @@ func HasAccessWithRules(rules []types.ClearanceRule, viewerRoles []string) bool 
 	return true
 }
 
-// FilterByAccess returns all beads without filtering
-// Security clearance is for visual indication only - all beads remain visible
-// The UI shows clearance areas/rectangles to indicate restricted beads
+// FilterByAccess masks the content of beads the viewer is not allowed to see.
+// A restricted bead keeps its id/type/timestamp/parents (so the DAG structure
+// and the UI's "locked node" rendering stay intact) but its Content is replaced
+// with {"_restricted": true}. Accessible beads are returned unchanged.
 func FilterByAccess(beads []types.Bead, viewerRoles []string) ([]types.Bead, error) {
-	// No filtering - all beads are always visible
-	// Clearance rules are used for visual display only
-	return beads, nil
+	if len(beads) == 0 {
+		return beads, nil
+	}
+
+	beadIDs := make([]string, len(beads))
+	for i, b := range beads {
+		beadIDs[i] = b.ID
+	}
+
+	rulesMap, err := GetAllClearanceRulesForBeads(beadIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]types.Bead, len(beads))
+	for i, bead := range beads {
+		if HasAccessWithRules(rulesMap[bead.ID], viewerRoles) {
+			result[i] = bead
+			continue
+		}
+		// Mask the content but preserve graph metadata.
+		result[i] = types.Bead{
+			ID:        bead.ID,
+			Type:      bead.Type,
+			Timestamp: bead.Timestamp,
+			Parents:   bead.Parents,
+			Content:   map[string]interface{}{"_restricted": true},
+		}
+	}
+	return result, nil
 }
 
 // LogClearanceAction logs a clearance-related action for audit purposes

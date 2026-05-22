@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 import requests
@@ -11,15 +11,34 @@ load_dotenv()
 
 app = FastAPI(title="MedBeads AI Server")
 
+# CORS origins are read from MEDBEADS_CORS_ORIGINS (comma-separated), with a
+# localhost dev default. A single "*" entry restores allow-all behavior.
+_cors_env = os.environ.get(
+    "MEDBEADS_CORS_ORIGINS",
+    "http://localhost:5173,http://localhost:5174,http://localhost:3000",
+)
+_cors_origins = [o.strip() for o in _cors_env.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000", "http://localhost:5174"], # Vite default
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-CORE_URL = "http://localhost:8080"
+CORE_URL = os.environ.get("CORE_URL", "http://localhost:8080")
+
+
+def _forward_headers(request: Request) -> Dict[str, str]:
+    """Forward the caller's access-control headers to the Core server so that
+    clearance is enforced against the end user's roles, not the AI service."""
+    headers: Dict[str, str] = {}
+    for key in ("X-Viewer-Roles", "X-User-ID", "X-Service-Token", "X-Access-Reason"):
+        value = request.headers.get(key)
+        if value is not None:
+            headers[key] = value
+    return headers
 
 class BeadContent(BaseModel):
     text: Optional[str] = None
@@ -36,18 +55,18 @@ def read_root():
     return {"message": "MedBeads AI Server is running"}
 
 @app.post("/beads")
-def create_bead(bead: BeadCreate):
+def create_bead(bead: BeadCreate, request: Request):
     try:
-        response = requests.post(f"{CORE_URL}/beads", json=bead.model_dump())
+        response = requests.post(f"{CORE_URL}/beads", json=bead.model_dump(), headers=_forward_headers(request))
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
         raise HTTPException(status_code=502, detail=f"Core Server Error: {str(e)}")
 
 @app.get("/beads")
-def get_bead(id: str = Query(..., description="Bead ID")):
+def get_bead(request: Request, id: str = Query(..., description="Bead ID")):
     try:
-        response = requests.get(f"{CORE_URL}/beads", params={"id": id})
+        response = requests.get(f"{CORE_URL}/beads", params={"id": id}, headers=_forward_headers(request))
         if response.status_code == 404:
             raise HTTPException(status_code=404, detail="Bead not found")
         response.raise_for_status()
@@ -56,22 +75,21 @@ def get_bead(id: str = Query(..., description="Bead ID")):
         raise HTTPException(status_code=502, detail=f"Core Server Error: {str(e)}")
 
 @app.get("/beads/context")
-@app.get("/beads/context")
-def get_context(id: str = Query(..., description="Bead ID"), depth: int = 5, lookup: Optional[str] = None):
+def get_context(request: Request, id: str = Query(..., description="Bead ID"), depth: int = 5, lookup: Optional[str] = None):
     try:
         params = {"id": id, "depth": depth}
         if lookup:
             params["lookup"] = lookup
-        response = requests.get(f"{CORE_URL}/beads/context", params=params)
+        response = requests.get(f"{CORE_URL}/beads/context", params=params, headers=_forward_headers(request))
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
         raise HTTPException(status_code=502, detail=f"Core Server Error: {str(e)}")
 
 @app.get("/patients")
-def get_patients():
+def get_patients(request: Request):
     try:
-        response = requests.get(f"{CORE_URL}/patients")
+        response = requests.get(f"{CORE_URL}/patients", headers=_forward_headers(request))
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
@@ -84,17 +102,19 @@ class InsightRequest(BaseModel):
     target_bead_id: str
 
 @app.post("/ai/insight")
-def get_insight(request: InsightRequest):
+def get_insight(body: InsightRequest, request: Request):
     try:
+        fwd = _forward_headers(request)
+
         # 1. Fetch Target Bead
-        target_res = requests.get(f"{CORE_URL}/beads", params={"id": request.target_bead_id})
+        target_res = requests.get(f"{CORE_URL}/beads", params={"id": body.target_bead_id}, headers=fwd)
         if target_res.status_code != 200:
             raise HTTPException(status_code=404, detail="Target Bead not found")
         target_bead = target_res.json()
 
         # 2. Fetch Context (Ancestors)
         # Using depth=10 to get a good history for AI
-        context_res = requests.get(f"{CORE_URL}/beads/context", params={"id": request.target_bead_id, "depth": 10})
+        context_res = requests.get(f"{CORE_URL}/beads/context", params={"id": body.target_bead_id, "depth": 10}, headers=fwd)
         if context_res.status_code != 200:
             # If context fetch fails, we might still proceed with just target, but context is key here.
             # Let's assume empty context if fail, or raise error.
