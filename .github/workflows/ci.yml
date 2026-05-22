@@ -48,6 +48,23 @@ jobs:
       - name: Test
         run: uv run pytest tests/ -q
 
+  mcp:
+    name: MCP server
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mcp
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Sync dependencies (incl. dev group)
+        run: uv sync --dev
+      - name: Syntax check
+        run: uv run python -m compileall server.py core_client.py
+      - name: Test
+        run: uv run pytest tests/ -q
+
   ui:
     name: UI
     runs-on: ubuntu-latest
