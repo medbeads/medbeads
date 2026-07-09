@@ -1,5 +1,8 @@
 # MedBeads: 医疗 AI 的原生代理 (Agent-Native)、不可变数据基石
 
+> **提示:** `main` 分支正在进行 v3 统一重构（规范见 `specs/DESIGN_v3.md`）。
+> 稳定版 v2 请参见标签 `v2.2.0` 或分支 `v2-maintenance`。
+
 MedBeads 是一个 **不可变 (Immutable)、原生代理 (Agent-Native) 数据基础设施**，旨在解决医疗 AI 中的“上下文不匹配 (Context Mismatch)”问题。通过将医疗记录从可变的关系数据库重构为 **Merkle 有向无环图 (DAG)**，MedBeads 为自主代理提供了明确的因果链接、防篡改证据和确定性的上下文检索。
 
 ![MedBeads Concept](docs/concept-image.jpeg)

@@ -7,63 +7,35 @@ on:
     branches: [main]
 
 jobs:
-  core:
-    name: Go core
+  go:
+    name: Go
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: core
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.23.0'
-          cache-dependency-path: core/go.sum
+          go-version: '1.25.x'
       - name: Build
         run: go build ./...
       - name: Vet
         run: go vet ./...
       - name: Test
-        # CGO is required by go-sqlite3; the ubuntu runner ships gcc.
-        env:
-          CGO_ENABLED: '1'
-        run: go test ./... -race -coverprofile=coverage.out
-      - name: Coverage summary
-        run: go tool cover -func=coverage.out
+        run: go test ./... -race
 
-  api:
-    name: Python AI
+  bench:
+    name: bench (uv)
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: api
+        working-directory: bench
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
         uses: astral-sh/setup-uv@v5
       - name: Sync dependencies (incl. dev group)
         run: uv sync --dev
-      - name: Syntax check
-        run: uv run python -m compileall main.py ai.py
       - name: Test
-        run: uv run pytest tests/ -q
-
-  mcp:
-    name: MCP server
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: mcp
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
-      - name: Sync dependencies (incl. dev group)
-        run: uv sync --dev
-      - name: Syntax check
-        run: uv run python -m compileall server.py core_client.py
-      - name: Test
-        run: uv run pytest tests/ -q
+        run: uv run pytest -q
 
   ui:
     name: UI

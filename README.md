@@ -1,5 +1,8 @@
 # MedBeads: An Agent-Native, Immutable Data Substrate for Trustworthy Medical AI
 
+> **Notice:** `main` is undergoing the v3 unification rebuild (spec: `specs/DESIGN_v3.md`).
+> For the stable v2 release, see tag `v2.2.0` or branch `v2-maintenance`.
+
 MedBeads is an **Immutable, Agent-Native Data Infrastructure** designed to address the "Context Mismatch" in medical AI. By restructuring medical records from mutable relational databases into a **Merkle Directed Acyclic Graph (DAG)**, MedBeads provides explicit causal linking, tamper-evidence, and deterministic context retrieval for autonomous agents.
 
 ![MedBeads Concept](docs/concept-image.jpeg)
