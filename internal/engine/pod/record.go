@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/medbeads/medbeads/internal/engine/bead"
 )
 
 // Meta is the frame's meta_bytes payload: minimal derived/administrative
@@ -14,16 +16,51 @@ import (
 // detected), but it is explicitly outside VerifyPod's self-verification
 // check (decompress(core_bytes) -> sha256 == bead_id), since Meta carries no
 // claim about Bead content.
+//
+// # Clearance / Signature placement (lead decision, see task history)
+//
+// bead.Bead.Clearance and bead.Bead.Signature are, by design (specs/
+// DESIGN_v3.md §4), excluded from the content hash and therefore never
+// appear in a frame's core_bytes (bead.Canonicalize's hashPayload has no
+// such fields — see bead.go). DESIGN §3 describes meta_bytes itself as
+// "minimal... 導出情報" (derived information) carried outside the hash — the
+// designed placement for exactly this kind of hash-excluded-but-still-
+// needs-a-home data. Storing Clearance/Signature here (rather than adding a
+// field to Bead's own hashPayload, which would be a hash-format change, or a
+// new frame section, which would be a frame-format change) is therefore an
+// extension of meta_bytes' existing opaque-JSON contents, not a change to
+// the frame layout itself (magic|flags|core_len|meta_len|crc32c|bead_id|
+// core_bytes|meta_bytes is unchanged).
+//
+// Because Pod is append-only, a Bead's embedded Clearance/Signature is
+// therefore fixed at creation time — there is no in-place update path for
+// it (an already-written frame's meta_bytes cannot be edited). Any need to
+// change access restrictions on an existing Bead after the fact is the DB
+// clearance_rules layer's job (package clearance's Rule/SaveRule/GetRules),
+// which is mutable by design; the embedded layer here is a create-time-only
+// overlay. This is the "2層の役割分担" the lead's design ruling calls for:
+// embedded = immutable, set once at Ingest; DB rules = mutable, added/
+// removed/expired independently at any time.
 type Meta struct {
 	// PatientRoot is the plain-hex Bead ID of the patient_registration root
 	// this Bead belongs to, or "" for a Bead stored in the shared Pod.
 	PatientRoot string `json:"patient_root,omitempty"`
 	// WrittenAt is the wall-clock time this frame was appended, RFC 3339.
 	WrittenAt string `json:"written_at"`
+	// Clearance mirrors the Bead's own bead.Clearance at the moment it was
+	// appended (nil if the Bead had none). Excluded from the content hash,
+	// same as bead.Bead.Clearance itself — see the type doc comment above.
+	Clearance *bead.Clearance `json:"clearance,omitempty"`
+	// Signature mirrors the Bead's own bead.Signature at the moment it was
+	// appended ("" if the Bead had none). Excluded from the content hash,
+	// same as bead.Bead.Signature itself — see the type doc comment above.
+	Signature string `json:"signature,omitempty"`
 }
 
 // NewMeta returns a Meta for a write happening now, with patientRoot as
-// given ("" for the shared Pod).
+// given ("" for the shared Pod). Clearance/Signature are left unset;
+// Writer.Append fills them in from the Bead being appended (see Append's
+// doc comment) so every caller does not need to remember to do so itself.
 func NewMeta(patientRoot string) Meta {
 	return Meta{
 		PatientRoot: patientRoot,

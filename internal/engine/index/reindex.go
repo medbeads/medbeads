@@ -194,7 +194,16 @@ func indexBatch(db *DB, podPath string, records []pod.Record) error {
 // decodeRecordBead decompresses rec's core_bytes (the JCS canonical Bead
 // JSON) and unmarshals it into a bead.Bead, setting ID from rec.BeadID
 // (core_bytes itself has no "id" field — see bead.Canonicalize's
-// hash-target payload, which excludes id).
+// hash-target payload, which excludes id) and restoring Clearance/Signature
+// from rec.Meta (their designed storage location, since both are excluded
+// from core_bytes too — see pod.Meta's doc comment). IndexBead itself does
+// not consult Clearance/Signature today (index.db stores no Bead content),
+// but decodeRecordBead restores them anyway for consistency with this
+// project's other two decode-a-Record-into-a-bead.Bead call sites
+// (engine.decodeBeadRecord, graph.decodeBundleRecord) — a bead.Bead value
+// handed to IndexBead's Flattener (or any future consumer added here)
+// should never look less complete than one read via engine.GetBead purely
+// because of which decode path produced it.
 func decodeRecordBead(rec pod.Record) (bead.Bead, error) {
 	plain, err := rec.Decompress()
 	if err != nil {
@@ -205,6 +214,8 @@ func decodeRecordBead(rec pod.Record) (bead.Bead, error) {
 		return bead.Bead{}, fmt.Errorf("unmarshal bead JSON: %w", err)
 	}
 	b.ID = rec.BeadID
+	b.Clearance = rec.Meta.Clearance
+	b.Signature = rec.Meta.Signature
 	return b, nil
 }
 

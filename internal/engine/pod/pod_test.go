@@ -156,6 +156,110 @@ func TestCodecZstdDict_CompressNotYetSupported(t *testing.T) {
 	}
 }
 
+// --- Clearance/Signature persistence via meta_bytes -----------------------
+//
+// bead.Bead.Clearance and bead.Bead.Signature are excluded from the content
+// hash (bead.Canonicalize's hashPayload has no such fields) and therefore
+// never appear in a frame's core_bytes. Per the lead's design ruling
+// (see Meta's doc comment in record.go), Writer.Append instead copies them
+// into meta_bytes (Meta.Clearance/Meta.Signature) — the frame's existing
+// "minimal derived info, outside the hash" payload — so they are not simply
+// lost on write. These tests pin that persistence down at the pod-package
+// level (engine-level coverage lives in internal/engine/clearance's
+// TestGetBead_PersistsEmbeddedClearance / TestPod_RoundTrip_
+// PersistsClearanceAndSignature).
+
+func TestAppend_PersistsClearanceAndSignatureInMeta(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "patient.pod")
+	w := openWriterT(t, path)
+
+	b := testBead(t, "clearance-round-trip")
+	b.Clearance = &bead.Clearance{
+		DeniedRoles:  []string{"insurance"},
+		AllowedRoles: []string{"dept:genetics"},
+		Reason:       "psych eval",
+	}
+	b.Signature = "base64:deadbeef=="
+	// A real Bead's ID is computed before Clearance/Signature are set (they
+	// are hash-excluded), so recompute WithID is unnecessary here — b.ID
+	// from testBead already reflects the hash-target fields only, and
+	// setting Clearance/Signature afterward must not require (or cause) a
+	// new ID.
+	wantID := b.ID
+
+	res, err := w.Append(b, CodecZstd, NewMeta("root1"))
+	if err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	r, err := OpenReader(path)
+	if err != nil {
+		t.Fatalf("OpenReader: %v", err)
+	}
+	defer r.Close()
+
+	rec, err := r.ReadAtVerified(res.Offset)
+	if err != nil {
+		t.Fatalf("ReadAtVerified: %v", err)
+	}
+	if rec.BeadID != wantID {
+		t.Fatalf("rec.BeadID = %s, want %s (Clearance/Signature must not affect the content hash)", rec.BeadID, wantID)
+	}
+	if rec.Meta.Clearance == nil {
+		t.Fatal("rec.Meta.Clearance is nil, want the Clearance set on the appended Bead")
+	}
+	if len(rec.Meta.Clearance.DeniedRoles) != 1 || rec.Meta.Clearance.DeniedRoles[0] != "insurance" {
+		t.Errorf("rec.Meta.Clearance.DeniedRoles = %v, want [insurance]", rec.Meta.Clearance.DeniedRoles)
+	}
+	if len(rec.Meta.Clearance.AllowedRoles) != 1 || rec.Meta.Clearance.AllowedRoles[0] != "dept:genetics" {
+		t.Errorf("rec.Meta.Clearance.AllowedRoles = %v, want [dept:genetics]", rec.Meta.Clearance.AllowedRoles)
+	}
+	if rec.Meta.Clearance.Reason != "psych eval" {
+		t.Errorf("rec.Meta.Clearance.Reason = %q, want %q", rec.Meta.Clearance.Reason, "psych eval")
+	}
+	if rec.Meta.Signature != "base64:deadbeef==" {
+		t.Errorf("rec.Meta.Signature = %q, want %q", rec.Meta.Signature, "base64:deadbeef==")
+	}
+}
+
+// TestAppend_NoClearance_DecodesWithNilMetaClearance confirms a Bead with no
+// Clearance/Signature round-trips with a nil Meta.Clearance and empty
+// Meta.Signature, and — the lead ruling's explicit nil-safety requirement —
+// that decoding such a frame never panics. This also stands in for "an old
+// frame written before Clearance/Signature existed in Meta": such a frame's
+// meta_bytes JSON simply has no "clearance"/"signature" keys, which is
+// exactly what json.Unmarshal produces here for a Bead that never set them,
+// so this test exercises the same absent-field decode path.
+func TestAppend_NoClearance_DecodesWithNilMetaClearance(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "patient.pod")
+	w := openWriterT(t, path)
+
+	b := testBead(t, "no-clearance")
+	res, err := w.Append(b, CodecZstd, NewMeta("root1"))
+	if err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	r, err := OpenReader(path)
+	if err != nil {
+		t.Fatalf("OpenReader: %v", err)
+	}
+	defer r.Close()
+
+	rec, err := r.ReadAtVerified(res.Offset)
+	if err != nil {
+		t.Fatalf("ReadAtVerified: %v", err)
+	}
+	if rec.Meta.Clearance != nil {
+		t.Errorf("rec.Meta.Clearance = %+v, want nil", rec.Meta.Clearance)
+	}
+	if rec.Meta.Signature != "" {
+		t.Errorf("rec.Meta.Signature = %q, want empty", rec.Meta.Signature)
+	}
+}
+
 // --- self-verification: decompress -> sha256 == bead_id ------------------
 
 func TestSelfVerification_DecompressHashMatchesBeadID(t *testing.T) {

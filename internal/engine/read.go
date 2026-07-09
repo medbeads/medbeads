@@ -94,8 +94,12 @@ func readBeadAt(podPath string, offset int64) (bead.Bead, error) {
 
 // decodeBeadRecord decompresses rec's core_bytes, unmarshals it into a
 // bead.Bead, restores its ID (core_bytes' JCS payload has no "id" field —
-// see bead.Canonicalize), and verifies the recomputed hash matches — the
-// read-side half of the tamper-evidence guarantee.
+// see bead.Canonicalize), restores its Clearance/Signature from rec.Meta
+// (the hash-excluded fields' designed storage location — see pod.Meta's doc
+// comment), and verifies the recomputed hash matches — the read-side half
+// of the tamper-evidence guarantee. Verify never looks at Clearance/
+// Signature (bead.Verify's own doc comment), so restoring them here cannot
+// affect the hash check either way.
 func decodeBeadRecord(rec pod.Record) (bead.Bead, error) {
 	plain, err := rec.Decompress()
 	if err != nil {
@@ -106,6 +110,8 @@ func decodeBeadRecord(rec pod.Record) (bead.Bead, error) {
 		return bead.Bead{}, fmt.Errorf("unmarshal: %w", err)
 	}
 	b.ID = rec.BeadID
+	b.Clearance = rec.Meta.Clearance
+	b.Signature = rec.Meta.Signature
 	if err := bead.Verify(b); err != nil {
 		return bead.Bead{}, fmt.Errorf("verify: %w", err)
 	}

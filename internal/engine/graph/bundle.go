@@ -37,9 +37,13 @@ type Bundle struct {
 	// siblings maps a Bead ID to the IDs of its explicit siblings: Beads
 	// connected via a bidirectional edge_type='sibling' bead_edges row (see
 	// specs/MEDBEADS_SIBLING_SPEC.md §5.2 — sibling edges are registered in
-	// both directions when a sibling_link Bead is created by the APC
-	// daemon). APC is not implemented yet (docs/requirements.md R5), so this
-	// is empty for any Bundle loaded from real ingest data today; it exists
+	// both directions when a sibling_link Bead is created by the APC batch
+	// scanner). Those rows are now written to index.db by IndexBead
+	// (docs/requirements.md R5 is implemented — see internal/engine/index/
+	// write.go). LoadBundle, however, reads only the patient's Pod frames
+	// and does not (yet) query bead_edges, so this map is empty for any
+	// Bundle loaded from real ingest data today; wiring the index.db sibling
+	// rows into LoadBundle is a later unit (M3 GraphView 結線). It exists now
 	// so BuildContext's explicit-sibling priority tier has something to grow
 	// into, and so tests can exercise it by injecting sibling edges by hand.
 	siblings map[string][]string
@@ -58,10 +62,13 @@ func (bd *Bundle) Get(id string) (bead.Bead, bool) {
 
 // AddSiblingEdge registers an explicit (bidirectional) sibling edge between
 // two Beads already present in the bundle. This is how a caller (or a test)
-// injects edge_type='sibling' bead_edges rows once the APC daemon exists;
-// LoadBundle itself does not yet read such rows since IndexBead never writes
-// them today (docs/requirements.md R5 is unimplemented — see doc comment on
-// Bundle.siblings). It is a no-op if either id is not in the bundle.
+// injects the equivalent of index.db's edge_type='sibling' bead_edges rows
+// into a Bundle. IndexBead already writes those rows (docs/requirements.md
+// R5 is implemented — see internal/engine/index/write.go), but LoadBundle
+// does not yet read them (it decodes Pod frames only), so today this is
+// exercised by tests and by any caller that has the sibling pairs in hand;
+// LoadBundle-side wiring is a later unit (M3 GraphView 結線 — see doc comment
+// on Bundle.siblings). It is a no-op if either id is not in the bundle.
 func (bd *Bundle) AddSiblingEdge(a, b string) {
 	if _, ok := bd.beads[a]; !ok {
 		return
@@ -158,10 +165,12 @@ func LoadBundle(store *pod.Store, patientRoot string) (*Bundle, error) {
 
 // decodeBundleRecord decompresses rec's core_bytes, unmarshals it into a
 // bead.Bead, restores its ID (core_bytes' JCS payload has no "id" field —
-// see bead.Canonicalize), and verifies the recomputed hash matches. This
-// mirrors engine.decodeBeadRecord (internal/engine/read.go); graph does not
-// import package engine (see doc.go), so the same small decode+verify step
-// is duplicated here rather than shared.
+// see bead.Canonicalize), restores its Clearance/Signature from rec.Meta
+// (their designed storage location, since both are excluded from
+// core_bytes — see pod.Meta's doc comment), and verifies the recomputed
+// hash matches. This mirrors engine.decodeBeadRecord (internal/engine/
+// read.go); graph does not import package engine (see doc.go), so the same
+// small decode+verify step is duplicated here rather than shared.
 func decodeBundleRecord(rec pod.Record) (bead.Bead, error) {
 	plain, err := rec.Decompress()
 	if err != nil {
@@ -172,6 +181,8 @@ func decodeBundleRecord(rec pod.Record) (bead.Bead, error) {
 		return bead.Bead{}, fmt.Errorf("unmarshal: %w", err)
 	}
 	b.ID = rec.BeadID
+	b.Clearance = rec.Meta.Clearance
+	b.Signature = rec.Meta.Signature
 	if err := bead.Verify(b); err != nil {
 		return bead.Bead{}, fmt.Errorf("verify: %w", err)
 	}

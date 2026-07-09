@@ -64,7 +64,15 @@ type AppendResult struct {
 //
 // meta.PatientRoot is caller-supplied (pre-resolved from the index, per
 // specs/DESIGN_v3.md §3) rather than derived here, since Writer has no
-// access to the index and must not guess.
+// access to the index and must not guess. meta.Clearance/meta.Signature are,
+// by contrast, filled in here from b itself (overwriting whatever the caller
+// passed in meta, which pod.NewMeta always leaves unset): Clearance and
+// Signature are excluded from the content hash (bead.Canonicalize) but must
+// still reach disk somehow, and Meta's "minimal derived info, outside the
+// hash" JSON payload is their designed home (see Meta's doc comment) —
+// centralizing the bead-to-meta copy here, rather than requiring every
+// Append caller to remember it, means no future call site can silently
+// forget to persist a Bead's Clearance/Signature.
 func (w *Writer) Append(b bead.Bead, codec Codec, meta Meta) (AppendResult, error) {
 	if b.ID == "" {
 		return AppendResult{}, fmt.Errorf("pod: append: bead has no ID (call bead.WithID first)")
@@ -82,6 +90,9 @@ func (w *Writer) Append(b bead.Bead, codec Codec, meta Meta) (AppendResult, erro
 	if err != nil {
 		return AppendResult{}, fmt.Errorf("pod: append: compress: %w", err)
 	}
+
+	meta.Clearance = b.Clearance
+	meta.Signature = b.Signature
 	metaBytes, err := meta.encode()
 	if err != nil {
 		return AppendResult{}, fmt.Errorf("pod: append: %w", err)
