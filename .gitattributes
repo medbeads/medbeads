@@ -1,0 +1,10 @@
+# Normalize all text files to LF (overrides local core.autocrlf).
+* text=auto eol=lf
+
+# Binary assets
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary
+*.pod binary
+*.dict binary
