@@ -17,18 +17,23 @@ from mcp.client.stdio import stdio_client
 
 
 class MedBeadsClient:
-    """One live stdio session against `medbeadsd serve -role system`.
+    """One live stdio session against `medbeadsd serve -role <role>`.
 
     Use as an async context manager:
 
         async with MedBeadsClient(medbeadsd_path, data_dir) as client:
             result = await client.create_bead(...)
+
+    `role` defaults to "system" (write access, per bench.ingest's original
+    use of this client for create_bead); bench.perf passes role="viewer"
+    instead, since its only calls are read-only (retrieve) and least-
+    privilege is the right default for a harness that never needs to write.
     """
 
-    def __init__(self, medbeadsd_path: Path, data_dir: Path) -> None:
+    def __init__(self, medbeadsd_path: Path, data_dir: Path, *, role: str = "system") -> None:
         self._params = StdioServerParameters(
             command=str(medbeadsd_path),
-            args=["serve", "-data", str(data_dir), "-role", "system"],
+            args=["serve", "-data", str(data_dir), "-role", role],
         )
         self._stack: AsyncExitStack | None = None
         self._session: ClientSession | None = None
@@ -118,3 +123,25 @@ class MedBeadsClient:
         """
         out = await self.call_tool("get_bead", {"id": bead_id})
         return out["bead"]
+
+    async def retrieve(
+        self,
+        *,
+        query: str = "",
+        patient_id: str = "",
+        token_budget: int | None = None,
+    ) -> dict[str, Any]:
+        """Call the unified `retrieve` tool (R6.2, internal/mcpserver/retrieve.go),
+        returning its full structuredContent (anchor_ids/items/truncated_refs/
+        budget_tokens/used_tokens — see retrieveOut). Used by bench.perf to
+        measure the "context bundle p95 <500ms" target
+        (docs/requirements.md §7); ingest itself never calls this.
+        """
+        args: dict[str, Any] = {}
+        if query:
+            args["query"] = query
+        if patient_id:
+            args["patient_id"] = patient_id
+        if token_budget is not None:
+            args["token_budget"] = token_budget
+        return await self.call_tool("retrieve", args)
