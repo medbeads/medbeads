@@ -158,6 +158,27 @@ func IndexBead(tx *sql.Tx, b bead.Bead, loc BeadLocation, f Flattener) error {
 		}
 	}
 
+	// sibling_link Beads carry a horizontal relationship (specs/
+	// MEDBEADS_SIBLING_SPEC.md §5) that must be re-derivable from the Pod
+	// alone, per specs/DESIGN_v3.md §1's "インデックスは正本から完全再構築可能"
+	// invariant: unlike a 'parent' edge (derived above from every Bead's own
+	// Parents field, regardless of type), the bidirectional 'sibling'
+	// bead_edges rows and the sibling_pairs de-duplication record are
+	// specific to this one Bead type and were previously written only by
+	// package apc's Scanner at scan time — meaning a Reindex/CatchUp replay
+	// of an already-ingested sibling_link Bead silently lost both, since
+	// neither Ingest nor a bare replay re-runs Scan. Deriving them here
+	// instead, unconditionally whenever a sibling_link Bead is (re-)indexed,
+	// makes both reconstructable from the Bead's own content the same way
+	// beads/bead_edges('parent')/bead_antigens/beads_fts already are, and
+	// makes them idempotent under replay via the same INSERT OR IGNORE
+	// pattern used above.
+	if b.Type == "sibling_link" {
+		if err := indexSiblingLink(tx, normalized); err != nil {
+			return fmt.Errorf("index: index bead %s: %w", b.ID, err)
+		}
+	}
+
 	// beads_fts is contentless and keyed on beads.rowid (see migrations/
 	// 0001_init.sql): only insert an FTS row the first time this Bead ID is
 	// actually indexed. On a duplicate-frame replay (rowsAffected == 0
@@ -178,6 +199,99 @@ func IndexBead(tx *sql.Tx, b bead.Bead, loc BeadLocation, f Flattener) error {
 	}
 
 	return nil
+}
+
+// indexSiblingLink derives and records the two pieces of index.db state a
+// sibling_link Bead implies but does not itself carry as ordinary
+// parent/antigen edges (see IndexBead's sibling_link doc comment):
+//
+//  1. Bidirectional edge_type='sibling' bead_edges rows between the Bead's
+//     two parents (specs/MEDBEADS_SIBLING_SPEC.md §5.3: "(A, B, sibling)"
+//     and "(B, A, sibling)"). package apc's Scanner independently records
+//     the same rows at scan time (recordSiblingEdges) via INSERT OR IGNORE;
+//     doing it again here is therefore a no-op on the normal ingest path and
+//     only actually adds rows on a Reindex/CatchUp replay where they would
+//     otherwise be missing.
+//  2. sibling_pairs rows, one per antigen in the Bead's own
+//     content.matched_antigens, for the same normalized (bead_a < bead_b)
+//     pair — recorded the same way package apc's Scanner.recordPair does,
+//     again idempotent via INSERT OR IGNORE against the table's
+//     UNIQUE(bead_a, bead_b, matched_antigen) constraint.
+//
+// b must already be normalized (Parents deduplicated + sorted — see
+// bead.Normalize) and must already have a beads row (IndexBead calls this
+// after its own beads INSERT). A sibling_link Bead is expected to have
+// exactly two Parents (specs/MEDBEADS_SIBLING_SPEC.md §4.1: "関連付けされる
+// Beadのハッシュ ID（2つ以上）" — this scanner's own sibling_link Beads are
+// always exactly pairwise, per apc/link.go's buildSiblingLinkBead); a
+// malformed sibling_link with a different Parents count, or whose
+// content.matched_antigens is missing/malformed, is skipped rather than
+// erroring — a hand-crafted or future agent-authored sibling_link Bead that
+// does not exactly match this scanner's own shape must not abort an entire
+// Reindex run over one Bead's unusual content.
+func indexSiblingLink(tx *sql.Tx, b bead.Bead) error {
+	if len(b.Parents) != 2 {
+		return nil
+	}
+	pairA, pairB := b.Parents[0], b.Parents[1]
+	if pairB < pairA {
+		pairA, pairB = pairB, pairA
+	}
+
+	for _, pair := range [][2]string{{pairA, pairB}, {pairB, pairA}} {
+		if _, err := tx.Exec(
+			`INSERT OR IGNORE INTO bead_edges (child_id, parent_id, edge_type) VALUES (?, ?, 'sibling')`,
+			pair[0], pair[1],
+		); err != nil {
+			return fmt.Errorf("index sibling_link %s: sibling edge %s<->%s: %w", b.ID, pairA, pairB, err)
+		}
+	}
+
+	antigens, ok := siblingLinkMatchedAntigens(b)
+	if !ok {
+		return nil
+	}
+	for _, antigen := range antigens {
+		if _, err := tx.Exec(
+			`INSERT OR IGNORE INTO sibling_pairs (bead_a, bead_b, matched_antigen, sibling_link_id, created_at)
+			 VALUES (?, ?, ?, ?, ?)`,
+			pairA, pairB, antigen, b.ID, b.Timestamp,
+		); err != nil {
+			return fmt.Errorf("index sibling_link %s: sibling pair %s/%s/%s: %w", b.ID, pairA, pairB, antigen, err)
+		}
+	}
+	return nil
+}
+
+// siblingLinkMatchedAntigens extracts b.Content["matched_antigens"] as a
+// []string, tolerating the shape JSON round-tripping produces: a freshly
+// built bead.Bead (apc/link.go's buildSiblingLinkBead, before Ingest) has a
+// real []string there, but a Bead decoded back from a Pod frame (Reindex/
+// CatchUp's path — decodeRecordBead unmarshals into map[string]any content)
+// has a []any of string elements instead. ok is false (not an error) for
+// any shape that isn't one of those two — see indexSiblingLink's doc
+// comment on why a malformed sibling_link Bead is skipped, not fatal.
+func siblingLinkMatchedAntigens(b bead.Bead) (antigens []string, ok bool) {
+	raw, exists := b.Content["matched_antigens"]
+	if !exists {
+		return nil, false
+	}
+	switch v := raw.(type) {
+	case []string:
+		return v, true
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, elem := range v {
+			s, isString := elem.(string)
+			if !isString {
+				return nil, false
+			}
+			out = append(out, s)
+		}
+		return out, true
+	default:
+		return nil, false
+	}
 }
 
 // advanceWatermark sets pods.indexed_upto for podID to upto, but only if

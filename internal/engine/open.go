@@ -100,6 +100,19 @@ func (e *Engine) DataDir() string {
 	return e.dataDir
 }
 
+// Index exposes this Engine's *index.DB for callers (e.g. package apc's
+// Scanner) that need direct SQL access to tables Ingest's own thin read API
+// does not expose (bead_apc_scan, sibling_pairs, bead_antigens lookups by
+// (antigen, patient_root)) — the same "narrow escape hatch" as index.DB's own
+// SQLDB(). Routing through this accessor rather than having apc open its own
+// second *sql.DB against index.db keeps every SQLite connection to a given
+// data directory going through Engine's single capped connection pool (see
+// index.Open's SetMaxOpenConns(1) doc comment) instead of adding a second,
+// separately-pooled connection that would contend with it.
+func (e *Engine) Index() *index.DB {
+	return e.idx
+}
+
 // Close releases the data directory lock, closes every per-Pod Writer this
 // Engine opened, and closes the index database. It collects (rather than
 // stopping at) the first error so every resource gets a chance to close.
