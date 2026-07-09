@@ -74,6 +74,25 @@ func (d *DB) ListSharedBeads() ([]BeadRef, error) {
 		ORDER BY b.timestamp, b.id`)
 }
 
+// ListPatients returns every Bead of type 'patient_registration' — one row
+// per patient, each Bead's own ID doubling as its patient_root (Ingest's
+// resolvePatientRoot makes a registration Bead its own root) — ordered by
+// timestamp descending (most recently registered patient first), mirroring
+// v2.2.0's core/store.GetPatients. This is the "v2 GetPatients の移植先"
+// index addition specs/DESIGN_v3.md §6 / docs/requirements.md R4.3 calls for:
+// a caller of package graph's LoadBundle/BuildContext (e.g. a future
+// list_patients MCP tool) needs to enumerate patients before it can load any
+// one patient's Bundle.
+func (d *DB) ListPatients() ([]BeadRef, error) {
+	return d.queryBeadRefs(`
+		SELECT b.id, COALESCE(b.patient_root, ''), b.type, b.timestamp,
+		       p.path, b.offset, b.length, COALESCE(b.summary, '')
+		FROM beads b
+		JOIN pods p ON p.pod_id = b.pod_id
+		WHERE b.type = 'patient_registration'
+		ORDER BY b.timestamp DESC, b.id`)
+}
+
 // SearchResult is one FTS hit, already resolved to its patient_root so
 // callers never need a second per-hit query (specs/DESIGN_v3.md §5:
 // "findPatientRoot 廃止" — patient resolution is a single JOIN here, not a
