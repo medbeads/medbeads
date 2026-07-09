@@ -1,0 +1,214 @@
+package index
+
+import (
+	"database/sql"
+	"errors"
+	"fmt"
+)
+
+// BeadRef is one row's worth of location + identifying info from beads,
+// enough for a caller to open the owning Pod and read the frame directly
+// (pod.Reader.ReadAt(Offset)) without a second query.
+type BeadRef struct {
+	ID          string
+	PatientRoot string // "" for the shared Pod
+	Type        string
+	Timestamp   string
+	PodPath     string
+	Offset      int64
+	Length      int64
+	Summary     string
+}
+
+// GetBead resolves a single Bead's storage location (pod_id -> path,
+// offset, length) by ID, joining pods once so the caller gets a ready-to-use
+// PodPath instead of a bare pod_id (R3 "読み取り API" scope). Returns
+// ErrNotFound if no bead with that ID is indexed.
+func (d *DB) GetBead(id string) (BeadRef, error) {
+	row := d.sqlDB.QueryRow(`
+		SELECT b.id, COALESCE(b.patient_root, ''), b.type, b.timestamp,
+		       p.path, b.offset, b.length, COALESCE(b.summary, '')
+		FROM beads b
+		JOIN pods p ON p.pod_id = b.pod_id
+		WHERE b.id = ?`, id)
+
+	var ref BeadRef
+	err := row.Scan(&ref.ID, &ref.PatientRoot, &ref.Type, &ref.Timestamp,
+		&ref.PodPath, &ref.Offset, &ref.Length, &ref.Summary)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return BeadRef{}, fmt.Errorf("index: get bead %s: %w", id, ErrNotFound)
+	case err != nil:
+		return BeadRef{}, fmt.Errorf("index: get bead %s: %w", id, err)
+	}
+	return ref, nil
+}
+
+// ListPatientBeads returns every Bead indexed under patientRoot, ordered by
+// timestamp (idx_beads_root's (patient_root, timestamp) composite index —
+// specs/DESIGN_v3.md §5), for the timeline / patient-bundle use case.
+// patientRoot must be non-empty; use ListSharedBeads for the shared Pod.
+func (d *DB) ListPatientBeads(patientRoot string) ([]BeadRef, error) {
+	if patientRoot == "" {
+		return nil, fmt.Errorf("index: list patient beads: patientRoot must not be empty (use ListSharedBeads)")
+	}
+	return d.queryBeadRefs(`
+		SELECT b.id, COALESCE(b.patient_root, ''), b.type, b.timestamp,
+		       p.path, b.offset, b.length, COALESCE(b.summary, '')
+		FROM beads b
+		JOIN pods p ON p.pod_id = b.pod_id
+		WHERE b.patient_root = ?
+		ORDER BY b.timestamp, b.id`, patientRoot)
+}
+
+// ListSharedBeads returns every Bead indexed with no patient_root (stored in
+// the shared Pod), ordered by timestamp.
+func (d *DB) ListSharedBeads() ([]BeadRef, error) {
+	return d.queryBeadRefs(`
+		SELECT b.id, COALESCE(b.patient_root, ''), b.type, b.timestamp,
+		       p.path, b.offset, b.length, COALESCE(b.summary, '')
+		FROM beads b
+		JOIN pods p ON p.pod_id = b.pod_id
+		WHERE b.patient_root IS NULL
+		ORDER BY b.timestamp, b.id`)
+}
+
+// SearchResult is one FTS hit, already resolved to its patient_root so
+// callers never need a second per-hit query (specs/DESIGN_v3.md §5:
+// "findPatientRoot 廃止" — patient resolution is a single JOIN here, not a
+// per-Bead lookup).
+type SearchResult struct {
+	BeadID      string
+	PatientRoot string // "" for the shared Pod
+	Type        string
+	Timestamp   string
+	Summary     string
+}
+
+// Search runs an FTS5 trigram query against beads_fts.search_text and
+// resolves every hit's patient_root via a single JOIN against beads
+// (specs/DESIGN_v3.md §5 / R3.3, R4.1's "JOIN 1回で患者集約" principle
+// applied at the anchor-search level). Results are ordered by FTS bm25 rank
+// (best match first).
+func (d *DB) Search(query string, limit int) ([]SearchResult, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	// beads_fts is a contentless FTS5 table (content=''): it has no id
+	// column (see migrations/0001_init.sql), so a hit is resolved back to
+	// its Bead via rowid, not a stored id — the single JOIN specs/
+	// DESIGN_v3.md §5 calls for ("JOIN 1回で患者集約"), just keyed on
+	// rowid.
+	rows, err := d.sqlDB.Query(`
+		SELECT b.id, COALESCE(b.patient_root, ''), b.type, b.timestamp, COALESCE(b.summary, '')
+		FROM beads_fts f
+		JOIN beads b ON b.rowid = f.rowid
+		WHERE beads_fts MATCH ?
+		ORDER BY bm25(beads_fts)
+		LIMIT ?`, query, limit)
+	if err != nil {
+		return nil, fmt.Errorf("index: search %q: %w", query, err)
+	}
+	defer rows.Close()
+
+	var out []SearchResult
+	for rows.Next() {
+		var r SearchResult
+		if err := rows.Scan(&r.BeadID, &r.PatientRoot, &r.Type, &r.Timestamp, &r.Summary); err != nil {
+			return nil, fmt.Errorf("index: search %q: scan: %w", query, err)
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("index: search %q: %w", query, err)
+	}
+	return out, nil
+}
+
+// queryBeadRefs runs a query expected to return the 8-column BeadRef shape
+// and streams results with rows.Next() rather than reading the whole result
+// set into memory up front at the driver layer (the []BeadRef this returns
+// is still fully materialized for the caller, but per-row scanning avoids
+// holding the underlying driver cursor/buffers longer than necessary).
+func (d *DB) queryBeadRefs(query string, args ...any) ([]BeadRef, error) {
+	rows, err := d.sqlDB.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("index: query bead refs: %w", err)
+	}
+	defer rows.Close()
+
+	var out []BeadRef
+	for rows.Next() {
+		var ref BeadRef
+		if err := rows.Scan(&ref.ID, &ref.PatientRoot, &ref.Type, &ref.Timestamp,
+			&ref.PodPath, &ref.Offset, &ref.Length, &ref.Summary); err != nil {
+			return nil, fmt.Errorf("index: query bead refs: scan: %w", err)
+		}
+		out = append(out, ref)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("index: query bead refs: %w", err)
+	}
+	return out, nil
+}
+
+// GetEdges returns the parent_id values of every 'parent' edge whose
+// child_id is beadID (i.e. beadID's direct parents).
+func (d *DB) GetEdges(beadID string) ([]string, error) {
+	rows, err := d.sqlDB.Query(
+		`SELECT parent_id FROM bead_edges WHERE child_id = ? AND edge_type = 'parent'`, beadID)
+	if err != nil {
+		return nil, fmt.Errorf("index: get edges %s: %w", beadID, err)
+	}
+	defer rows.Close()
+
+	var out []string
+	for rows.Next() {
+		var parent string
+		if err := rows.Scan(&parent); err != nil {
+			return nil, fmt.Errorf("index: get edges %s: scan: %w", beadID, err)
+		}
+		out = append(out, parent)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("index: get edges %s: %w", beadID, err)
+	}
+	return out, nil
+}
+
+// GetAntigens returns every antigen tag attached to beadID.
+func (d *DB) GetAntigens(beadID string) ([]string, error) {
+	rows, err := d.sqlDB.Query(
+		`SELECT antigen FROM bead_antigens WHERE bead_id = ? ORDER BY antigen`, beadID)
+	if err != nil {
+		return nil, fmt.Errorf("index: get antigens %s: %w", beadID, err)
+	}
+	defer rows.Close()
+
+	var out []string
+	for rows.Next() {
+		var antigen string
+		if err := rows.Scan(&antigen); err != nil {
+			return nil, fmt.Errorf("index: get antigens %s: scan: %w", beadID, err)
+		}
+		out = append(out, antigen)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("index: get antigens %s: %w", beadID, err)
+	}
+	return out, nil
+}
+
+// PodWatermark reports a Pod's current indexed_upto watermark (R1.3), or
+// ErrNotFound if podPath has no pods row yet.
+func (d *DB) PodWatermark(podPath string) (int64, error) {
+	var upto int64
+	err := d.sqlDB.QueryRow(`SELECT indexed_upto FROM pods WHERE path = ?`, podPath).Scan(&upto)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return 0, fmt.Errorf("index: pod watermark %s: %w", podPath, ErrNotFound)
+	case err != nil:
+		return 0, fmt.Errorf("index: pod watermark %s: %w", podPath, err)
+	}
+	return upto, nil
+}

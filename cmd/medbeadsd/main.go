@@ -10,7 +10,9 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 
+	"github.com/medbeads/medbeads/internal/engine/index"
 	"github.com/medbeads/medbeads/internal/engine/pod"
 )
 
@@ -41,7 +43,9 @@ func run(args []string, stdout, stderr *os.File) int {
 	switch cmd := args[0]; cmd {
 	case "verify":
 		return runVerify(args[1:], stdout, stderr)
-	case "serve", "reindex":
+	case "reindex":
+		return runReindex(args[1:], stdout, stderr)
+	case "serve":
 		fmt.Fprintf(stderr, "medbeadsd %s: not implemented (M1)\n", cmd)
 		return 1
 	case "-h", "-help", "--help", "help":
@@ -101,5 +105,40 @@ func runVerify(args []string, stdout, stderr *os.File) int {
 		return 1
 	}
 	fmt.Fprintln(stdout, "result: OK")
+	return 0
+}
+
+// runReindex implements `medbeadsd reindex`: it rebuilds -data's index.db
+// from scratch by scanning every Pod file under -data/pods/ (see
+// index.Reindex, specs/DESIGN_v3.md §3/§5, R1.4/R3). index.db always lives
+// at <data>/index.db, matching the data directory layout documented in
+// internal/engine/pod's Store (pods/, dict/, index.db siblings).
+func runReindex(args []string, stdout, stderr *os.File) int {
+	fs := flag.NewFlagSet("reindex", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	dataDir := fs.String("data", "", "MedBeads data directory (contains pods/, dict/, index.db)")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *dataDir == "" {
+		fmt.Fprintln(stderr, "medbeadsd reindex: -data <dir> is required")
+		return 2
+	}
+
+	dbPath := filepath.Join(*dataDir, "index.db")
+	db, err := index.Reindex(*dataDir, dbPath, index.DefaultFlattener{})
+	if err != nil {
+		fmt.Fprintf(stderr, "medbeadsd reindex: %v\n", err)
+		return 1
+	}
+	defer db.Close()
+
+	version, err := index.SchemaVersion(db.SQLDB())
+	if err != nil {
+		fmt.Fprintf(stderr, "medbeadsd reindex: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintf(stdout, "medbeadsd reindex: rebuilt %s (schema version %d)\n", dbPath, version)
 	return 0
 }

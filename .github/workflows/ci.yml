@@ -10,17 +10,25 @@ jobs:
   go:
     name: Go
     runs-on: ubuntu-latest
+    env:
+      # index.db uses github.com/mattn/go-sqlite3 (CGO) with the sqlite_fts5
+      # build tag, for FTS5 trigram search (R3.3) and a future sqlite-vec
+      # load path (R4.2). CGO_ENABLED=1 is required to build/test that
+      # driver at all; the tag is required for FTS5 support specifically
+      # (see internal/engine/index's schema migrations).
+      CGO_ENABLED: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: '1.25.x'
+          cache-dependency-path: go.sum
       - name: Build
-        run: go build ./...
+        run: go build -tags sqlite_fts5 ./...
       - name: Vet
-        run: go vet ./...
+        run: go vet -tags sqlite_fts5 ./...
       - name: Test
-        run: go test ./... -race
+        run: go test -tags sqlite_fts5 ./... -race
 
   bench:
     name: bench (uv)

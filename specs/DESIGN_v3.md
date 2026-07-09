@@ -111,8 +111,11 @@ CREATE TABLE bead_antigens (
   PRIMARY KEY (antigen, bead_id)              -- antigen 先頭 = 転置インデックス
 );
 
-CREATE VIRTUAL TABLE beads_fts USING fts5(id UNINDEXED, search_text,
+CREATE VIRTUAL TABLE beads_fts USING fts5(search_text,
   tokenize='trigram', content='');            -- external content、平坦化テキストを索引
+-- 実装補正(R3 実測): contentless FTS5 の UNINDEXED 列は SELECT 不能のため id 列は持たない。
+-- FTS 行の rowid を beads.rowid に明示一致させ JOIN beads ON beads.rowid=beads_fts.rowid で解決
+-- (append-only で DELETE/VACUUM 経路が無いため rowid は安定)
 -- bead_apc_scan / clearance_rules / clearance_audit は v2 踏襲
 -- sqlite-vec の vec0 仮想テーブル（埋め込み、patient_root を partition key に）
 ```
