@@ -24,7 +24,7 @@ func TestRun(t *testing.T) {
 	}{
 		{name: "no args prints usage", args: nil, want: 0},
 		{name: "help flag", args: []string{"-h"}, want: 0},
-		{name: "serve not implemented", args: []string{"serve"}, want: 1},
+		{name: "serve without -data is a usage error", args: []string{"serve"}, want: 2},
 		{name: "verify without -data is a usage error", args: []string{"verify"}, want: 2},
 		{name: "reindex without -data is a usage error", args: []string{"reindex"}, want: 2},
 		{name: "unknown command", args: []string{"bogus"}, want: 1},

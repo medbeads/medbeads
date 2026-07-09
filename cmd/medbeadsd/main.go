@@ -1,9 +1,10 @@
 // Command medbeadsd is the MedBeads v3 single-binary daemon.
 //
 // It is the sole long-running process (see specs/DESIGN_v3.md §2): it hosts
-// the engine, the MCP server, and the REST projection for the UI. At this
-// stage (M1 scaffolding) the subcommands are placeholders; real behavior
-// lands as the engine packages are implemented.
+// the engine, the MCP server, and the REST projection for the UI. `serve`
+// hosts the engine + MCP server (internal/mcpserver, docs/requirements.md
+// R6) over stdio (default) or Streamable HTTP (-http addr); the REST
+// projection for the UI is a later unit's addition to this subcommand.
 package main
 
 import (
@@ -22,7 +23,7 @@ Usage:
   medbeadsd <command>
 
 Commands:
-  serve     Start the daemon (engine + MCP + REST)
+  serve     Start the daemon (engine + MCP; flags: -data <dir> [-role <role>] [-http <addr>])
   verify    Verify Pod/index integrity (flags: -data <dir>)
   reindex   Rebuild index.db from Pod files (source of truth)
 `
@@ -46,8 +47,7 @@ func run(args []string, stdout, stderr *os.File) int {
 	case "reindex":
 		return runReindex(args[1:], stdout, stderr)
 	case "serve":
-		fmt.Fprintf(stderr, "medbeadsd %s: not implemented (M1)\n", cmd)
-		return 1
+		return runServe(args[1:], stdout, stderr)
 	case "-h", "-help", "--help", "help":
 		fmt.Fprint(stdout, usage)
 		return 0
