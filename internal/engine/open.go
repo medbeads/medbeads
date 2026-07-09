@@ -59,8 +59,8 @@ func Open(dataDir string) (*Engine, error) {
 	}
 
 	if err := e.catchUpAll(); err != nil {
-		idx.Close()          //nolint:errcheck
-		lock.release()       //nolint:errcheck
+		idx.Close()    //nolint:errcheck
+		lock.release() //nolint:errcheck
 		return nil, fmt.Errorf("engine: open %s: crash recovery: %w", dataDir, err)
 	}
 

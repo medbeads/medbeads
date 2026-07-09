@@ -1,0 +1,66 @@
+{
+  "_comment": "MedBeads static antigen derivation dictionary. See dictionary.go for the loader and doc.go for the R4.4 LLM-in-offline-review-only policy. DO NOT let an LLM write directly to this file: draft candidate entries offline (LLM-assisted lookup of RxNorm->ATC/organ/risk mappings is fine), then a human reviews the sources and hand-commits the entry below. Once committed, Extract applies this file purely deterministically -- no LLM runs in the ingest path. This is a minimal starter set (Synthea-frequent drugs); extending it is a separate, reviewed process, not part of this unit.",
+  "version": 1,
+  "rxnorm": {
+    "314076": {
+      "display": "lisinopril 10 MG Oral Tablet",
+      "atc": ["atc:c09aa03"],
+      "organ": ["organ:renal", "organ:cardiovascular"],
+      "risk": []
+    },
+    "855332": {
+      "display": "warfarin sodium 5 MG Oral Tablet",
+      "atc": ["atc:b01aa03"],
+      "organ": ["organ:hematologic"],
+      "risk": ["risk:bleeding"]
+    },
+    "309362": {
+      "display": "clopidogrel 75 MG Oral Tablet",
+      "atc": ["atc:b01ac04"],
+      "organ": ["organ:hematologic", "organ:cardiovascular"],
+      "risk": ["risk:bleeding"]
+    },
+    "860975": {
+      "display": "metformin hydrochloride 500 MG Extended Release Oral Tablet",
+      "atc": ["atc:a10ba02"],
+      "organ": ["organ:endocrine", "organ:renal"],
+      "risk": ["risk:hypoglycemia"]
+    },
+    "308192": {
+      "display": "amoxicillin 500 MG Oral Tablet",
+      "atc": ["atc:j01ca04"],
+      "organ": [],
+      "risk": ["risk:infection"]
+    },
+    "824184": {
+      "display": "amoxicillin 250 MG / clavulanate 125 MG [Augmentin]",
+      "atc": ["atc:j01cr02"],
+      "organ": ["organ:hepatic"],
+      "risk": ["risk:infection", "risk:hepatotoxic"]
+    },
+    "1648767": {
+      "display": "nitrofurantoin, macrocrystals 50 MG [Macrodantin]",
+      "atc": ["atc:j01xe01"],
+      "organ": ["organ:renal"],
+      "risk": ["risk:infection"]
+    },
+    "310965": {
+      "display": "ibuprofen 200 MG Oral Tablet",
+      "atc": ["atc:m01ae01"],
+      "organ": ["organ:renal", "organ:gastrointestinal"],
+      "risk": ["risk:nephrotoxic", "risk:bleeding"]
+    },
+    "308056": {
+      "display": "alteplase 1 MG/ML Injectable Solution",
+      "atc": ["atc:b01ad02"],
+      "organ": ["organ:hematologic", "organ:cardiovascular", "organ:neurological"],
+      "risk": ["risk:bleeding"]
+    },
+    "727316": {
+      "display": "epinephrine 0.5 MG/ML Auto-Injector",
+      "atc": ["atc:c01ca24"],
+      "organ": ["organ:cardiovascular"],
+      "risk": []
+    }
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "id": "b736e595-2407-4fe7-8b5c-022d49c02b35",
+  "meta": {
+    "profile": [
+      "http://standardhealthrecord.org/fhir/StructureDefinition/shr-encounter-Encounter"
+    ]
+  },
+  "status": "finished",
+  "class": {
+    "code": "outpatient"
+  },
+  "type": [
+    {
+      "coding": [
+        {
+          "system": "http://snomed.info/sct",
+          "code": "185345009"
+        }
+      ],
+      "text": "Encounter for symptom"
+    }
+  ],
+  "subject": {
+    "reference": "urn:uuid:b7edea5a-03d2-4f3a-88ce-df2c5193d462"
+  },
+  "period": {
+    "start": "2010-12-28T06:38:20-05:00",
+    "end": "2011-07-10T19:35:10-04:00"
+  },
+  "reason": {
+    "coding": [
+      {
+        "system": "http://snomed.info/sct",
+        "code": "10509002",
+        "display": "Acute bronchitis (disorder)"
+      }
+    ]
+  },
+  "serviceProvider": {
+    "reference": "urn:uuid:829f18b7-011b-4e27-b6b0-6adfa6ac493f"
+  },
+  "resourceType": "Encounter"
+}

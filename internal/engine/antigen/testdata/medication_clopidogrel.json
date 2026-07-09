@@ -1,0 +1,18 @@
+{
+  "meta": {
+    "profile": [
+      "http://standardhealthrecord.org/fhir/StructureDefinition/shr-medication-Medication"
+    ]
+  },
+  "code": {
+    "coding": [
+      {
+        "system": "http://www.nlm.nih.gov/research/umls/rxnorm",
+        "code": "309362",
+        "display": "Clopidogrel 75 MG Oral Tablet"
+      }
+    ],
+    "text": "Clopidogrel 75 MG Oral Tablet"
+  },
+  "resourceType": "Medication"
+}

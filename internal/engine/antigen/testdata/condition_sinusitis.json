@@ -1,0 +1,29 @@
+{
+  "id": "0f9dc844-7e95-4829-8bd7-2cc8a1c56146",
+  "meta": {
+    "profile": [
+      "http://standardhealthrecord.org/fhir/StructureDefinition/shr-problem-Problem"
+    ]
+  },
+  "clinicalStatus": "active",
+  "verificationStatus": "confirmed",
+  "code": {
+    "coding": [
+      {
+        "system": "http://snomed.info/sct",
+        "code": "40055000",
+        "display": "Chronic sinusitis (disorder)"
+      }
+    ],
+    "text": "Chronic sinusitis (disorder)"
+  },
+  "subject": {
+    "reference": "urn:uuid:b7edea5a-03d2-4f3a-88ce-df2c5193d462"
+  },
+  "context": {
+    "reference": "urn:uuid:b736e595-2407-4fe7-8b5c-022d49c02b35"
+  },
+  "onsetDateTime": "1998-09-18T07:15:24-04:00",
+  "assertedDate": "1998-09-18",
+  "resourceType": "Condition"
+}

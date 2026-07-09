@@ -1,0 +1,76 @@
+{
+  "id": "fd3e1e76-8311-454e-9c18-12416a3b1ad4",
+  "meta": {
+    "profile": [
+      "http://standardhealthrecord.org/fhir/StructureDefinition/shr-observation-Observation",
+      "http://standardhealthrecord.org/fhir/StructureDefinition/shr-vital-BloodPressure"
+    ]
+  },
+  "status": "final",
+  "category": [
+    {
+      "coding": [
+        {
+          "system": "http://hl7.org/fhir/observation-category",
+          "code": "vital-signs"
+        }
+      ]
+    }
+  ],
+  "code": {
+    "coding": [
+      {
+        "system": "http://loinc.org",
+        "code": "55284-4",
+        "display": "Blood Pressure"
+      }
+    ]
+  },
+  "subject": {
+    "reference": "urn:uuid:b7edea5a-03d2-4f3a-88ce-df2c5193d462"
+  },
+  "context": {
+    "reference": "urn:uuid:145e2174-c299-4ea6-9c20-88a50ab8591a"
+  },
+  "effectiveDateTime": "2012-09-14T19:55:58-04:00",
+  "issued": "2012-09-14T19:55:58-04:00",
+  "component": [
+    {
+      "code": {
+        "coding": [
+          {
+            "system": "http://loinc.org",
+            "code": "8480-6",
+            "display": "Systolic Blood Pressure"
+          }
+        ],
+        "text": "Systolic Blood Pressure"
+      },
+      "valueQuantity": {
+        "value": 181,
+        "unit": "mmHg",
+        "system": "http://unitsofmeasure.org/",
+        "code": "mmHg"
+      }
+    },
+    {
+      "code": {
+        "coding": [
+          {
+            "system": "http://loinc.org",
+            "code": "8462-4",
+            "display": "Diastolic Blood Pressure"
+          }
+        ],
+        "text": "Diastolic Blood Pressure"
+      },
+      "valueQuantity": {
+        "value": 120,
+        "unit": "mmHg",
+        "system": "http://unitsofmeasure.org/",
+        "code": "mmHg"
+      }
+    }
+  ],
+  "resourceType": "Observation"
+}
