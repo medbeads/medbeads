@@ -24,10 +24,14 @@ var (
 )
 
 // DB wraps a database/sql handle to index.db, opened and migrated. All
-// exported methods on DB are safe for concurrent use (database/sql pools
-// connections internally); write methods additionally serialize via SQLite's
-// own locking, matching the "index.db is a rebuildable cache" design (no
-// bespoke in-process write mutex needed beyond what SQLite already does).
+// exported methods on DB are safe for concurrent use: Open caps the
+// underlying connection pool at one open connection (see Open), so
+// database/sql's own connection-checkout queue serializes concurrent callers
+// onto SQLite's single writer rather than relying solely on SQLite's
+// busy-timeout retry to arbitrate between multiple concurrently-open
+// connections (which does not reliably cover every lock-upgrade case — see
+// Open's doc comment). No separate in-process write mutex is layered on top
+// of that; the capped pool is the single serialization point.
 type DB struct {
 	sqlDB *sql.DB
 	path  string
@@ -48,6 +52,24 @@ func Open(path string) (*DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("index: open %s: %w", path, err)
 	}
+
+	// SQLite allows exactly one writer at a time; database/sql's default
+	// pool otherwise opens one *SQLite* connection per concurrent Go
+	// goroutine that needs one. A transaction that reads (e.g. IndexBead's
+	// RegisterPod SELECT) before its first write then tries to upgrade to a
+	// write lock on commit — and under concurrent load from multiple
+	// connections, that upgrade can return SQLITE_BUSY as "database is
+	// locked" in ways _busy_timeout's retry does not reliably absorb (this
+	// was reproduced directly: concurrent IndexBead calls without this line
+	// fail intermittently under -race with exactly that error). Capping the
+	// pool at one open connection makes database/sql itself queue callers
+	// for the single connection — turning "many SQLite connections
+	// contending for one write lock" into "many goroutines waiting for one
+	// Go-level resource", which is both correct and simpler than trying to
+	// out-tune SQLite's own locking. This is a pure availability property of
+	// database/sql's pool (FIFO queuing for a checked-out connection), not
+	// dependent on any particular fairness order.
+	sqlDB.SetMaxOpenConns(1)
 
 	if _, err := sqlDB.Exec("PRAGMA journal_mode = WAL"); err != nil {
 		sqlDB.Close()

@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/medbeads/medbeads/internal/engine/bead"
 	"github.com/medbeads/medbeads/internal/engine/pod"
 )
 
@@ -200,5 +201,151 @@ func TestCatchUp_UnregisteredPod(t *testing.T) {
 		if _, err := db.GetBead(b.ID); err != nil {
 			t.Errorf("GetBead(%s) after CatchUp: %v", b.ID, err)
 		}
+	}
+}
+
+// appendDuplicateFrame writes a second, byte-for-byte-independent frame for
+// the exact same Bead ID directly to podPath, simulating the data-reviewer's
+// reproduction: "Pod append succeeds -> crash before index commit -> retried
+// ingest appends *again* -> crash again", leaving two frames for one
+// content-addressed Bead ID in the same Pod, neither yet indexed. It returns
+// the appended frame's offset for callers that want to reason about which
+// frame (first vs. second) survives indexing.
+func appendDuplicateFrame(t *testing.T, podPath string, dup bead.Bead) int64 {
+	t.Helper()
+	w, err := pod.OpenWriter(podPath)
+	if err != nil {
+		t.Fatalf("appendDuplicateFrame: OpenWriter: %v", err)
+	}
+	defer w.Close()
+
+	res, err := w.Append(dup, pod.CodecZstd, pod.NewMeta(dup.ID))
+	if err != nil {
+		t.Fatalf("appendDuplicateFrame: Append: %v", err)
+	}
+	return res.Offset
+}
+
+// TestCatchUp_DuplicateFrame_SameBeadTwiceInOnePod is the data-reviewer's
+// repro at the index layer: two frames for the same Bead ID exist in one
+// Pod, neither indexed yet (watermark 0). CatchUp must succeed — not fail
+// with "UNIQUE constraint failed: beads.id" — and must leave exactly one
+// beads row (and one beads_fts row) for that ID, pointing at the *first*
+// frame's offset (see write.go's ON CONFLICT DO NOTHING doc comment: the
+// earliest-written frame wins).
+func TestCatchUp_DuplicateFrame_SameBeadTwiceInOnePod(t *testing.T) {
+	dataDir := t.TempDir()
+	store := pod.NewStore(dataDir)
+
+	root, err := bead.WithID(bead.Bead{
+		Type:      "patient_registration",
+		Timestamp: "2026-01-01T00:00:00Z",
+		Content:   map[string]any{"name": "dup-frame patient"},
+	})
+	if err != nil {
+		t.Fatalf("bead.WithID (root): %v", err)
+	}
+	podPath, err := store.EnsurePatientPodDir(root.ID)
+	if err != nil {
+		t.Fatalf("EnsurePatientPodDir: %v", err)
+	}
+
+	w, err := pod.OpenWriter(podPath)
+	if err != nil {
+		t.Fatalf("OpenWriter: %v", err)
+	}
+	firstRes, err := w.Append(root, pod.CodecZstd, pod.NewMeta(root.ID))
+	if err != nil {
+		t.Fatalf("Append (first frame): %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// Second frame: identical content -> identical ID (root re-ingested
+	// after a crash, per the reviewer's scenario). Content-addressing means
+	// this is not a new Bead, just a redundant copy of the same bytes.
+	secondOffset := appendDuplicateFrame(t, podPath, root)
+	if secondOffset == firstRes.Offset {
+		t.Fatal("test precondition failed: second frame did not land at a new offset")
+	}
+
+	db := openT(t)
+	if err := CatchUp(db, podPath); err != nil {
+		t.Fatalf("CatchUp on a pod with a duplicate frame: %v (must recover, not fail permanently)", err)
+	}
+
+	if got := countRows(t, db.sqlDB, "SELECT COUNT(*) FROM beads WHERE id = ?", root.ID); got != 1 {
+		t.Errorf("beads rows for %s = %d, want 1 (no duplicate row)", root.ID, got)
+	}
+	if got := countRows(t, db.sqlDB, "SELECT COUNT(*) FROM beads_fts"); got != 1 {
+		t.Errorf("beads_fts rows = %d, want 1 (no duplicate FTS row)", got)
+	}
+
+	ref, err := db.GetBead(root.ID)
+	if err != nil {
+		t.Fatalf("GetBead(%s): %v", root.ID, err)
+	}
+	if ref.Offset != firstRes.Offset {
+		t.Errorf("GetBead(%s).Offset = %d, want %d (first-written frame must win)", root.ID, ref.Offset, firstRes.Offset)
+	}
+
+	// The watermark must still advance past both frames (the whole Pod is
+	// fully scanned), even though only the first frame produced a row.
+	scan, err := pod.Scan(podPath, false)
+	if err != nil {
+		t.Fatalf("pod.Scan: %v", err)
+	}
+	watermark, err := db.PodWatermark(podPath)
+	if err != nil {
+		t.Fatalf("PodWatermark: %v", err)
+	}
+	if watermark != scan.ValidUpto {
+		t.Errorf("watermark = %d, want %d (pod end, both frames scanned)", watermark, scan.ValidUpto)
+	}
+}
+
+// TestReindex_DuplicateFrame_SameBeadTwiceInOnePod is the same repro as
+// TestCatchUp_DuplicateFrame_SameBeadTwiceInOnePod but through Reindex (the
+// "rebuild index.db from scratch" path, R1.4) rather than CatchUp — the
+// data-reviewer's report specifically named both Open (which drives
+// CatchUp) and reindex as permanently failing before this fix.
+func TestReindex_DuplicateFrame_SameBeadTwiceInOnePod(t *testing.T) {
+	dataDir := t.TempDir()
+	podPath, beads := writeRealPod(t, dataDir)
+	root := beads[0]
+
+	firstScan, err := pod.Scan(podPath, false)
+	if err != nil {
+		t.Fatalf("pod.Scan (before duplicate): %v", err)
+	}
+	_ = appendDuplicateFrame(t, podPath, root)
+
+	db, err := Reindex(dataDir, filepath.Join(dataDir, "index.db"), DefaultFlattener{})
+	if err != nil {
+		t.Fatalf("Reindex on a pod with a duplicate frame: %v (must recover, not fail permanently)", err)
+	}
+	defer db.Close()
+
+	if got := countRows(t, db.sqlDB, "SELECT COUNT(*) FROM beads WHERE id = ?", root.ID); got != 1 {
+		t.Errorf("beads rows for %s = %d, want 1 (no duplicate row)", root.ID, got)
+	}
+	if got := countRows(t, db.sqlDB, "SELECT COUNT(*) FROM beads"); got != len(beads) {
+		t.Errorf("total beads rows = %d, want %d (duplicate frame must not add a row)", got, len(beads))
+	}
+
+	ref, err := db.GetBead(root.ID)
+	if err != nil {
+		t.Fatalf("GetBead(%s): %v", root.ID, err)
+	}
+	// root is beads[0], written first in writeRealPod, so its original
+	// frame's offset (captured before the duplicate append) must still be
+	// what beads.offset points at.
+	wantOffset := int64(0)
+	if firstScan.Records != nil && len(firstScan.Records) > 0 {
+		wantOffset = firstScan.Records[0].Offset
+	}
+	if ref.Offset != wantOffset {
+		t.Errorf("GetBead(%s).Offset = %d, want %d (first-written frame must win)", root.ID, ref.Offset, wantOffset)
 	}
 }

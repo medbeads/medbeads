@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // BeadRef is one row's worth of location + identifying info from beads,
@@ -195,6 +196,54 @@ func (d *DB) GetAntigens(beadID string) ([]string, error) {
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("index: get antigens %s: %w", beadID, err)
+	}
+	return out, nil
+}
+
+// PatientRootsFor resolves the patient_root each of the given Bead IDs was
+// indexed under, as a single IN (...) query rather than one query per ID —
+// this is the "N+1 の根治" building block specs/DESIGN_v3.md §3 calls for at
+// write time: a new Bead's patient_root is derived from its parents' already-
+// indexed patient_root, and a multi-parent Bead must not cost one query per
+// parent to find out.
+//
+// The returned map has one entry per id found in beads (ids not yet indexed
+// are simply absent, not an error — the engine layer's ingest protocol
+// interprets an absent parent as "unknown parent", a distinct condition it
+// checks separately). A value of "" means that id was indexed with a NULL
+// (shared-pod) patient_root.
+func (d *DB) PatientRootsFor(ids []string) (map[string]string, error) {
+	out := make(map[string]string, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+
+	placeholders := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	query := fmt.Sprintf(
+		`SELECT id, COALESCE(patient_root, '') FROM beads WHERE id IN (%s)`,
+		strings.Join(placeholders, ","),
+	)
+
+	rows, err := d.sqlDB.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("index: patient roots for %d ids: %w", len(ids), err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id, root string
+		if err := rows.Scan(&id, &root); err != nil {
+			return nil, fmt.Errorf("index: patient roots for %d ids: scan: %w", len(ids), err)
+		}
+		out[id] = root
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("index: patient roots for %d ids: %w", len(ids), err)
 	}
 	return out, nil
 }

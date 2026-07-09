@@ -65,6 +65,25 @@ func RegisterPod(tx *sql.Tx, podPath string, patientRoot string) (int64, error) 
 // IndexBead does not itself open a transaction — callers (store/ingest,
 // Reindex, CatchUp) own transaction boundaries, since a single logical write
 // may span multiple Beads (e.g. Reindex batches per Pod).
+//
+// # Duplicate-frame idempotency
+//
+// A Pod can legitimately contain two frames for the same Bead ID: a crash
+// between "Pod append + fsync" and "IndexBead commit" (R1.3) leaves the Pod
+// ahead of the index; if the caller retries the same Ingest, Ingest's own
+// duplicate check (querying the index) sees nothing yet indexed and appends
+// a *second* frame for the identical content-addressed Bead before the
+// crashed attempt's frame is ever indexed. CatchUp/Reindex must still be
+// able to index that Pod: beads.id is a stable, content-derived primary
+// key, so the second frame is not new information, only a redundant copy of
+// bytes already accounted for. The beads INSERT below is therefore
+// `ON CONFLICT (id) DO NOTHING`, not a plain INSERT: on conflict, the
+// *first*-written frame's row (whichever one is already indexed) wins, and
+// this call resolves its existing rowid instead of failing. This is a
+// deliberate, append-only-respecting choice — the surviving offset/length
+// always point at the earliest frame in file order, and any subsequent
+// duplicate frame becomes permanently unreachable dead bytes in the Pod
+// (never reclaimed, per this format's no-compaction design), not an error.
 func IndexBead(tx *sql.Tx, b bead.Bead, loc BeadLocation, f Flattener) error {
 	if b.ID == "" {
 		return fmt.Errorf("index: index bead: bead has no ID")
@@ -83,19 +102,40 @@ func IndexBead(tx *sql.Tx, b bead.Bead, loc BeadLocation, f Flattener) error {
 
 	res, err := tx.Exec(
 		`INSERT INTO beads (id, patient_root, type, timestamp, pod_id, offset, length, summary)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT (id) DO NOTHING`,
 		b.ID, root, b.Type, b.Timestamp, podID, loc.Offset, loc.Length, summary,
 	)
 	if err != nil {
 		return fmt.Errorf("index: index bead %s: insert beads: %w", b.ID, err)
 	}
+	rowsAffected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("index: index bead %s: rows affected: %w", b.ID, err)
+	}
+
 	// beadRowID is beads' own implicit SQLite rowid (beads.id is a TEXT
 	// PRIMARY KEY, so it is not a rowid alias) — used below to key
 	// beads_fts, a contentless FTS5 table that can only be joined back to
 	// beads via rowid (see migrations/0001_init.sql).
-	beadRowID, err := res.LastInsertId()
-	if err != nil {
-		return fmt.Errorf("index: index bead %s: last insert id: %w", b.ID, err)
+	var beadRowID int64
+	if rowsAffected == 1 {
+		// The common case: this call actually inserted the row, so
+		// LastInsertId reflects it directly.
+		beadRowID, err = res.LastInsertId()
+		if err != nil {
+			return fmt.Errorf("index: index bead %s: last insert id: %w", b.ID, err)
+		}
+	} else {
+		// ON CONFLICT DO NOTHING: rowsAffected is 0 and LastInsertId is
+		// meaningless here (SQLite does not report it for a no-op upsert
+		// arm) — this is a duplicate frame for an already-indexed Bead ID.
+		// Look up the surviving row's rowid (belonging to whichever frame
+		// was indexed first, per the doc comment above) instead of
+		// treating this as new data.
+		if err := tx.QueryRow(`SELECT rowid FROM beads WHERE id = ?`, b.ID).Scan(&beadRowID); err != nil {
+			return fmt.Errorf("index: index bead %s: resolve existing rowid: %w", b.ID, err)
+		}
 	}
 
 	normalized := bead.Normalize(b)
@@ -118,11 +158,19 @@ func IndexBead(tx *sql.Tx, b bead.Bead, loc BeadLocation, f Flattener) error {
 		}
 	}
 
-	if _, err := tx.Exec(
-		`INSERT INTO beads_fts (rowid, search_text) VALUES (?, ?)`,
-		beadRowID, searchText,
-	); err != nil {
-		return fmt.Errorf("index: index bead %s: insert fts: %w", b.ID, err)
+	// beads_fts is contentless and keyed on beads.rowid (see migrations/
+	// 0001_init.sql): only insert an FTS row the first time this Bead ID is
+	// actually indexed. On a duplicate-frame replay (rowsAffected == 0
+	// above), a row already exists at beadRowID — inserting again would
+	// violate FTS5's own implicit rowid uniqueness and double-count the
+	// Bead in search results.
+	if rowsAffected == 1 {
+		if _, err := tx.Exec(
+			`INSERT INTO beads_fts (rowid, search_text) VALUES (?, ?)`,
+			beadRowID, searchText,
+		); err != nil {
+			return fmt.Errorf("index: index bead %s: insert fts: %w", b.ID, err)
+		}
 	}
 
 	if err := advanceWatermark(tx, podID, loc.Offset+loc.Length); err != nil {

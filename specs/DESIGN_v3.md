@@ -120,6 +120,9 @@ CREATE VIRTUAL TABLE beads_fts USING fts5(search_text,
 -- sqlite-vec の vec0 仮想テーブル（埋め込み、patient_root を partition key に）
 ```
 
+- 実装補正(store 実測): database/sql の複数接続で deferred tx の read→write ロック昇格が
+  SQLITE_BUSY になるため SetMaxOpenConns(1) で直列化(ローカルファースト用途では十分)。
+  将来複数リーダーで性能目標を満たす必要が出たら BEGIN IMMEDIATE + 読み書き接続分離を再検討
 - 検索の患者解決: FTS ヒット → beads.patient_root を IN 1クエリで解決（findPatientRoot 廃止）
 - search_text: 生 JSON ではなく Bead 種別ごとに人間可読テキストへ平坦化
   （例: fhir_medicationrequest → 「メロペネム 1g 点滴静注 8時間毎」）

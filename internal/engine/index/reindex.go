@@ -88,10 +88,19 @@ func reindexPod(db *DB, path string) error {
 // IndexBead transaction committed leaves the Pod ahead of the index;
 // CatchUp resumes cleanly at the byte offset indexed_upto marks, without
 // re-indexing (and so without duplicating rows for) anything already
-// covered — INSERT OR IGNORE on edges/antigens plus the beads primary key
-// makes replaying an already-indexed record from a slightly-stale watermark
-// safe, but CatchUp still starts precisely at the watermark to avoid
-// needless duplicate-row conflict machinery when it isn't needed.
+// covered — INSERT OR IGNORE on edges/antigens, plus IndexBead's beads
+// INSERT ... ON CONFLICT (id) DO NOTHING (see write.go), make replaying an
+// already-indexed record from a slightly-stale watermark safe. This also
+// covers the sharper case of two *distinct frames* for the same Bead ID
+// existing in one Pod (a retried Ingest can append a duplicate frame after
+// a crash before the first frame's IndexBead ever committed, per Ingest's
+// own doc comment): CatchUp/Reindex scan every frame in file order and feed
+// each to IndexBead in turn, so the first frame's row wins the ON CONFLICT
+// arm and the later duplicate frame is recognized as already-indexed rather
+// than erroring the whole Pod's recovery. CatchUp still starts precisely at
+// the watermark (rather than always rescanning from offset 0) to avoid
+// needless duplicate-row conflict machinery on the common, non-crashed
+// path, where it isn't needed.
 //
 // podPath must already have a pods row (i.e. it has been indexed at least
 // once, even if only via RegisterPod) — CatchUp on a never-seen Pod path
