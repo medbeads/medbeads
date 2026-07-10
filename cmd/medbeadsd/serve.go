@@ -52,8 +52,14 @@ func runServe(args []string, stdout, stderr *os.File) int {
 		"async embed indexer (R4.2). Unset (default): semantic search tools return a clear error, and no "+
 		"embed-indexer goroutine is started at all.")
 	embedModel := fs.String("embed-model", embedder.DefaultModel, "model name sent to the -embedder server "+
+		"for PASSAGE (document/search_text) embedding — the async embed indexer's every request "+
 		"(default \"ruri-v3\", cl-nagoya/ruri-v3-310m, 768 dims — must match index.db's migrations/"+
 		"0004_embed.sql vec0 column width)")
+	embedModelQuery := fs.String("embed-model-query", "", "model name sent to the -embedder server for QUERY "+
+		"embedding (retrieve/rag_search's single-string embed calls) — lets an E5-family sidecar apply its "+
+		"query: task-prefix instead of the passage: one -embed-model gets (e.g. -embed-model e5-passage "+
+		"-embed-model-query e5-query). Unset (default): reuses -embed-model's value and its Client instance "+
+		"for query embedding too — today's original single-model-string behavior, unchanged.")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -78,9 +84,8 @@ func runServe(args []string, stdout, stderr *os.File) int {
 	// no embed-indexer goroutine is ever started, preserving this project's
 	// "既存の「常駐 goroutine なし」衛生を維持" decision for every invocation
 	// that does not explicitly ask for one.
-	var embedderClient *embedder.Client
-	if *embedderURL != "" {
-		embedderClient = embedder.New(*embedderURL, *embedModel, nil)
+	passageClient, queryClient := buildEmbedClients(*embedderURL, *embedModel, *embedModelQuery)
+	if passageClient != nil {
 		// StartEmbedIndexer's goroutine is scoped to ctx (the same
 		// SIGINT/SIGTERM shutdown context the MCP/HTTP server below uses),
 		// so it stops at the same point the rest of this process starts
@@ -92,8 +97,9 @@ func runServe(args []string, stdout, stderr *os.File) int {
 		// transaction already in flight completes or rolls back on its own
 		// via the standard database/sql Tx semantics, same as any other
 		// in-flight write this process might have open at shutdown).
-		fmt.Fprintf(stderr, "medbeadsd serve: embed indexer enabled (embedder=%s, model=%s)\n", *embedderURL, *embedModel)
-		eng.StartEmbedIndexer(ctx, embedderClient, engine.EmbedIndexerOptions{})
+		fmt.Fprintf(stderr, "medbeadsd serve: embed indexer enabled (embedder=%s, passage-model=%s, query-model=%s)\n",
+			*embedderURL, passageClient.Model(), queryClient.Model())
+		eng.StartEmbedIndexer(ctx, passageClient, engine.EmbedIndexerOptions{})
 	}
 
 	mcpCfg := mcpserver.Config{
@@ -101,8 +107,8 @@ func runServe(args []string, stdout, stderr *os.File) int {
 		Role:      *role,
 		APCConfig: apc.Default(),
 	}
-	if embedderClient != nil {
-		mcpCfg.Embedder = embedderClient
+	if queryClient != nil {
+		mcpCfg.Embedder = queryClient
 	}
 	srv, err := mcpserver.New(mcpCfg)
 	if err != nil {
@@ -126,6 +132,46 @@ func runServe(args []string, stdout, stderr *os.File) int {
 	}
 
 	return runServeHTTP(ctx, srv, restSrv, *httpAddr, stdout, stderr)
+}
+
+// buildEmbedClients builds the (up to) two embedder.Client values runServe
+// wires up: passage is used for StartEmbedIndexer's batch document
+// (search_text) embedding, query is used for mcpCfg.Embedder's single-string
+// query embedding (retrieve/rag_search). Both are nil if embedderURL is ""
+// (the "-embedder not set" case — no embedder configured at all).
+//
+// query gets its own *embedder.Client only when embedModelQuery is
+// non-empty AND differs from embedModel — otherwise it is literally the same
+// *embedder.Client pointer as passage, which is both a minor allocation
+// saving and, more importantly, the exact behavior this function replaces:
+// before -embed-model-query existed, runServe passed one shared
+// *embedder.Client to both StartEmbedIndexer and mcpCfg.Embedder, so every
+// invocation that leaves -embed-model-query unset (the default) must
+// reproduce that identically — this is what makes the flag backward
+// compatible rather than a behavior change for existing callers.
+//
+// Splitting into two Clients (rather than one Client sending a role flag
+// through some side channel) matters because an E5-family embedding sidecar
+// needs a per-request, wire-visible way to tell a passage embed request from
+// a query one to apply the right task-prefix ("passage: " vs "query: "),
+// and the only field a stock OpenAI-compatible /v1/embeddings request
+// carries for that is `model` — see bench/README.md's "Embedding sidecar"
+// section for the sidecar side of this contract (bench/embed_sidecar's
+// --prefix-mode model_suffix inspects an -query/-passage model-name suffix).
+func buildEmbedClients(embedderURL, embedModel, embedModelQuery string) (passage, query *embedder.Client) {
+	if embedderURL == "" {
+		return nil, nil
+	}
+	passage = embedder.New(embedderURL, embedModel, nil)
+
+	queryModel := embedModelQuery
+	if queryModel == "" {
+		queryModel = embedModel
+	}
+	if queryModel == embedModel {
+		return passage, passage
+	}
+	return passage, embedder.New(embedderURL, queryModel, nil)
 }
 
 // parseCSVEnv reads a comma-separated env var, trimming entries, per
