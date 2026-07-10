@@ -14,7 +14,12 @@ import (
 // duplicated, not re-processed from the start.
 func TestCatchUp_ResumesFromWatermark(t *testing.T) {
 	dataDir := t.TempDir()
+	store := pod.NewStore(dataDir)
 	podPath, beads := writeRealPod(t, dataDir)
+	relPodPath, err := store.RelPath(podPath)
+	if err != nil {
+		t.Fatalf("RelPath: %v", err)
+	}
 
 	db, err := Reindex(dataDir, filepath.Join(dataDir, "index.db"), DefaultFlattener{})
 	if err != nil {
@@ -27,13 +32,16 @@ func TestCatchUp_ResumesFromWatermark(t *testing.T) {
 	}
 
 	// Rewind the watermark to just after the first record (root), as if the
-	// index had crashed after indexing only that one.
+	// index had crashed after indexing only that one. pods.path is stored
+	// dataDir-relative (see index.Reindex's doc comment on this task's
+	// pods.path portability fix), so this raw UPDATE must match on the same
+	// relative form Reindex itself wrote.
 	scan, err := pod.Scan(podPath, true)
 	if err != nil {
 		t.Fatalf("pod.Scan: %v", err)
 	}
 	firstRecordEnd := scan.Records[0].Length
-	if _, err := db.sqlDB.Exec(`UPDATE pods SET indexed_upto = ? WHERE path = ?`, firstRecordEnd, podPath); err != nil {
+	if _, err := db.sqlDB.Exec(`UPDATE pods SET indexed_upto = ? WHERE path = ?`, firstRecordEnd, relPodPath); err != nil {
 		t.Fatalf("rewind watermark: %v", err)
 	}
 
@@ -73,7 +81,7 @@ func TestCatchUp_ResumesFromWatermark(t *testing.T) {
 		}
 	}
 
-	if err := CatchUp(db, podPath); err != nil {
+	if err := CatchUp(db, store, podPath); err != nil {
 		t.Fatalf("CatchUp: %v", err)
 	}
 
@@ -86,7 +94,7 @@ func TestCatchUp_ResumesFromWatermark(t *testing.T) {
 		}
 	}
 
-	watermark, err := db.PodWatermark(podPath)
+	watermark, err := db.PodWatermark(relPodPath)
 	if err != nil {
 		t.Fatalf("PodWatermark: %v", err)
 	}
@@ -100,7 +108,12 @@ func TestCatchUp_ResumesFromWatermark(t *testing.T) {
 // duplicate rows, watermark unchanged).
 func TestCatchUp_IsIdempotent(t *testing.T) {
 	dataDir := t.TempDir()
+	store := pod.NewStore(dataDir)
 	podPath, beads := writeRealPod(t, dataDir)
+	relPodPath, err := store.RelPath(podPath)
+	if err != nil {
+		t.Fatalf("RelPath: %v", err)
+	}
 
 	db, err := Reindex(dataDir, filepath.Join(dataDir, "index.db"), DefaultFlattener{})
 	if err != nil {
@@ -109,17 +122,17 @@ func TestCatchUp_IsIdempotent(t *testing.T) {
 	defer db.Close()
 
 	beforeCount := countRows(t, db.sqlDB, "SELECT COUNT(*) FROM beads")
-	beforeWatermark, err := db.PodWatermark(podPath)
+	beforeWatermark, err := db.PodWatermark(relPodPath)
 	if err != nil {
 		t.Fatalf("PodWatermark (before): %v", err)
 	}
 
-	if err := CatchUp(db, podPath); err != nil {
+	if err := CatchUp(db, store, podPath); err != nil {
 		t.Fatalf("CatchUp (idempotent call): %v", err)
 	}
 
 	afterCount := countRows(t, db.sqlDB, "SELECT COUNT(*) FROM beads")
-	afterWatermark, err := db.PodWatermark(podPath)
+	afterWatermark, err := db.PodWatermark(relPodPath)
 	if err != nil {
 		t.Fatalf("PodWatermark (after): %v", err)
 	}
@@ -142,6 +155,7 @@ func TestCatchUp_IsIdempotent(t *testing.T) {
 // Bead exists in the Pod but not yet in index.db. CatchUp must recover it.
 func TestCatchUp_RecoversCrashOnlyAppendedToPod(t *testing.T) {
 	dataDir := t.TempDir()
+	store := pod.NewStore(dataDir)
 	podPath, beads := writeRealPod(t, dataDir)
 
 	db, err := Reindex(dataDir, filepath.Join(dataDir, "index.db"), DefaultFlattener{})
@@ -169,7 +183,7 @@ func TestCatchUp_RecoversCrashOnlyAppendedToPod(t *testing.T) {
 		t.Fatal("GetBead(crashBead) succeeded before CatchUp, want ErrNotFound (test setup invalid)")
 	}
 
-	if err := CatchUp(db, podPath); err != nil {
+	if err := CatchUp(db, store, podPath); err != nil {
 		t.Fatalf("CatchUp: %v", err)
 	}
 
@@ -186,6 +200,7 @@ func TestCatchUp_RecoversCrashOnlyAppendedToPod(t *testing.T) {
 // index every record, equivalent to indexing from offset 0.
 func TestCatchUp_UnregisteredPod(t *testing.T) {
 	dataDir := t.TempDir()
+	store := pod.NewStore(dataDir)
 	podPath, beads := writeRealPod(t, dataDir)
 
 	db := openT(t)
@@ -194,7 +209,7 @@ func TestCatchUp_UnregisteredPod(t *testing.T) {
 		t.Fatal("PodWatermark before CatchUp succeeded, want ErrNotFound")
 	}
 
-	if err := CatchUp(db, podPath); err != nil {
+	if err := CatchUp(db, store, podPath); err != nil {
 		t.Fatalf("CatchUp (never-seen pod): %v", err)
 	}
 	for _, b := range beads {
@@ -271,7 +286,7 @@ func TestCatchUp_DuplicateFrame_SameBeadTwiceInOnePod(t *testing.T) {
 	}
 
 	db := openT(t)
-	if err := CatchUp(db, podPath); err != nil {
+	if err := CatchUp(db, store, podPath); err != nil {
 		t.Fatalf("CatchUp on a pod with a duplicate frame: %v (must recover, not fail permanently)", err)
 	}
 
@@ -296,7 +311,11 @@ func TestCatchUp_DuplicateFrame_SameBeadTwiceInOnePod(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pod.Scan: %v", err)
 	}
-	watermark, err := db.PodWatermark(podPath)
+	relPodPath, err := store.RelPath(podPath)
+	if err != nil {
+		t.Fatalf("RelPath: %v", err)
+	}
+	watermark, err := db.PodWatermark(relPodPath)
 	if err != nil {
 		t.Fatalf("PodWatermark: %v", err)
 	}

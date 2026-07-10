@@ -79,7 +79,7 @@ func (e *Engine) catchUpAll() error {
 		return fmt.Errorf("list pod files: %w", err)
 	}
 	for _, path := range paths {
-		if err := index.CatchUp(e.idx, path); err != nil {
+		if err := index.CatchUp(e.idx, e.podStore, path); err != nil {
 			return fmt.Errorf("catch up %s: %w", path, err)
 		}
 	}

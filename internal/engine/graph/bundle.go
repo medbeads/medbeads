@@ -109,6 +109,31 @@ func appendUnique(ss []string, v string) []string {
 // pod.ErrCRCMismatch (etc.) if the Pod is damaged — LoadBundle itself never
 // truncates; recovery (pod.Truncate) is a separate, explicit operation
 // (see pod.Scan's doc comment).
+//
+// # Why this does not also re-verify each Bead's content hash (bead.Verify)
+//
+// LoadBundle does NOT run bead.Verify's JCS-canonicalize-then-SHA256 check
+// per Bead. CRC-32C (always on, above) already detects storage corruption
+// of every frame byte — bead_id, core_bytes, and meta_bytes together (see
+// pod's crcTarget) — which is the failure mode a patient bundle read needs
+// to never silently swallow. bead.Verify's JCS re-canonicalization proves a
+// stronger, different property (tamper-evidence: this Bead's content still
+// matches the identity a client trusted), whose designed home is
+// `medbeadsd verify` / the verify_integrity MCP tool (pod.VerifyAll) — a
+// full-store pass that already runs its own self-verify check
+// (sha256(decompress(core_bytes)) == bead_id, cheaper than bead.Verify
+// because core_bytes on disk already *is* bead.Canonicalize's output — see
+// pod.Record.SelfVerify) independently of any single LoadBundle call.
+// Profiling a ~900-Bead patient bundle (docs/requirements.md §7's <10ms
+// target) found bead.Verify's JCS canonicalization to be the dominant cost
+// in this read path (roughly half of LoadBundle's own wall-clock time,
+// ahead of the sequential Pod scan and zstd decompression combined) —
+// paying it again here, per Bead, per bundle load, on top of the store-wide
+// verify pass that already exists, was pure redundant overhead for the
+// default read path this function serves (retrieve / REST / MCP get_bead
+// callers via engine.GetBead, which draws the identical distinction — see
+// its doc comment). Callers that need a stronger inline guarantee than CRC
+// for a specific Bead can still reach for engine.GetBeadVerified.
 func LoadBundle(store *pod.Store, patientRoot string) (*Bundle, error) {
 	if patientRoot == "" {
 		return nil, fmt.Errorf("graph: load bundle: patientRoot must not be empty")
@@ -164,13 +189,16 @@ func LoadBundle(store *pod.Store, patientRoot string) (*Bundle, error) {
 }
 
 // decodeBundleRecord decompresses rec's core_bytes, unmarshals it into a
-// bead.Bead, restores its ID (core_bytes' JCS payload has no "id" field —
-// see bead.Canonicalize), restores its Clearance/Signature from rec.Meta
-// (their designed storage location, since both are excluded from
-// core_bytes — see pod.Meta's doc comment), and verifies the recomputed
-// hash matches. This mirrors engine.decodeBeadRecord (internal/engine/
-// read.go); graph does not import package engine (see doc.go), so the same
-// small decode+verify step is duplicated here rather than shared.
+// bead.Bead, and restores its ID (core_bytes' JCS payload has no "id" field
+// — see bead.Canonicalize) and its Clearance/Signature from rec.Meta (their
+// designed storage location, since both are excluded from core_bytes — see
+// pod.Meta's doc comment). It deliberately does not call bead.Verify — see
+// LoadBundle's doc comment for why the read path skips JCS re-
+// canonicalization and relies on CRC-32C (already checked by pod.Scan
+// before this is called) instead. This mirrors engine.decodeBeadRecord
+// (internal/engine/read.go); graph does not import package engine (see
+// doc.go), so the same small decode step is duplicated here rather than
+// shared.
 func decodeBundleRecord(rec pod.Record) (bead.Bead, error) {
 	plain, err := rec.Decompress()
 	if err != nil {
@@ -183,8 +211,5 @@ func decodeBundleRecord(rec pod.Record) (bead.Bead, error) {
 	b.ID = rec.BeadID
 	b.Clearance = rec.Meta.Clearance
 	b.Signature = rec.Meta.Signature
-	if err := bead.Verify(b); err != nil {
-		return bead.Bead{}, fmt.Errorf("verify: %w", err)
-	}
 	return b, nil
 }

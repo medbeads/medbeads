@@ -48,10 +48,16 @@ func (r *Reader) ReadAtVerified(offset int64) (Record, error) {
 	return readFrameAt(r.f, offset, true)
 }
 
-// readFrameAt is the shared implementation behind ReadAt / ReadAtVerified
-// and Scanner's per-frame step: read the fixed header at offset, then read
-// exactly core_len+meta_len more bytes, decoding into a Record. verifyCRC
-// controls whether the CRC-32C is checked before returning.
+// readFrameAt is the shared implementation behind ReadAt / ReadAtVerified: a
+// single-frame random-access read, used when a caller only wants one known
+// frame (e.g. engine.GetBead resolving one Bead by its indexed offset) and
+// opening+reading the whole Pod file would be wasted work. It costs two
+// ReadAt syscalls (fixed header, then payload) since the payload's length
+// isn't known until the header is decoded. Scan (scanner.go), by contrast,
+// reads a Pod file's entire byte range once up front and parses every frame
+// from that in-memory buffer via decodeFrameFrom — sequential scans do not
+// pay a per-frame syscall, since (unlike this function's single-frame case)
+// they already need almost the whole file's bytes anyway.
 func readFrameAt(f *os.File, offset int64, verifyCRC bool) (Record, error) {
 	headerBuf := make([]byte, frameFixedSize)
 	n, err := f.ReadAt(headerBuf, offset)
@@ -84,6 +90,48 @@ func readFrameAt(f *os.File, offset int64, verifyCRC bool) (Record, error) {
 		}
 	}
 
+	return decodeFrameBytes(offset, h, payloadBuf, verifyCRC)
+}
+
+// decodeFrameFrom parses one frame starting at byte offset within buf (an
+// in-memory copy of an entire Pod file, or at least everything from offset
+// onward) — Scan's per-frame step, avoiding the two ReadAt syscalls
+// readFrameAt needs when reading directly from a file (see Scan's doc
+// comment). Error semantics exactly mirror readFrameAt: ErrShortFrame if buf
+// does not extend far enough past offset to hold a complete frame, wrapping
+// decodeHeader's ErrBadMagic, and ErrCRCMismatch when verifyCRC is true and
+// the check fails.
+func decodeFrameFrom(buf []byte, offset int64, verifyCRC bool) (Record, error) {
+	if offset < 0 || offset >= int64(len(buf)) {
+		return Record{}, fmt.Errorf("%w: no data at offset %d", ErrShortFrame, offset)
+	}
+	remaining := buf[offset:]
+	if int64(len(remaining)) < frameFixedSize {
+		return Record{}, fmt.Errorf("%w: header truncated at offset %d (got %d of %d bytes)",
+			ErrShortFrame, offset, len(remaining), frameFixedSize)
+	}
+	h, err := decodeHeader(remaining[:frameFixedSize])
+	if err != nil {
+		return Record{}, fmt.Errorf("pod: read frame at %d: %w", offset, err)
+	}
+
+	payloadLen := int64(h.CoreLen) + int64(h.MetaLen)
+	payloadAvail := remaining[frameFixedSize:]
+	if int64(len(payloadAvail)) < payloadLen {
+		return Record{}, fmt.Errorf("%w: payload truncated at offset %d (got %d of %d bytes)",
+			ErrShortFrame, offset, len(payloadAvail), payloadLen)
+	}
+	payloadBuf := payloadAvail[:payloadLen]
+
+	return decodeFrameBytes(offset, h, payloadBuf, verifyCRC)
+}
+
+// decodeFrameBytes builds a Record from an already-decoded header h plus its
+// payload bytes (core_bytes||meta_bytes, exactly h.CoreLen+h.MetaLen long),
+// optionally checking the CRC-32C. It is the tail shared by readFrameAt (file
+// ReadAt path) and decodeFrameFrom (Scan's in-memory path) once each has, by
+// its own means, obtained the header and payload bytes.
+func decodeFrameBytes(offset int64, h frameHeader, payloadBuf []byte, verifyCRC bool) (Record, error) {
 	coreBytes := payloadBuf[:h.CoreLen]
 	metaBytes := payloadBuf[h.CoreLen:]
 
@@ -100,6 +148,7 @@ func readFrameAt(f *os.File, offset int64, verifyCRC bool) (Record, error) {
 		return Record{}, fmt.Errorf("pod: read frame at %d: %w", offset, err)
 	}
 
+	payloadLen := int64(h.CoreLen) + int64(h.MetaLen)
 	return Record{
 		BeadID:       hex.EncodeToString(h.BeadID[:]),
 		Codec:        h.Codec(),

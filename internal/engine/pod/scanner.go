@@ -3,6 +3,7 @@ package pod
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 )
 
@@ -39,6 +40,19 @@ type ScanResult struct {
 // damage that truncation would need to address, even though a CRC mismatch
 // in the middle of an otherwise well-formed frame is a different failure
 // mode than a truncated tail — see doc.go).
+//
+// Scan reads the file's entire [0, size) byte range once (size taken from a
+// single Stat call before the read, exactly as before this was optimized)
+// rather than issuing two ReadAt syscalls per frame (header, then payload):
+// a sequential scan needs almost every byte of the file anyway, so one bulk
+// read followed by in-memory frame parsing (decodeFrameFrom) does the same
+// work in one syscall instead of ~2x-the-frame-count syscalls. This matters
+// for graph.LoadBundle, Scan's main perf-sensitive caller (a ~900-frame
+// patient bundle previously cost ~1,800 small ReadAt calls here). A Pod
+// file that shrinks/moves mid-read (e.g. a concurrent Truncate) still
+// behaves the same way it always did: Scan's size snapshot and the actual
+// read can race exactly as the old per-offset ReadAt calls could, and a
+// short read here reports ErrShortFrame as before.
 func Scan(path string, verifyCRC bool) (ScanResult, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -52,10 +66,19 @@ func Scan(path string, verifyCRC bool) (ScanResult, error) {
 	}
 	size := info.Size()
 
+	buf := make([]byte, size)
+	if _, err := io.ReadFull(f, buf); err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+		// A short read here (file shrank between Stat and ReadFull) is
+		// handled below the same way the old per-frame ReadAt path handled
+		// it: whatever bytes did arrive are still parsed frame-by-frame, and
+		// running out mid-frame surfaces as ErrShortFrame at that offset.
+		return ScanResult{}, fmt.Errorf("pod: scan %s: read: %w", path, err)
+	}
+
 	var result ScanResult
 	var offset int64
-	for offset < size {
-		rec, err := readFrameAt(f, offset, verifyCRC)
+	for offset < int64(len(buf)) {
+		rec, err := decodeFrameFrom(buf, offset, verifyCRC)
 		if err != nil {
 			if errors.Is(err, ErrShortFrame) || errors.Is(err, ErrBadMagic) ||
 				errors.Is(err, ErrCRCMismatch) || errors.Is(err, ErrMetaDecode) {

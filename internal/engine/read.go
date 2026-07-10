@@ -9,22 +9,92 @@ import (
 )
 
 // GetBead resolves id's storage location via the index, reads its frame from
-// the owning Pod, decompresses and unmarshals it back into a bead.Bead, and
-// verifies its content hash before returning — a thin read-side mirror of
-// Ingest's write-side guarantees (R3's "読み取り API" scope: no graph
-// traversal here yet, see specs/DESIGN_v3.md §2's graph package for that).
+// the owning Pod (with CRC-32C verification — ReadAtVerified, so storage
+// corruption is always caught), decompresses and unmarshals it back into a
+// bead.Bead — a thin read-side mirror of Ingest's write-side guarantees (R3's
+// "読み取り API" scope: no graph traversal here yet, see specs/DESIGN_v3.md
+// §2's graph package for that).
+//
+// # Why this does not re-verify the content hash (bead.Verify) on every call
+//
+// GetBead does NOT recompute bead.Verify's JCS-canonicalize-then-SHA256
+// check by default. That is a deliberate scope split, not an oversight:
+//
+//   - CRC-32C (always on here) detects storage corruption/bit-rot — accidental
+//     damage to bytes already on disk — cheaply, and covers bead_id/core_bytes/
+//     meta_bytes together (see pod's crcTarget), so a corrupted frame is
+//     always caught before this function returns a Bead built from it.
+//   - bead.Verify's JCS re-canonicalization is a tamper-evidence check: it
+//     proves the returned Bead's content still matches the hash a client
+//     trusted as its identity. That guarantee's designed home is
+//     `medbeadsd verify` / the verify_integrity MCP tool (pod.VerifyAll),
+//     which already runs a full per-frame self-verify pass
+//     (sha256(decompress(core_bytes)) == bead_id — see pod.Record.SelfVerify)
+//     over the entire store; paying that cost again on every single
+//     GetBead call (JCS canonicalization is the expensive part — see
+//     graph.LoadBundle's doc comment) is redundant with that separate,
+//     already-fast, already-run verification path and was the dominant cost
+//     in profiling patient-bundle reads (docs/requirements.md §7's <10ms
+//     target).
+//   - Use GetBeadVerified for the (much rarer) caller that wants the
+//     stronger per-Bead guarantee inline, e.g. an integrity spot-check tool.
+//
+// Residual risk, stated explicitly: CRC-32C detects accidental corruption
+// only. It is a linear code — an adversary who can rewrite raw Pod bytes can
+// also recompute the frame's crc32c field, so deliberate tampering passes
+// this check. Tamper-evidence (sha256 == bead ID) is the job of
+// GetBeadVerified and `medbeadsd verify` / verify_integrity, not of the hot
+// read path.
+//
+// See also graph.LoadBundle's own doc comment for the identical reasoning
+// applied to whole-patient bundle loads.
 func (e *Engine) GetBead(id string) (bead.Bead, error) {
 	ref, err := e.idx.GetBead(id)
 	if err != nil {
 		return bead.Bead{}, fmt.Errorf("engine: get bead %s: %w", id, err)
 	}
-	return readBeadAt(ref.PodPath, ref.Offset)
+	// ref.PodPath is stored dataDir-relative (see index.Reindex/CatchUp's
+	// doc comments on this task's pods.path portability fix); AbsPath joins
+	// it against this Engine's own dataDir (also tolerating a pre-existing
+	// store where pods.path still holds an absolute path from before this
+	// normalization existed — AbsPath passes that through unchanged).
+	b, err := readBeadAt(e.podStore.AbsPath(ref.PodPath), ref.Offset, false)
+	if err != nil {
+		return bead.Bead{}, fmt.Errorf("engine: get bead %s: %w", id, err)
+	}
+	return b, nil
+}
+
+// GetBeadVerified is GetBead plus pod.Record.SelfVerify: after the usual
+// CRC-32C check, it also decompresses core_bytes and checks
+// sha256(core_bytes) == the frame's bead_id, the same self-verification
+// pod.VerifyAll performs (see GetBead's doc comment for why that is not the
+// default). It does not use bead.Verify's JCS re-canonicalization either —
+// SelfVerify is a cheaper, equally-conclusive way to ask the same question,
+// since core_bytes on disk already *is* bead.Canonicalize's output (see
+// pod.Record.SelfVerify's doc comment) — but it is strictly stronger than
+// GetBead's CRC-only default, for callers (e.g. a future per-Bead integrity
+// tool) that want that guarantee on a single read without running a full
+// pod.VerifyAll pass.
+func (e *Engine) GetBeadVerified(id string) (bead.Bead, error) {
+	ref, err := e.idx.GetBead(id)
+	if err != nil {
+		return bead.Bead{}, fmt.Errorf("engine: get bead %s: %w", id, err)
+	}
+	b, err := readBeadAt(e.podStore.AbsPath(ref.PodPath), ref.Offset, true)
+	if err != nil {
+		return bead.Bead{}, fmt.Errorf("engine: get bead %s: %w", id, err)
+	}
+	return b, nil
 }
 
 // ListPatientBeads returns every Bead indexed under patientRoot (the
 // patient_registration Bead's own ID), ordered by timestamp, with each
 // Bead's full content read back from its Pod. patientRoot must be non-empty
-// (per index.DB.ListPatientBeads).
+// (per index.DB.ListPatientBeads). Every frame is read with CRC-32C
+// verification (ReadAtVerified); see GetBead's doc comment for why the
+// (much more expensive) JCS content-hash re-verify is not also run here by
+// default.
 //
 // This reads one frame per Bead via pod.Reader.ReadAt rather than a single
 // bulk sequential Pod scan; specs/DESIGN_v3.md §3 notes a full patient
@@ -52,21 +122,27 @@ func (e *Engine) ListPatientBeads(patientRoot string) ([]bead.Bead, error) {
 	}()
 
 	for _, ref := range refs {
-		r, ok := readers[ref.PodPath]
+		// ref.PodPath is stored dataDir-relative (see index.Reindex/CatchUp's
+		// doc comments); resolve to a real, openable path against this
+		// Engine's own dataDir before using it, and key the reader cache on
+		// that resolved path so it stays correct regardless of what string
+		// form pods.path happens to hold.
+		absPath := e.podStore.AbsPath(ref.PodPath)
+		r, ok := readers[absPath]
 		if !ok {
-			opened, err := pod.OpenReader(ref.PodPath)
+			opened, err := pod.OpenReader(absPath)
 			if err != nil {
-				return nil, fmt.Errorf("engine: list patient beads %s: open %s: %w", patientRoot, ref.PodPath, err)
+				return nil, fmt.Errorf("engine: list patient beads %s: open %s: %w", patientRoot, absPath, err)
 			}
-			readers[ref.PodPath] = opened
+			readers[absPath] = opened
 			r = opened
 		}
 
-		rec, err := r.ReadAt(ref.Offset)
+		rec, err := r.ReadAtVerified(ref.Offset)
 		if err != nil {
-			return nil, fmt.Errorf("engine: list patient beads %s: read %s at %d: %w", patientRoot, ref.PodPath, ref.Offset, err)
+			return nil, fmt.Errorf("engine: list patient beads %s: read %s at %d: %w", patientRoot, absPath, ref.Offset, err)
 		}
-		b, err := decodeBeadRecord(rec)
+		b, err := decodeBeadRecord(rec, false)
 		if err != nil {
 			return nil, fmt.Errorf("engine: list patient beads %s: decode %s: %w", patientRoot, ref.ID, err)
 		}
@@ -75,35 +151,47 @@ func (e *Engine) ListPatientBeads(patientRoot string) ([]bead.Bead, error) {
 	return out, nil
 }
 
-// readBeadAt opens podPath, reads the single frame at offset, and decodes it
-// into a verified bead.Bead. It is GetBead's implementation, factored out so
-// it does not need a long-lived *pod.Reader for a single lookup.
-func readBeadAt(podPath string, offset int64) (bead.Bead, error) {
+// readBeadAt opens podPath, reads the single frame at offset with CRC-32C
+// verification (ReadAtVerified), and decodes it into a bead.Bead —
+// optionally also running pod.Record.SelfVerify if selfVerify is true (see
+// GetBead/GetBeadVerified). It is factored out of both so a single lookup
+// does not need a long-lived *pod.Reader.
+func readBeadAt(podPath string, offset int64, selfVerify bool) (bead.Bead, error) {
 	r, err := pod.OpenReader(podPath)
 	if err != nil {
 		return bead.Bead{}, fmt.Errorf("open %s: %w", podPath, err)
 	}
 	defer r.Close() //nolint:errcheck // read-only handle, nothing to flush
 
-	rec, err := r.ReadAt(offset)
+	rec, err := r.ReadAtVerified(offset)
 	if err != nil {
 		return bead.Bead{}, fmt.Errorf("read %s at %d: %w", podPath, offset, err)
 	}
-	return decodeBeadRecord(rec)
+	return decodeBeadRecord(rec, selfVerify)
 }
 
 // decodeBeadRecord decompresses rec's core_bytes, unmarshals it into a
-// bead.Bead, restores its ID (core_bytes' JCS payload has no "id" field —
-// see bead.Canonicalize), restores its Clearance/Signature from rec.Meta
-// (the hash-excluded fields' designed storage location — see pod.Meta's doc
-// comment), and verifies the recomputed hash matches — the read-side half
-// of the tamper-evidence guarantee. Verify never looks at Clearance/
-// Signature (bead.Verify's own doc comment), so restoring them here cannot
-// affect the hash check either way.
-func decodeBeadRecord(rec pod.Record) (bead.Bead, error) {
+// bead.Bead, and restores its ID (core_bytes' JCS payload has no "id" field
+// — see bead.Canonicalize) and its Clearance/Signature from rec.Meta (the
+// hash-excluded fields' designed storage location — see pod.Meta's doc
+// comment).
+//
+// If selfVerify is true, it also runs rec.SelfVerify (decompress + SHA-256
+// == bead_id) before returning — see GetBead/GetBeadVerified's doc comments
+// for when a caller should ask for that. It deliberately never calls
+// bead.Verify (the JCS-re-canonicalize content-hash check): that check is
+// this function's caller's responsibility to opt into at the coarser
+// granularity of which entry point it used, not something decodeBeadRecord
+// itself should default to paying on every read.
+func decodeBeadRecord(rec pod.Record, selfVerify bool) (bead.Bead, error) {
 	plain, err := rec.Decompress()
 	if err != nil {
 		return bead.Bead{}, fmt.Errorf("decompress: %w", err)
+	}
+	if selfVerify {
+		if err := rec.SelfVerify(); err != nil {
+			return bead.Bead{}, fmt.Errorf("self-verify: %w", err)
+		}
 	}
 	var b bead.Bead
 	if err := json.Unmarshal(plain, &b); err != nil {
@@ -112,8 +200,5 @@ func decodeBeadRecord(rec pod.Record) (bead.Bead, error) {
 	b.ID = rec.BeadID
 	b.Clearance = rec.Meta.Clearance
 	b.Signature = rec.Meta.Signature
-	if err := bead.Verify(b); err != nil {
-		return bead.Bead{}, fmt.Errorf("verify: %w", err)
-	}
 	return b, nil
 }

@@ -1,6 +1,8 @@
 package pod
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -130,4 +132,40 @@ type Record struct {
 // (verify.go) rather than re-deriving it themselves.
 func (r Record) Decompress() ([]byte, error) {
 	return decompress(r.Codec, r.CoreBytes)
+}
+
+// SelfVerify decompresses r.CoreBytes and checks that sha256(plain) equals
+// r.BeadID, returning ErrSelfVerifyMismatch if not. It is the same check
+// VerifyPod/verifyRecord performs on every frame during a full-Pod verify
+// pass, exposed here so a single-Record reader (engine.GetBead,
+// graph.LoadBundle) can opt into it too without duplicating the hex-decode +
+// hash-compare logic.
+//
+// This is deliberately NOT bead.Verify: bead.Verify re-derives core_bytes'
+// exact on-disk form from a decoded bead.Bead struct via JCS re-
+// canonicalization (json.Marshal + jcs.Transform), which is redundant work
+// on a read path — core_bytes already *is* bead.Canonicalize's output,
+// compressed (see writer.go's Append and doc.go's frame-format notes).
+// SelfVerify instead hashes the raw decompressed bytes directly, which is
+// the cheaper of the two ways to ask the same question ("does this frame's
+// content still match the ID it claims"). See package engine's read.go and
+// package graph's bundle.go doc comments for why callers may skip even this
+// on the default read path (CRC-32C, always checked separately via
+// ReadAtVerified/pod.Scan(verifyCRC=true), already binds bead_id to
+// core_bytes at the frame level for corruption-detection purposes).
+func (r Record) SelfVerify() error {
+	decoded, err := hex.DecodeString(r.BeadID)
+	if err != nil || len(decoded) != idFieldSize {
+		return fmt.Errorf("pod: self-verify: malformed bead_id %q", r.BeadID)
+	}
+	plain, err := r.Decompress()
+	if err != nil {
+		return fmt.Errorf("pod: self-verify: decompress: %w", err)
+	}
+	sum := sha256.Sum256(plain)
+	got := hex.EncodeToString(sum[:])
+	if got != r.BeadID {
+		return fmt.Errorf("%w: bead_id=%s recomputed=%s", ErrSelfVerifyMismatch, r.BeadID, got)
+	}
+	return nil
 }

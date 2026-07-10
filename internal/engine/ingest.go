@@ -90,8 +90,17 @@ func (e *Engine) Ingest(b bead.Bead) (bead.Bead, error) {
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback after commit is a no-op
 
+	// pods.path is stored dataDir-relative (Store.RelPath), not as podPath's
+	// own (possibly relative-to-cwd, possibly absolute) form — see this
+	// task's pods.path portability fix: a stored path must remain valid
+	// regardless of which cwd or dataDir-absolute-location a later process
+	// reopens this data directory from.
+	relPodPath, err := e.podStore.RelPath(podPath)
+	if err != nil {
+		return bead.Bead{}, fmt.Errorf("engine: ingest %s: %w", b.ID, err)
+	}
 	loc := index.BeadLocation{
-		PodPath:     podPath,
+		PodPath:     relPodPath,
 		PatientRoot: patientRoot,
 		Offset:      res.Offset,
 		Length:      res.Length,

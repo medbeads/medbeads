@@ -31,6 +31,13 @@ const batchSize = 500
 // recompute or guess it; the frame meta a prior write recorded is
 // authoritative for reconstruction purposes.
 //
+// pods.path is stored dataDir-relative (Store.RelPath), not as whatever
+// literal path string dataDir happened to be passed in as, so a data
+// directory reindexed from a relative -data flag (e.g. `-data ./foo`) still
+// opens correctly from a process with a different working directory later
+// (see this task's pods.path portability fix; engine.GetBead/ListPatientBeads
+// resolve pods.path back via Store.AbsPath before opening a Pod file).
+//
 // f flattens each Bead into search_text/summary; pass DefaultFlattener{} for
 // the generic fallback (see flatten.go) until a type-specific Flattener
 // exists.
@@ -52,7 +59,7 @@ func Reindex(dataDir, dbPath string, f Flattener) (*DB, error) {
 	}
 
 	for _, path := range paths {
-		if err := reindexPod(db, path); err != nil {
+		if err := reindexPod(db, store, path); err != nil {
 			db.Close()
 			return nil, fmt.Errorf("index: reindex: %w", err)
 		}
@@ -75,10 +82,10 @@ func removeDBFiles(dbPath string) error {
 
 // reindexPod scans one Pod file and indexes every record it contains,
 // starting from watermark 0 (a full rebuild always starts at the
-// beginning) — see catchUpPod for the incremental/resume variant this
-// shares its core loop with.
-func reindexPod(db *DB, path string) error {
-	return indexPodFrom(db, path, 0)
+// beginning) — see CatchUp for the incremental/resume variant this shares
+// its core loop with.
+func reindexPod(db *DB, store *pod.Store, path string) error {
+	return indexPodFrom(db, store, path, 0)
 }
 
 // CatchUp advances the index for a single Pod from its current
@@ -104,16 +111,27 @@ func reindexPod(db *DB, path string) error {
 //
 // podPath must already have a pods row (i.e. it has been indexed at least
 // once, even if only via RegisterPod) — CatchUp on a never-seen Pod path
-// registers it fresh, equivalent to indexing from offset 0.
-func CatchUp(db *DB, podPath string) error {
-	watermark, err := db.PodWatermark(podPath)
+// registers it fresh, equivalent to indexing from offset 0. store must be
+// rooted at the same data directory podPath lives under: CatchUp looks up
+// and stores pods.path in store.RelPath's dataDir-relative form (see
+// Reindex's doc comment on why), so PodWatermark's lookup and this call's
+// eventual RegisterPod/IndexBead writes stay keyed on the same string form
+// pods.path already holds, regardless of what literal path string podPath
+// itself is (absolute, or relative to whatever cwd the caller resolved it
+// from).
+func CatchUp(db *DB, store *pod.Store, podPath string) error {
+	relPath, err := store.RelPath(podPath)
+	if err != nil {
+		return fmt.Errorf("index: catch up %s: %w", podPath, err)
+	}
+	watermark, err := db.PodWatermark(relPath)
 	if err != nil {
 		if !errors.Is(err, ErrNotFound) {
 			return fmt.Errorf("index: catch up %s: %w", podPath, err)
 		}
 		watermark = 0
 	}
-	if err := indexPodFrom(db, podPath, watermark); err != nil {
+	if err := indexPodFrom(db, store, podPath, watermark); err != nil {
 		return fmt.Errorf("index: catch up %s: %w", podPath, err)
 	}
 	return nil
@@ -127,7 +145,11 @@ func CatchUp(db *DB, podPath string) error {
 // reimplementing "seek to a frame boundary" outside the pod package; per
 // DESIGN §3 a single patient Pod is small (~300-500KB compressed), so a full
 // re-scan is cheap even when only the tail is new.
-func indexPodFrom(db *DB, path string, fromOffset int64) error {
+//
+// store (rooted at podPath's data directory) is threaded through to
+// indexBatch so every BeadLocation.PodPath it builds is stored dataDir-
+// relative, not as podPath's own literal form — see Reindex's doc comment.
+func indexPodFrom(db *DB, store *pod.Store, path string, fromOffset int64) error {
 	scan, err := pod.Scan(path, true)
 	if err != nil {
 		return fmt.Errorf("scan %s: %w", path, err)
@@ -143,14 +165,14 @@ func indexPodFrom(db *DB, path string, fromOffset int64) error {
 		}
 		pending = append(pending, rec)
 		if len(pending) >= batchSize {
-			if err := indexBatch(db, path, pending); err != nil {
+			if err := indexBatch(db, store, path, pending); err != nil {
 				return fmt.Errorf("index %s: %w", path, err)
 			}
 			pending = pending[:0]
 		}
 	}
 	if len(pending) > 0 {
-		if err := indexBatch(db, path, pending); err != nil {
+		if err := indexBatch(db, store, path, pending); err != nil {
 			return fmt.Errorf("index %s: %w", path, err)
 		}
 	}
@@ -161,7 +183,14 @@ func indexPodFrom(db *DB, path string, fromOffset int64) error {
 // file in one transaction: decode each frame's Bead JSON, run IndexBead, and
 // commit once. A decode/index failure aborts and rolls back the whole batch
 // (partial application of a batch would leave the watermark ambiguous).
-func indexBatch(db *DB, podPath string, records []pod.Record) error {
+// podPath is converted to store.RelPath's dataDir-relative form before being
+// recorded as BeadLocation.PodPath (see Reindex's doc comment).
+func indexBatch(db *DB, store *pod.Store, podPath string, records []pod.Record) error {
+	relPodPath, err := store.RelPath(podPath)
+	if err != nil {
+		return err
+	}
+
 	tx, err := db.sqlDB.Begin()
 	if err != nil {
 		return fmt.Errorf("begin: %w", err)
@@ -175,7 +204,7 @@ func indexBatch(db *DB, podPath string, records []pod.Record) error {
 			return fmt.Errorf("decode record at offset %d: %w", rec.Offset, err)
 		}
 		loc := BeadLocation{
-			PodPath:     podPath,
+			PodPath:     relPodPath,
 			PatientRoot: rec.Meta.PatientRoot,
 			Offset:      rec.Offset,
 			Length:      rec.Length,

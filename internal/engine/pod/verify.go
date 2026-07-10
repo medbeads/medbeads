@@ -1,7 +1,6 @@
 package pod
 
 import (
-	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 )
@@ -171,7 +170,8 @@ func VerifyAll(store *Store) (Report, error) {
 
 // verifyRecord checks one already-parsed frame's CRC-32C (recomputed over
 // the exact on-disk bead_id/core_bytes/meta_bytes retained on rec) and its
-// self-verification: sha256(decompress(core_bytes)) must equal bead_id.
+// self-verification: sha256(decompress(core_bytes)) must equal bead_id (see
+// Record.SelfVerify).
 func verifyRecord(rec Record) FrameResult {
 	fr := FrameResult{Offset: rec.Offset, BeadID: rec.BeadID}
 
@@ -190,16 +190,8 @@ func verifyRecord(rec Record) FrameResult {
 		return fr
 	}
 
-	plain, err := rec.Decompress()
-	if err != nil {
-		fr.Err = fmt.Errorf("pod: verify: decompress core_bytes at offset %d: %w", rec.Offset, err)
-		return fr
-	}
-	sum := sha256.Sum256(plain)
-	gotHash := hex.EncodeToString(sum[:])
-	if gotHash != rec.BeadID {
-		fr.Err = fmt.Errorf("%w: at offset %d: bead_id=%s recomputed=%s",
-			ErrSelfVerifyMismatch, rec.Offset, rec.BeadID, gotHash)
+	if err := rec.SelfVerify(); err != nil {
+		fr.Err = fmt.Errorf("%w: at offset %d", err, rec.Offset)
 		return fr
 	}
 

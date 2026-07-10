@@ -86,7 +86,18 @@ func writeRealPod(t *testing.T, dataDir string) (podPath string, beads []bead.Be
 // would have produced.
 func TestReindex_MatchesManualIndexBead(t *testing.T) {
 	dataDir := t.TempDir()
+	store := pod.NewStore(dataDir)
 	podPath, beads := writeRealPod(t, dataDir)
+	// pods.path is stored dataDir-relative by every real write path
+	// (engine.Ingest / index.Reindex / index.CatchUp — see this task's
+	// pods.path portability fix); this hand-built "reference" DB call must
+	// match that convention too, or this test would only be proving Reindex
+	// matches an already-nonstandard manual construction rather than a real
+	// write path's actual behavior.
+	relPodPath, err := store.RelPath(podPath)
+	if err != nil {
+		t.Fatalf("RelPath: %v", err)
+	}
 
 	// --- reference DB: manual IndexBead calls, mirroring what a live
 	// store/ingest layer would have done at write time. ---
@@ -112,7 +123,7 @@ func TestReindex_MatchesManualIndexBead(t *testing.T) {
 			t.Fatalf("decodeRecordBead: %v", err)
 		}
 		indexBeadT(t, refDB, b, BeadLocation{
-			PodPath:     podPath,
+			PodPath:     relPodPath,
 			PatientRoot: rec.Meta.PatientRoot,
 			Offset:      rec.Offset,
 			Length:      rec.Length,
@@ -194,7 +205,7 @@ func TestReindex_MatchesManualIndexBead(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pod.Scan (size check): %v", err)
 	}
-	gotWatermark, err := reDB.PodWatermark(podPath)
+	gotWatermark, err := reDB.PodWatermark(relPodPath)
 	if err != nil {
 		t.Fatalf("reDB.PodWatermark: %v", err)
 	}

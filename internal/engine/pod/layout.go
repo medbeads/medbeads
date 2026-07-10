@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/medbeads/medbeads/internal/engine/bead"
 )
@@ -84,6 +85,47 @@ func (s *Store) EnsurePodsDir() error {
 		return fmt.Errorf("pod: ensure pods dir: %w", err)
 	}
 	return nil
+}
+
+// RelPath returns path expressed relative to s.dataDir (e.g.
+// "pods/ab/....pod"), for callers that persist a Pod path somewhere durable
+// (index.db's pods.path column — see index.RegisterPod) and need that
+// stored value to remain valid regardless of the current working directory
+// or dataDir's own absolute location a future process opens it from (this
+// package's own PatientPodPath/SharedPodPath/ListPodFiles all build paths by
+// joining s.dataDir with a pods/... suffix, so they are exactly as portable
+// as dataDir itself was when the Store was constructed — RelPath strips
+// that dataDir prefix back off so a stored path can be re-joined against
+// whatever dataDir a later process actually used, per AbsPath).
+//
+// path must be under s.dataDir (as every path this package itself
+// constructs always is); a path outside dataDir is a caller bug and returns
+// an error rather than a "../"-laden relative path that would silently
+// resolve somewhere unexpected once re-joined by AbsPath.
+func (s *Store) RelPath(path string) (string, error) {
+	rel, err := filepath.Rel(s.dataDir, path)
+	if err != nil {
+		return "", fmt.Errorf("pod: rel path: %s relative to %s: %w", path, s.dataDir, err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("pod: rel path: %s is not under data dir %s", path, s.dataDir)
+	}
+	return filepath.ToSlash(rel), nil
+}
+
+// AbsPath resolves a path previously produced by RelPath (or, for backward
+// compatibility with a store that already has absolute paths recorded in
+// pods.path from before this normalization existed — see this task's data-
+// reviewer note — an already-absolute path, returned unchanged) against
+// s.dataDir. It is RelPath's inverse: a caller reading pods.path back out of
+// index.db should always route it through AbsPath before opening the file,
+// so a data directory opened via a different cwd (or moved) than whichever
+// process originally wrote that row still resolves to the right file.
+func (s *Store) AbsPath(storedPath string) string {
+	if filepath.IsAbs(storedPath) {
+		return storedPath
+	}
+	return filepath.Join(s.dataDir, filepath.FromSlash(storedPath))
 }
 
 // ListPodFiles walks PodsDir and returns the path of every *.pod file found
