@@ -26,6 +26,7 @@ Commands:
   serve     Start the daemon (engine + MCP; flags: -data <dir> [-role <role>] [-http <addr>])
   verify    Verify Pod/index integrity (flags: -data <dir>)
   reindex   Rebuild index.db from Pod files (source of truth)
+  apc       Run the APC batch scanner (flags: -data <dir> [-patient <root>])
 `
 
 func main() {
@@ -46,6 +47,8 @@ func run(args []string, stdout, stderr *os.File) int {
 		return runVerify(args[1:], stdout, stderr)
 	case "reindex":
 		return runReindex(args[1:], stdout, stderr)
+	case "apc":
+		return runApc(args[1:], stdout, stderr)
 	case "serve":
 		return runServe(args[1:], stdout, stderr)
 	case "-h", "-help", "--help", "help":
