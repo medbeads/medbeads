@@ -7,11 +7,44 @@ layout.
 - `ingest/` — Synthea FHIR → Bead ingestion, with deterministic ground-truth generation
 - `scenarios/` — clinical question YAML (patient ID, question, answer, evidence Bead IDs, category, reasoning type)
 - `retrieval/` — Retriever interface implementations: `rag.py` / `fts.py` / `dag_nosib.py` / `dag.py` (4 arms)
-- `llm/` — shared Claude/Gemini client (fixed temperature/seed, all round-trips logged as JSONL)
-- `metrics/` — token efficiency, latency, recall/precision@budget, hallucination rate, causal-order agreement
-- `runs/` — run manifests (git commit, config hash, dataset Merkle fingerprint, model version)
+- `llm/` — Claude client (`temperature=0` fixed, all round-trips logged as JSONL)
+- `metrics/` — token efficiency, recall/precision@budget, hallucination rate, causal-order agreement
+- `run/` — `uv run python -m bench.run` orchestration: scenarios x arms sweep, resumable, writes
+  `results.jsonl` / `run_manifest.json` / `summary.json`
 
 `bench/` talks to core only via MCP/REST (see requirements R8.5).
+
+## LLM evaluation harness (`bench/llm`, `bench/metrics`, `bench/run` — M2 Step 3b)
+
+```bash
+cd bench
+uv run python -m bench.run \
+  --scenarios path/to/scenarios.yaml --data-dir path/to/data \
+  --medbeadsd path/to/medbeadsd --embedder http://127.0.0.1:18100 \
+  --arms rag,fts,dag_nosib,dag_full --budget 2000 --out runs/<name>/
+```
+
+Add `--fake-llm` for a dry run with no network calls/billing (deterministic,
+context-only synthesized answers). Real runs call the Anthropic API and are
+billed — `ANTHROPIC_API_KEY` must be set in the environment.
+
+**Cost/scale caveat**: the hallucination judge (`bench/bench/metrics/hallucination.py`)
+builds its `FULL_RECORD` pool by rendering **every** Bead in a patient's
+`get_timeline` (no truncation, no token budget applied) — for a patient with a
+large timeline this can be a very large judge prompt, both risking the
+judge model's own context window and multiplying per-scenario judge-call
+cost. `--no-judge` disables this pool entirely (retrieval/token metrics
+only) as a cheaper fallback; a token-budgeted/sampled `FULL_RECORD` is not
+yet implemented and should be sized before running against large-timeline
+patients at scale.
+
+**PHI caveat**: `--out`'s `llm_transcript.jsonl` (via `bench.llm.TranscriptLogger`)
+and `results.jsonl` both contain full prompt/response text, i.e. every
+context Bead's rendered content, verbatim. This is safe against the
+Synthea synthetic dataset this harness is built for. If this pipeline is
+ever pointed at real patient data, these files become PHI-bearing
+artifacts and need an explicit access-control/retention policy before any
+run — none exists today, since M2's scope is the synthetic benchmark only.
 
 ## Dataset: Synthea 1,000 patients (generated 2026-07-10)
 

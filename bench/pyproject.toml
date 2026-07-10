@@ -5,6 +5,7 @@ description = "MedBeads MICCAI experiment harness (M2)"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "anthropic>=0.116.0",
     "fastapi>=0.139.0",
     "mcp>=1.28.1",
     "pyyaml>=6.0.3",
