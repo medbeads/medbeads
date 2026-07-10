@@ -30,10 +30,33 @@ class MedBeadsClient:
     privilege is the right default for a harness that never needs to write.
     """
 
-    def __init__(self, medbeadsd_path: Path, data_dir: Path, *, role: str = "system") -> None:
+    def __init__(
+        self,
+        medbeadsd_path: Path,
+        data_dir: Path,
+        *,
+        role: str = "system",
+        embedder_url: str | None = None,
+        embed_model: str | None = None,
+        embed_model_query: str | None = None,
+    ) -> None:
+        args = ["serve", "-data", str(data_dir), "-role", role]
+        # embedder_url is additive/opt-in (bench/README.md's "Embedding
+        # sidecar" invocation): omitting it reproduces the exact args this
+        # client has always passed, so every existing caller (bench.ingest,
+        # bench.perf) is unaffected. Needed by bench.retrieval's rag/dag_full/
+        # dag_nosib arms (R8.2), which require retrieve(semantic=true)/
+        # rag_search — both tool-level errors without -embedder configured
+        # server-side (see internal/mcpserver/retrieve.go's own check).
+        if embedder_url:
+            args += ["-embedder", embedder_url]
+            if embed_model:
+                args += ["-embed-model", embed_model]
+            if embed_model_query:
+                args += ["-embed-model-query", embed_model_query]
         self._params = StdioServerParameters(
             command=str(medbeadsd_path),
-            args=["serve", "-data", str(data_dir), "-role", role],
+            args=args,
         )
         self._stack: AsyncExitStack | None = None
         self._session: ClientSession | None = None
@@ -130,12 +153,26 @@ class MedBeadsClient:
         query: str = "",
         patient_id: str = "",
         token_budget: int | None = None,
+        semantic: bool | None = None,
+        include_siblings: bool | None = None,
+        chain_depth: int | None = None,
+        antigens: list[str] | None = None,
+        types: list[str] | None = None,
     ) -> dict[str, Any]:
         """Call the unified `retrieve` tool (R6.2, internal/mcpserver/retrieve.go),
         returning its full structuredContent (anchor_ids/items/truncated_refs/
         budget_tokens/used_tokens — see retrieveOut). Used by bench.perf to
         measure the "context bundle p95 <500ms" target
-        (docs/requirements.md §7); ingest itself never calls this.
+        (docs/requirements.md §7), and by bench.retrieval's dag_nosib/dag_full
+        arms (R8.2), which set semantic=True and toggle include_siblings.
+
+        semantic/include_siblings/chain_depth/antigens/types are additive,
+        opt-in parameters (omitting them reproduces exactly the args this
+        method has always sent) — include_siblings maps to retrieveIn's
+        `include_siblings` *bool field
+        (internal/mcpserver/retrieve.go), whose Go-side default (True) is
+        used whenever this Python method's own default (None) is passed
+        through unset.
         """
         args: dict[str, Any] = {}
         if query:
@@ -144,4 +181,66 @@ class MedBeadsClient:
             args["patient_id"] = patient_id
         if token_budget is not None:
             args["token_budget"] = token_budget
+        if semantic is not None:
+            args["semantic"] = semantic
+        if include_siblings is not None:
+            args["include_siblings"] = include_siblings
+        if chain_depth is not None:
+            args["chain_depth"] = chain_depth
+        if antigens:
+            args["antigens"] = antigens
+        if types:
+            args["types"] = types
         return await self.call_tool("retrieve", args)
+
+    async def search_beads(
+        self,
+        *,
+        query: str,
+        patient_id: str = "",
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Call `search_beads` (FTS5 trigram, internal/mcpserver/tools_read.go's
+        searchBeads): returns beadRefs (id/patient_root/type/timestamp/summary
+        — no content). Used by bench.retrieval's fts arm (R8.2), which must
+        then get_bead each hit for its L0 content, mirroring rag_search's
+        richer response shape but via the two-call FTS path search_beads
+        itself deliberately keeps thin (see searchBeadsOut's doc comment).
+        """
+        args: dict[str, Any] = {"query": query}
+        if patient_id:
+            args["patient_id"] = patient_id
+        if limit is not None:
+            args["limit"] = limit
+        out = await self.call_tool("search_beads", args)
+        return out.get("results", [])
+
+    async def rag_search(
+        self,
+        *,
+        query: str,
+        patient_id: str = "",
+        k: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Call `rag_search` (R6.3, pure vector top-k, internal/mcpserver/
+        rag_search.go): returns each hit's full L0 content plus vector
+        distance directly (no follow-up get_bead needed, unlike
+        search_beads). Used by bench.retrieval's rag arm (R8.2).
+        """
+        args: dict[str, Any] = {"query": query}
+        if patient_id:
+            args["patient_id"] = patient_id
+        if k is not None:
+            args["k"] = k
+        out = await self.call_tool("rag_search", args)
+        return out.get("results", [])
+
+    async def apc_trigger(self) -> dict[str, Any]:
+        """Call `apc_trigger` (system role only, internal/mcpserver/
+        tools_write.go): runs one apc.Scanner.Scan pass, durably ingesting any
+        new sibling_link Beads it finds. Used by bench's scratch-data test
+        setup (and bench.ingest's future `bench run` orchestration, R8.4) to
+        produce real sibling_link data via MCP only, per R8.5 — never by
+        importing internal/engine/apc directly.
+        """
+        return await self.call_tool("apc_trigger", {})
