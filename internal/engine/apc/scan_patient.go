@@ -29,6 +29,8 @@ func (s *Scanner) ScanPatient(root string) (Result, error) {
 		return Result{}, fmt.Errorf("apc: scan patient: root must not be empty")
 	}
 
+	s.beginBatch()
+
 	anchors, err := s.unscannedBeadsForPatient(root)
 	if err != nil {
 		return Result{}, fmt.Errorf("apc: scan patient %s: %w", root, err)

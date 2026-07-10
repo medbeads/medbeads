@@ -1,0 +1,78 @@
+-- Migration 0005: patient-scoped composite index on bead_antigens
+-- (specs/DESIGN_v3.md §7's "bead_antigens を (antigen, patient_root) で引く
+-- ため患者内で完結" — the index this depends on did not actually exist until
+-- now).
+--
+-- # The bug this fixes
+--
+-- bead_antigens' only index was its PRIMARY KEY (antigen, bead_id) —
+-- antigen-first. That serves package apc's candidateRows join fine (it
+-- always has a specific antigen to seek on), but package apc's
+-- frequentAntigens (the IDF-filter runaway-prevention-d computation, called
+-- once per anchor Bead via candidatesFor) filters by patient_root with no
+-- antigen bound at all:
+--
+--   SELECT COUNT(DISTINCT bead_id) FROM bead_antigens WHERE patient_root = ?
+--   SELECT antigen, COUNT(DISTINCT bead_id) FROM bead_antigens
+--     WHERE patient_root = ? GROUP BY antigen
+--
+-- Neither query can seek on the antigen-first PK (patient_root is not its
+-- leading column), so both fell back to a full SCAN of every bead_antigens
+-- row in the store — 1.57M rows at the 96万-Bead / 1,135-patient real-store
+-- scale this bug was found at — repeated once per anchor Bead in a patient's
+-- ScanPatient call (~900 anchors for a typical patient). Measured directly
+-- against a copy of that real store (EXPLAIN QUERY PLAN confirmed "SCAN
+-- bead_antigens" for both queries before this migration): each call pair
+-- cost ~1.7s + ~2.3s on a semi-cold page cache, and even on a warm cache the
+-- full 1.57M-row scan dominates ScanPatient's per-anchor cost, matching the
+-- observed ~0.5 beads/sec full-scan rate (a multi-week ETA for 96万 Beads).
+--
+-- idx_bead_antigens_patient(patient_root, antigen, bead_id) is a covering
+-- index for both frequentAntigens queries (EXPLAIN QUERY PLAN after this
+-- migration: "SEARCH bead_antigens USING COVERING INDEX
+-- idx_bead_antigens_patient (patient_root=?)" for both, no more full scan —
+-- measured ~9ms and ~8ms respectively against the same real-store copy, a
+-- ~200x combined speedup) and *additionally* improves candidateRows' own
+-- join: the query planner prefers this index's more selective
+-- (patient_root=? AND antigen=?) seek over the antigen-only PK once both
+-- columns are available, per EXPLAIN QUERY PLAN measured on the same data.
+-- One new index therefore serves both query shapes package apc needs
+-- (frequentAntigens' patient-only filter and candidateRows' patient+antigen
+-- filter) — antigen is included ahead of bead_id (not just
+-- (patient_root, bead_id)) specifically so the antigen GROUP BY / IN(...)
+-- filtering in both call sites can also use it as a covering index, without
+-- needing a second index.
+--
+-- The original antigen-first PRIMARY KEY is left untouched: SQLite does not
+-- support dropping/redefining a PRIMARY KEY without a full table rebuild
+-- (ALTER TABLE ... DROP CONSTRAINT is not supported), and per this project's
+-- "migrations are append-only, never rewrite an applied one" discipline, a
+-- table rebuild to change the PK is out of scope for a targeted performance
+-- fix — the PK's inverted-index shape (antigen-first) is also still exactly
+-- right for the R4.4/antigen-search use case DESIGN §5 documents it for
+-- ("antigen 先頭 = 転置インデックス"), which this migration does not touch.
+CREATE INDEX idx_bead_antigens_patient ON bead_antigens(patient_root, antigen, bead_id);
+
+-- # A second dominant term the profile found: index.DB.GetAntigens
+--
+-- After idx_bead_antigens_patient fixed frequentAntigens, a CPU profile of
+-- apc.Scanner.ScanPatient against the same real-store copy (go tool pprof
+-- -list, see this unit's task notes) showed the *remaining* per-anchor cost
+-- concentrated in index.DB.GetAntigens (internal/engine/index/read.go),
+-- called once per anchor via candidatesFor:
+--
+--   SELECT antigen FROM bead_antigens WHERE bead_id = ? ORDER BY antigen
+--
+-- This also could not seek the antigen-first PK (bead_id is not its leading
+-- column) and fell back to "SCAN bead_antigens USING COVERING INDEX
+-- sqlite_autoindex_bead_antigens_1" — a full covering-index scan checking
+-- every row's bead_id, once per anchor, the same O(table size) pattern as
+-- frequentAntigens just at a different call site. GetAntigens is a
+-- general-purpose index.DB read method (used beyond package apc — MCP/REST
+-- callers reading a single Bead's antigens too), so this index benefits the
+-- whole store, not just APC.
+--
+-- idx_bead_antigens_bead(bead_id, antigen) makes GetAntigens's query plan
+-- "SEARCH bead_antigens USING COVERING INDEX idx_bead_antigens_bead
+-- (bead_id=?)" — measured directly against the same real-store copy.
+CREATE INDEX idx_bead_antigens_bead ON bead_antigens(bead_id, antigen);

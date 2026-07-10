@@ -32,10 +32,35 @@ type ingester interface {
 // candidate pair, and ingests a sibling_link Bead (via engine.Ingest, so it
 // is itself a hash-verified, tamper-evident Bead — DESIGN §7's whole point)
 // for every pair clearing the score threshold.
+//
+// A Scanner is not safe for concurrent use across goroutines (frequentCache
+// below is mutated without locking) — package apc's own batch model is a
+// single caller driving one Scan/ScanPatient call at a time (see doc.go: no
+// resident goroutine), so this has never needed to be goroutine-safe; a
+// future concurrent caller would need its own synchronization or one
+// Scanner per goroutine.
 type Scanner struct {
 	engine ingester
 	idx    *index.DB
 	cfg    Config
+
+	// frequentCache memoizes frequentAntigens' result per patient_root for
+	// the duration of one Scan/ScanPatient call (see beginBatch/
+	// frequentAntigensCached). It exists to fix a measured production
+	// performance bug: frequentAntigens was being called once per anchor
+	// Bead (via candidatesFor), and even after migrations/
+	// 0005_bead_antigens_patient_idx.sql fixed its query plan from a full
+	// bead_antigens table scan to an indexed seek, recomputing it ~900
+	// times per patient (once per anchor) was still wasted, avoidable work:
+	// the set of non-sibling_link Beads and antigens for a given
+	// patient_root cannot change mid-batch (Beads are immutable and
+	// content-addressed; the only Beads a batch itself creates are
+	// sibling_link Beads, which frequentAntigens already excludes — see its
+	// own doc comment on IDF self-contamination), so the *result* is
+	// provably identical on every call within one batch. Caching it is
+	// therefore not an approximation or a staleness risk, only a
+	// correctness-preserving memoization.
+	frequentCache map[string]map[string]bool
 }
 
 // New returns a Scanner over engine (for Ingest/GetBead) and idx (for the
@@ -45,6 +70,17 @@ type Scanner struct {
 // (engine.Engine.Index()) — Scan does not itself verify this.
 func New(engine ingester, idx *index.DB, cfg Config) *Scanner {
 	return &Scanner{engine: engine, idx: idx, cfg: cfg}
+}
+
+// beginBatch resets frequentCache for a new Scan/ScanPatient call: the
+// previous call's cached per-patient frequency sets must not leak into this
+// one, since Beads ingested (as ordinary new anchors, not just
+// scanner-created sibling_link Beads) between two separate Scan/ScanPatient
+// calls can change a patient's antigen frequency picture between calls, even
+// though it cannot change *within* one call (see frequentCache's doc
+// comment).
+func (s *Scanner) beginBatch() {
+	s.frequentCache = make(map[string]map[string]bool)
 }
 
 // Result summarizes one Scan call's effect, for callers (cmd/medbeadsd, MCP
@@ -103,6 +139,8 @@ type Result struct {
 //     skipped — RescanPatient is the explicit, deliberate way to force
 //     re-matching for a patient).
 func (s *Scanner) Scan() (Result, error) {
+	s.beginBatch()
+
 	anchors, err := s.unscannedBeads()
 	if err != nil {
 		return Result{}, fmt.Errorf("apc: scan: %w", err)
@@ -301,7 +339,7 @@ func (s *Scanner) candidatesFor(anchor scannedBeadRef) ([]candidate, error) {
 		return nil, nil
 	}
 
-	frequent, err := s.frequentAntigens(anchor.PatientRoot)
+	frequent, err := s.frequentAntigensCached(anchor.PatientRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -392,6 +430,27 @@ func (s *Scanner) candidateRows(anchor scannedBeadRef, triggerAntigens []string)
 		out = append(out, *byID[id])
 	}
 	return out, nil
+}
+
+// frequentAntigensCached is frequentAntigens memoized per patient_root for
+// the lifetime of the current Scan/ScanPatient batch (see Scanner.
+// frequentCache's doc comment for why this is exact, not approximate). A
+// nil frequentCache (a Scanner used without ever calling Scan/ScanPatient,
+// e.g. a hypothetical direct-call test harness) falls back to calling
+// frequentAntigens uncached rather than panicking on a nil map write.
+func (s *Scanner) frequentAntigensCached(patientRoot string) (map[string]bool, error) {
+	if s.frequentCache == nil {
+		return s.frequentAntigens(patientRoot)
+	}
+	if cached, ok := s.frequentCache[patientRoot]; ok {
+		return cached, nil
+	}
+	frequent, err := s.frequentAntigens(patientRoot)
+	if err != nil {
+		return nil, err
+	}
+	s.frequentCache[patientRoot] = frequent
+	return frequent, nil
 }
 
 // frequentAntigens returns the set of antigens whose patient-local frequency
