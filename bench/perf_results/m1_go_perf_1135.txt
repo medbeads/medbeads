@@ -1,0 +1,8 @@
+    perf_bench_test.go:193: patient bundle load: n=100 median=8.004459ms p95=111.01325ms max=188.304417ms (target: median < 10ms)
+    perf_bench_test.go:195: patient bundle load: mean beads/patient=1291.6, slowest patient=12260 beads in 188.304417ms
+    perf_bench_test.go:211: patient bundle load (~900-bead band, 800-1000): n=9 median=12.623708ms p95=13.654459ms max=13.654459ms
+--- PASS: TestPerf_PatientBundleLoad (3.12s)
+=== RUN   TestPerf_FTSResolve
+    perf_bench_test.go:286: FTS->patient resolve: n=30 (queries=15 x limits={20,50}) median=19.649542ms p95=84.405166ms max=85.720041ms (target: median < 50ms)
+    perf_bench_test.go:288: FTS->patient resolve: total hits across all queries=1027
+--- PASS: TestPerf_FTSResolve (1.97s)
