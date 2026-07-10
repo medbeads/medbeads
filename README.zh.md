@@ -3,6 +3,38 @@
 > **提示:** `main` 分支正在进行 v3 统一重构（规范见 `specs/DESIGN_v3.md`）。
 > 稳定版 v2 请参见标签 `v2.2.0` 或分支 `v2-maintenance`。
 
+## v3 快速开始
+
+v3 核心是单一 Go 二进制 `medbeadsd`（引擎 + MCP 服务器 + REST API）。
+环境要求: Go 1.25+、C 编译器（CGO）、以及用于样例数据导入的 [uv](https://docs.astral.sh/uv/)。
+本节以下的内容描述的是 **v2**，将在 v3 完成时全面改写。运行 `main` 的步骤如下。
+
+```bash
+# 1. 构建（必须使用 sqlite_fts5 标签和 CGO）
+CGO_ENABLED=1 go build -tags sqlite_fts5 -o medbeadsd ./cmd/medbeadsd
+
+# 2. 导入随仓库附带的 10 个 Synthea 合成患者（经 MCP，约 30 秒）
+cd bench && uv run python -m bench.ingest \
+  --fhir-dir ../FHIR_sample --data-dir ../demo_data --medbeadsd ../medbeadsd
+cd ..
+
+# 3. 启动守护进程: 同一端口提供 REST（/）与 MCP（/mcp）
+./medbeadsd serve -data ./demo_data -role viewer -http 127.0.0.1:8080
+
+# 4. 试用
+curl http://127.0.0.1:8080/patients          # REST（冻结的 v2 契约，供 UI 使用）
+./medbeadsd verify -data ./demo_data          # 密码学完整性校验
+./medbeadsd reindex -data ./demo_data         # 仅从 Pod 正本重建 index.db
+```
+
+React UI: `cd ui && cp .env.example .env && npm ci && npm run dev`
+（使用 `.env` 中的 `VITE_API_BASE_URL=http://localhost:8080`；`.env.example` 里的
+Python AI API 已在 v3 中废弃，可忽略）。
+
+MCP 客户端（Claude Desktop / Claude Code）请使用 stdio 模式:
+`medbeadsd serve -data ./demo_data -role viewer` — 加 `-role system` 可启用写入工具
+（`create_bead` / `apc_trigger`）。
+
 MedBeads 是一个 **不可变 (Immutable)、原生代理 (Agent-Native) 数据基础设施**，旨在解决医疗 AI 中的“上下文不匹配 (Context Mismatch)”问题。通过将医疗记录从可变的关系数据库重构为 **Merkle 有向无环图 (DAG)**，MedBeads 为自主代理提供了明确的因果链接、防篡改证据和确定性的上下文检索。
 
 ![MedBeads Concept](docs/concept-image.jpeg)

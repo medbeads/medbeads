@@ -31,6 +31,8 @@ build/
 # Go
 medbeads-core
 core/medbeads-core
+/medbeadsd
+demo_data/
 
 # OS & IDE
 .DS_Store

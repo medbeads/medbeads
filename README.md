@@ -3,6 +3,39 @@
 > **Notice:** `main` is undergoing the v3 unification rebuild (spec: `specs/DESIGN_v3.md`).
 > For the stable v2 release, see tag `v2.2.0` or branch `v2-maintenance`.
 
+## v3 Quickstart
+
+The v3 core is a single Go binary, `medbeadsd` (engine + MCP server + REST API).
+Requirements: Go 1.25+, a C compiler (CGO), and [uv](https://docs.astral.sh/uv/) for the
+sample-data ingest. The sections below this Quickstart describe **v2** and will be
+rewritten when v3 lands; the commands here are the current way to run `main`.
+
+```bash
+# 1. Build (the sqlite_fts5 tag and CGO are required)
+CGO_ENABLED=1 go build -tags sqlite_fts5 -o medbeadsd ./cmd/medbeadsd
+
+# 2. Ingest the bundled 10 synthetic Synthea patients (via MCP, ~30s)
+cd bench && uv run python -m bench.ingest \
+  --fhir-dir ../FHIR_sample --data-dir ../demo_data --medbeadsd ../medbeadsd
+cd ..
+
+# 3. Start the daemon: REST at / and MCP at /mcp on the same port
+./medbeadsd serve -data ./demo_data -role viewer -http 127.0.0.1:8080
+
+# 4. Try it
+curl http://127.0.0.1:8080/patients          # REST (frozen v2 contract, feeds the UI)
+./medbeadsd verify -data ./demo_data          # cryptographic integrity check
+./medbeadsd reindex -data ./demo_data         # rebuild index.db from Pods alone
+```
+
+For the React UI: `cd ui && cp .env.example .env && npm ci && npm run dev`
+(the `.env` sets `VITE_API_BASE_URL=http://localhost:8080`; the Python AI API
+referenced in `.env.example` is retired in v3 and can be ignored).
+
+For MCP clients (Claude Desktop / Claude Code), use stdio mode instead:
+`medbeadsd serve -data ./demo_data -role viewer` — add `-role system` to enable
+the write tools (`create_bead`, `apc_trigger`).
+
 MedBeads is an **Immutable, Agent-Native Data Infrastructure** designed to address the "Context Mismatch" in medical AI. By restructuring medical records from mutable relational databases into a **Merkle Directed Acyclic Graph (DAG)**, MedBeads provides explicit causal linking, tamper-evidence, and deterministic context retrieval for autonomous agents.
 
 ![MedBeads Concept](docs/concept-image.jpeg)
