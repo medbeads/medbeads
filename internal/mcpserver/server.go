@@ -1,6 +1,7 @@
 package mcpserver
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -45,17 +46,31 @@ const SystemRole = clearance.RoleSystem
 // named role string (rather than an empty slice) makes `-role` always have
 // a concrete, loggable value and matches the lead's flag default verbatim.
 
+// QueryEmbedder is the subset of internal/engine/embedder.Client's API
+// retrieve/rag_search need to embed a caller-supplied query string before
+// calling index.DB.SemanticSearch. Package mcpserver depends only on this
+// interface (mirroring package engine's own identically-shaped Embedder
+// interface, internal/engine/embedindex.go) — per the lead's "embedder を
+// index 層に持ち込まない" decision, this package (like package engine) never
+// constructs an embedder.Client itself; cmd/medbeadsd wires a real one in
+// via Config.Embedder. A nil Config.Embedder means "no embedder configured
+// for this process": retrieve(semantic=true) and rag_search both return a
+// clear tool-level error rather than silently behaving as if semantic=false
+// (see retrieve.go/rag_search.go).
+type QueryEmbedder interface {
+	Embed(ctx context.Context, texts []string) ([][]float32, error)
+}
+
 // Server bundles one MedBeads Engine (plus the graph/apc/clearance
 // collaborators built on top of it) behind the official MCP SDK, per
-// specs/DESIGN_v3.md §2/§8 and docs/requirements.md R6. See doc.go for the
-// package-level scope note (L2 semantic / rag_search excluded from this
-// unit).
+// specs/DESIGN_v3.md §2/§8 and docs/requirements.md R6.
 type Server struct {
-	eng   *engine.Engine
-	store *pod.Store
-	scan  *apc.Scanner
-	role  string
-	mcp   *mcp.Server
+	eng      *engine.Engine
+	store    *pod.Store
+	scan     *apc.Scanner
+	role     string
+	mcp      *mcp.Server
+	embedder QueryEmbedder // nil if this process has no -embedder configured
 }
 
 // Config bundles the constructor arguments for New.
@@ -76,6 +91,14 @@ type Config struct {
 	// runaway-prevention cap would also be 0); callers should pass
 	// apc.Default() unless they have a specific reason not to.
 	APCConfig apc.Config
+
+	// Embedder, if non-nil, enables retrieve(semantic=true) and rag_search
+	// (R4.2/R6.3): query strings are embedded via this client before calling
+	// index.DB.SemanticSearch. A nil Embedder (the default — most tests and
+	// every CLI subcommand other than `serve -embedder ...`) makes both
+	// semantic=true and rag_search return a tool-level "embedder not
+	// configured" error rather than being silently unavailable.
+	Embedder QueryEmbedder
 
 	// Implementation identifies this server to MCP clients (name/version in
 	// the initialize handshake). A nil value uses a package default.
@@ -106,11 +129,12 @@ func New(cfg Config) (*Server, error) {
 	}
 
 	s := &Server{
-		eng:   cfg.Engine,
-		store: pod.NewStore(cfg.Engine.DataDir()),
-		scan:  apc.New(cfg.Engine, cfg.Engine.Index(), cfg.APCConfig),
-		role:  role,
-		mcp:   mcp.NewServer(impl, &mcp.ServerOptions{Instructions: instructions}),
+		eng:      cfg.Engine,
+		store:    pod.NewStore(cfg.Engine.DataDir()),
+		scan:     apc.New(cfg.Engine, cfg.Engine.Index(), cfg.APCConfig),
+		role:     role,
+		mcp:      mcp.NewServer(impl, &mcp.ServerOptions{Instructions: instructions(cfg.Embedder != nil)}),
+		embedder: cfg.Embedder,
 	}
 
 	s.registerReadTools()
@@ -123,10 +147,21 @@ func New(cfg Config) (*Server, error) {
 
 // instructions is surfaced to MCP clients during initialize (ServerOptions.
 // Instructions) so an agent immediately knows retrieve's semantic-search
-// scope limit without needing to call a tool and get an error first.
-const instructions = `MedBeads v3 MCP server (M1). retrieve(semantic=true) is not yet available: ` +
-	`L2 semantic search (sqlite-vec + embedder) lands in a later unit. Use retrieve with ` +
-	`semantic=false (the default) for FTS anchor + graph expansion + token-budgeted context.`
+// availability without needing to call a tool and get an error first.
+// embedderConfigured reflects whether this specific Server instance has a
+// QueryEmbedder wired in (Config.Embedder != nil) — the message must not
+// claim semantic search works when it does not for this process, nor claim
+// it is unavailable when it is.
+func instructions(embedderConfigured bool) string {
+	if embedderConfigured {
+		return `MedBeads v3 MCP server. retrieve(semantic=true) and rag_search are available: ` +
+			`this process has an embedder configured, so L2 semantic search (sqlite-vec) runs ` +
+			`alongside FTS anchor + graph expansion + token-budgeted context.`
+	}
+	return `MedBeads v3 MCP server. retrieve(semantic=true) and rag_search are NOT available: ` +
+		`this process has no embedder configured (see serve's -embedder flag). Use retrieve with ` +
+		`semantic=false (the default) for FTS anchor + graph expansion + token-budgeted context.`
+}
 
 // MCPServer returns the underlying *mcp.Server, ready to Connect/Run over a
 // transport (mcp.StdioTransport, or mcp.NewStreamableHTTPHandler for HTTP —

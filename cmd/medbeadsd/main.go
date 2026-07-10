@@ -23,10 +23,13 @@ Usage:
   medbeadsd <command>
 
 Commands:
-  serve     Start the daemon (engine + MCP; flags: -data <dir> [-role <role>] [-http <addr>])
+  serve     Start the daemon (engine + MCP; flags: -data <dir> [-role <role>] [-http <addr>]
+            [-embedder <url>] [-embed-model <name>])
   verify    Verify Pod/index integrity (flags: -data <dir>)
   reindex   Rebuild index.db from Pod files (source of truth)
   apc       Run the APC batch scanner (flags: -data <dir> [-patient <root>])
+  embed     Backfill L2 semantic embeddings by draining bead_embed_queue synchronously
+            (flags: -data <dir> -embedder <url> [-embed-model <name>] [-batch <n>])
 `
 
 func main() {
@@ -49,6 +52,8 @@ func run(args []string, stdout, stderr *os.File) int {
 		return runReindex(args[1:], stdout, stderr)
 	case "apc":
 		return runApc(args[1:], stdout, stderr)
+	case "embed":
+		return runEmbed(args[1:], stdout, stderr)
 	case "serve":
 		return runServe(args[1:], stdout, stderr)
 	case "-h", "-help", "--help", "help":

@@ -10,7 +10,17 @@ import (
 	"github.com/medbeads/medbeads/internal/engine/bead"
 	"github.com/medbeads/medbeads/internal/engine/clearance"
 	"github.com/medbeads/medbeads/internal/engine/graph"
+	"github.com/medbeads/medbeads/internal/engine/index"
 )
+
+// semanticAnchorK bounds how many nearest-neighbor hits retrieve's semantic
+// anchor pass pulls from index.DB.SemanticSearch before the usual
+// types/date_range/antigens filters narrow them down further (mirroring
+// index.Search's own "unbounded-ish, filters narrow it" shape — FTS's own
+// db.Search(in.Query, 0) call a few lines below defaults internally to 50).
+// 50 keeps this consistent with that FTS default rather than inventing a
+// different magic number for the semantic path.
+const semanticAnchorK = 50
 
 // defaultTokenBudget/defaultChainDepth are retrieve's own defaults when the
 // caller omits token_budget/chain_depth: specs/DESIGN_v3.md §8 does not
@@ -33,7 +43,7 @@ type retrieveIn struct {
 	Antigens    []string     `json:"antigens,omitempty" jsonschema:"require anchors to carry at least one of these antigens"`
 	Types       []string     `json:"types,omitempty" jsonschema:"restrict anchors to these Bead types"`
 	DateRange   *dateRangeIn `json:"date_range,omitempty" jsonschema:"restrict anchors to this [from, to) timestamp window"`
-	Semantic    bool         `json:"semantic,omitempty" jsonschema:"L2 vector search (NOT YET AVAILABLE in this build; true is an error)"`
+	Semantic    bool         `json:"semantic,omitempty" jsonschema:"also run L2 vector search (sqlite-vec) over query and merge hits into the anchor set; requires this server to have an embedder configured, or it is a tool-level error"`
 	ChainDepth  int          `json:"chain_depth,omitempty" jsonschema:"ancestor/descendant BFS depth from each anchor (default 3)"`
 	TokenBudget int          `json:"token_budget,omitempty" jsonschema:"greedy packing budget in estimated tokens (default 4000)"`
 }
@@ -43,15 +53,32 @@ type dateRangeIn struct {
 	To   string `json:"to,omitempty" jsonschema:"exclusive RFC3339 upper bound"`
 }
 
+// anchorProvenance is retrieve's own search-layer provenance for one anchor
+// Bead — matched_antigen and/or vector distance — kept separate from
+// graph.ContextItem's traversal provenance (Provenance/Granularity) per
+// graph/context.go's own doc comment ("FTS score / vector similarity /
+// matched_antigen provenance is the search layer's responsibility... and is
+// deliberately not modeled here").
+type anchorProvenance struct {
+	MatchedAntigens []string
+	// VectorDistance is non-nil only for an anchor that matched via
+	// SemanticSearch (retrieve(semantic=true) — R4.2): vec0's distance metric
+	// (lower = more similar) between the embedded query and this Bead's
+	// stored embedding. A FTS- or antigen-only anchor has this nil (not
+	// zero — a real distance of exactly 0.0 for an identical-vector match is
+	// a valid, meaningful value that must round-trip distinctly from
+	// "no vector match happened at all").
+	VectorDistance *float64
+}
+
 // provenanceView augments graph's own ContextItem provenance with the
 // search-layer provenance DESIGN §8 asks retrieve specifically to carry
-// (FTS score / matched_antigen) that graph.BuildContext itself does not
-// model (graph/context.go's own doc comment: "FTS score / vector
-// similarity / matched_antigen provenance is the search layer's
-// responsibility... and is deliberately not modeled here").
+// (FTS score / vector similarity / matched_antigen) that graph.BuildContext
+// itself does not model (see anchorProvenance's doc comment).
 type provenanceView struct {
 	contextItemView
 	MatchedAntigens []string `json:"matched_antigens,omitempty"`
+	VectorDistance  *float64 `json:"vector_distance,omitempty"`
 }
 
 type retrieveOut struct {
@@ -73,10 +100,14 @@ type retrieveOut struct {
 // patient is dropped (documented via TruncatedRefs would overstate it: they
 // are simply not eligible anchors for this call, since Bundle can only ever
 // hold one patient's Pod contents — see graph.LoadBundle's doc comment).
-func (s *Server) retrieve(_ context.Context, _ *mcp.CallToolRequest, in retrieveIn) (*mcp.CallToolResult, retrieveOut, error) {
-	if in.Semantic {
+func (s *Server) retrieve(ctx context.Context, _ *mcp.CallToolRequest, in retrieveIn) (*mcp.CallToolResult, retrieveOut, error) {
+	if in.Semantic && s.embedder == nil {
 		res, jerr := toolError("retrieve", fmt.Errorf(
-			"semantic=true is not yet available: L2 semantic search (sqlite-vec + embedder) is out of scope for this build (see docs/requirements.md R4.2)"))
+			"semantic=true requires an embedder, but this server has none configured (see serve's -embedder flag; docs/requirements.md R4.2)"))
+		return res, retrieveOut{}, jerr
+	}
+	if in.Semantic && in.Query == "" {
+		res, jerr := toolError("retrieve", fmt.Errorf("semantic=true requires a non-empty query to embed"))
 		return res, retrieveOut{}, jerr
 	}
 	if in.Query == "" && len(in.Antigens) == 0 {
@@ -103,7 +134,7 @@ func (s *Server) retrieve(_ context.Context, _ *mcp.CallToolRequest, in retrieve
 		patientRoot = root
 	}
 
-	anchors, provenance, err := s.retrieveAnchors(in, patientRoot)
+	anchors, provenance, err := s.retrieveAnchors(ctx, in, patientRoot)
 	if err != nil {
 		res, jerr := toolError("retrieve: anchor search", err)
 		return res, retrieveOut{}, jerr
@@ -120,7 +151,7 @@ func (s *Server) retrieve(_ context.Context, _ *mcp.CallToolRequest, in retrieve
 	// entirely, not truncated (they were never loaded).
 	root := anchors[0].patientRoot
 	var scopedIDs []string
-	scopedProvenance := make(map[string][]string, len(provenance))
+	scopedProvenance := make(map[string]anchorProvenance, len(provenance))
 	for _, a := range anchors {
 		if a.patientRoot != root {
 			continue
@@ -183,19 +214,33 @@ type anchorRef struct {
 	patientRoot string
 }
 
+// candidateInfo is one anchor candidate before filtering/dedup, shared by
+// every anchor-selection source (FTS query, antigen-only, semantic) so
+// retrieveAnchors' filter/dedup loop treats all three uniformly.
+type candidateInfo struct {
+	id, patientRoot, typ, timestamp string
+	// vectorDistance is non-nil only for a candidate surfaced by
+	// SemanticSearch (see retrieveSemanticCandidates) — see anchorProvenance's
+	// identical-shape field for why this is a pointer, not a bare float64.
+	vectorDistance *float64
+}
+
 // retrieveAnchors resolves retrieve's anchor set: an FTS query (if given)
-// intersected with antigens/types/date_range filters, all scoped to
-// patientRoot if non-empty. If Query is empty but Antigens is set, anchors
-// come from the antigen inverted index alone (bead_antigens), matching
-// DESIGN §8's expectation that antigens can drive anchor selection on their
-// own. Results are deduplicated and returned in a deterministic order
-// (timestamp, then ID) mirroring graph.BuildContext's own tie-breaking.
-func (s *Server) retrieveAnchors(in retrieveIn, patientRoot string) ([]anchorRef, map[string][]string, error) {
+// and/or a semantic (vector) query (if in.Semantic), intersected with
+// antigens/types/date_range filters, all scoped to patientRoot if non-empty.
+// If Query is empty but Antigens is set, anchors come from the antigen
+// inverted index alone (bead_antigens), matching DESIGN §8's expectation
+// that antigens can drive anchor selection on their own. FTS and semantic
+// hits are unioned (deduplicated by ID, keeping the first-seen candidate's
+// provenance — see the merge loop below) rather than intersected: R4.2's
+// "FTS anchor とマージ(重複除去)して既存パイプラインへ" calls for a merge, not a
+// second, stricter filter — a Bead either FTS or vector search surfaces (and
+// that also clears the structured filters) is eligible. Results are
+// deduplicated and returned in a deterministic order (ID) mirroring
+// graph.BuildContext's own tie-breaking.
+func (s *Server) retrieveAnchors(ctx context.Context, in retrieveIn, patientRoot string) ([]anchorRef, map[string]anchorProvenance, error) {
 	db := s.eng.Index()
 
-	type candidateInfo struct {
-		id, patientRoot, typ, timestamp string
-	}
 	var candidates []candidateInfo
 
 	if in.Query != "" {
@@ -206,7 +251,7 @@ func (s *Server) retrieveAnchors(in retrieveIn, patientRoot string) ([]anchorRef
 		for _, h := range hits {
 			candidates = append(candidates, candidateInfo{id: h.BeadID, patientRoot: h.PatientRoot, typ: h.Type, timestamp: h.Timestamp})
 		}
-	} else {
+	} else if len(in.Antigens) > 0 {
 		// Antigens-only anchor selection: union every Bead carrying any one
 		// of the requested antigens (deduplicated below).
 		seen := make(map[string]bool)
@@ -237,16 +282,38 @@ func (s *Server) retrieveAnchors(in retrieveIn, patientRoot string) ([]anchorRef
 		}
 	}
 
+	if in.Semantic {
+		// retrieve's own validation already requires s.embedder != nil and
+		// in.Query != "" whenever in.Semantic is true (see retrieve's own
+		// early checks), so both are safe to use unconditionally here.
+		semanticCandidates, err := s.retrieveSemanticCandidates(ctx, in.Query, patientRoot)
+		if err != nil {
+			return nil, nil, err
+		}
+		candidates = append(candidates, semanticCandidates...)
+	}
+
 	typeSet := make(map[string]bool, len(in.Types))
 	for _, t := range in.Types {
 		typeSet[t] = true
 	}
 
-	provenance := make(map[string][]string)
+	provenance := make(map[string]anchorProvenance)
 	var out []anchorRef
 	seenID := make(map[string]bool)
 	for _, c := range candidates {
 		if seenID[c.id] {
+			// A later duplicate (e.g. a semantic hit for a Bead the FTS pass
+			// already surfaced) still contributes its own provenance (vector
+			// distance) even though it does not get a second anchorRef —
+			// merge, don't just skip, so a Bead found by both FTS and
+			// semantic search reports both matched_antigens and
+			// vector_distance in one response entry.
+			if c.vectorDistance != nil {
+				p := provenance[c.id]
+				p.VectorDistance = c.vectorDistance
+				provenance[c.id] = p
+			}
 			continue
 		}
 		if patientRoot != "" && c.patientRoot != patientRoot {
@@ -263,11 +330,14 @@ func (s *Server) retrieveAnchors(in retrieveIn, patientRoot string) ([]anchorRef
 				continue
 			}
 		}
-		if len(in.Antigens) > 0 && in.Query != "" {
-			// Query drove anchor selection but antigens were also given:
-			// require the anchor to carry at least one requested antigen too
-			// (an AND, not an OR, when both filters are present alongside a
-			// query — antigens-only selection above already is the OR case).
+
+		var p anchorProvenance
+		if len(in.Antigens) > 0 && (in.Query != "" || in.Semantic) {
+			// Query/semantic search drove anchor selection but antigens were
+			// also given: require the anchor to carry at least one requested
+			// antigen too (an AND, not an OR, when both filters are present
+			// alongside a query — antigens-only selection above already is
+			// the OR case).
 			matched, err := matchingAntigens(db, c.id, in.Antigens)
 			if err != nil {
 				return nil, nil, err
@@ -275,21 +345,67 @@ func (s *Server) retrieveAnchors(in retrieveIn, patientRoot string) ([]anchorRef
 			if len(matched) == 0 {
 				continue
 			}
-			provenance[c.id] = matched
+			p.MatchedAntigens = matched
 		} else if len(in.Antigens) > 0 {
 			matched, err := matchingAntigens(db, c.id, in.Antigens)
 			if err != nil {
 				return nil, nil, err
 			}
-			provenance[c.id] = matched
+			p.MatchedAntigens = matched
 		}
+		p.VectorDistance = c.vectorDistance
 
 		seenID[c.id] = true
+		provenance[c.id] = p
 		out = append(out, anchorRef{id: c.id, patientRoot: c.patientRoot})
 	}
 
 	sort.Slice(out, func(i, j int) bool { return out[i].id < out[j].id })
 	return out, provenance, nil
+}
+
+// retrieveSemanticCandidates embeds query via s.embedder and runs
+// index.DB.SemanticSearch, scoped to patientRoot via vec0's native
+// PARTITION KEY pre-filter when patientRoot is non-empty (R4.2, DESIGN §6).
+// Every hit becomes a candidateInfo with vectorDistance set; typ/timestamp
+// are resolved via a GetBead lookup per hit (SemanticSearch itself only
+// returns bead_id/patient_root/distance — see index.SemanticResult) so the
+// merge loop above can apply the same types/date_range filters to a semantic
+// hit as to an FTS/antigen one.
+func (s *Server) retrieveSemanticCandidates(ctx context.Context, query, patientRoot string) ([]candidateInfo, error) {
+	vectors, err := s.embedder.Embed(ctx, []string{query})
+	if err != nil {
+		return nil, fmt.Errorf("embed query: %w", err)
+	}
+	if len(vectors) != 1 {
+		return nil, fmt.Errorf("embed query: embedder returned %d vector(s), want 1", len(vectors))
+	}
+	queryBlob, err := index.SerializeEmbedding(vectors[0])
+	if err != nil {
+		return nil, fmt.Errorf("embed query: %w", err)
+	}
+
+	hits, err := s.eng.Index().SemanticSearch(queryBlob, semanticAnchorK, patientRoot)
+	if err != nil {
+		return nil, fmt.Errorf("semantic search: %w", err)
+	}
+
+	out := make([]candidateInfo, 0, len(hits))
+	for _, h := range hits {
+		ref, err := s.eng.Index().GetBead(h.BeadID)
+		if err != nil {
+			return nil, fmt.Errorf("resolve semantic hit %s: %w", h.BeadID, err)
+		}
+		distance := h.Distance
+		out = append(out, candidateInfo{
+			id:             h.BeadID,
+			patientRoot:    h.PatientRoot,
+			typ:            ref.Type,
+			timestamp:      ref.Timestamp,
+			vectorDistance: &distance,
+		})
+	}
+	return out, nil
 }
 
 // matchingAntigens returns the subset of want that beadID actually carries
@@ -324,7 +440,7 @@ func matchingAntigens(db interface {
 // Bead, would leak that a restricted Bead exists in this patient's context
 // at all — retrieve's job is to hand an agent a usable, budget-fit context,
 // not a a redacted placeholder it cannot act on).
-func (s *Server) filterContextBundle(bundle graph.ContextBundle, provenance map[string][]string) ([]provenanceView, []contextItemView, error) {
+func (s *Server) filterContextBundle(bundle graph.ContextBundle, provenance map[string]anchorProvenance) ([]provenanceView, []contextItemView, error) {
 	items, err := s.filterItems(bundle.Items, provenance)
 	if err != nil {
 		return nil, nil, err
@@ -336,7 +452,7 @@ func (s *Server) filterContextBundle(bundle graph.ContextBundle, provenance map[
 	return items, truncated, nil
 }
 
-func (s *Server) filterItems(items []graph.ContextItem, provenance map[string][]string) ([]provenanceView, error) {
+func (s *Server) filterItems(items []graph.ContextItem, provenance map[string]anchorProvenance) ([]provenanceView, error) {
 	if len(items) == 0 {
 		return nil, nil
 	}
@@ -358,9 +474,11 @@ func (s *Server) filterItems(items []graph.ContextItem, provenance map[string][]
 		if !accessible(filtered[i]) {
 			continue
 		}
+		p := provenance[item.ID]
 		out = append(out, provenanceView{
 			contextItemView: newContextItemView(item),
-			MatchedAntigens: provenance[item.ID],
+			MatchedAntigens: p.MatchedAntigens,
+			VectorDistance:  p.VectorDistance,
 		})
 	}
 	return out, nil

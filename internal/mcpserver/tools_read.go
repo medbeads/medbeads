@@ -77,10 +77,19 @@ func (s *Server) registerReadTools() {
 
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name: "retrieve",
-		Description: "Single-round-trip agent retrieval: FTS/structured anchor -> patient resolution -> " +
-			"graph expansion -> token-budgeted context bundle with provenance. semantic=true is not yet " +
-			"available (L2 semantic search is a later unit) and returns an error.",
+		Description: "Single-round-trip agent retrieval: FTS/structured (+ optional L2 semantic vector) " +
+			"anchor -> patient resolution -> graph expansion -> token-budgeted context bundle with " +
+			"provenance. semantic=true requires this server to have an embedder configured (serve's " +
+			"-embedder flag), or it is a tool-level error.",
 	}, s.retrieve)
+
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name: "rag_search",
+		Description: "Experimental pure-vector-search baseline (no FTS, no antigen filter, no graph/chain " +
+			"expansion): embed query, return the k nearest Beads' full L0 content plus vector distance. " +
+			"Requires this server to have an embedder configured (serve's -embedder flag), or it is a " +
+			"tool-level error. For agent retrieval, prefer retrieve instead.",
+	}, s.ragSearch)
 }
 
 // --- list_patients -------------------------------------------------------

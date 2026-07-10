@@ -4,18 +4,44 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sync"
 
+	sqlite_vec "github.com/asg017/sqlite-vec-go-bindings/cgo"
 	_ "github.com/mattn/go-sqlite3" // registers the "sqlite3" database/sql driver
 )
 
 // driverName is the database/sql driver name registered by
 // github.com/mattn/go-sqlite3's init(). See specs/DESIGN_v3.md §5 and the
 // lead decision to use mattn/go-sqlite3 (CGO) + the sqlite_fts5 build tag so
-// FTS5 trigram (R3.3) and a future sqlite-vec load path (R4.2) are both
+// FTS5 trigram (R3.3) and, since R4.2, a sqlite-vec vec0 load path are both
 // available. This file itself carries no build tag: the tag only changes
 // what the mattn/go-sqlite3 package compiles internally (see its
 // sqlite3_opt_fts5.go), not what our code needs to reference.
 const driverName = "sqlite3"
+
+// registerVecExtension calls sqlite_vec.Auto() exactly once per process
+// (sync.Once), before any *sql.DB is ever opened by this package.
+//
+// sqlite_vec.Auto() wraps SQLite's own sqlite3_auto_extension() C API: it
+// registers sqlite-vec's init function to run automatically on every future
+// new SQLite connection opened in this process (mattn/go-sqlite3 connections
+// included, since sqlite-vec-go-bindings/cgo's C sources are compiled with
+// -DSQLITE_CORE — see its lib.go — statically linking against the same
+// libsqlite3 mattn/go-sqlite3 itself compiles in, not a separately
+// dlopen'd .so). This is a process-global registration, not a per-*sql.DB
+// or per-connection call: calling it more than once is harmless (SQLite
+// auto_extension dedupes by function pointer) but only needs to happen
+// once, and must happen before Open's first sql.Open/db.Exec — a
+// connection opened before Auto() runs would never see vec0 registered on
+// it. sync.Once (rather than a package init()) keeps this colocated with
+// Open itself, which is the one place in this package that ever calls
+// sql.Open; it does not change ordering relative to init() since Open is
+// always called after package initialization completes in Go.
+var registerVecExtensionOnce sync.Once
+
+func registerVecExtension() {
+	registerVecExtensionOnce.Do(sqlite_vec.Auto)
+}
 
 // Sentinel errors returned by this package. Callers should use errors.Is.
 var (
@@ -43,6 +69,8 @@ type DB struct {
 // (migrations/NNNN_*.sql). Open is idempotent: calling it again against an
 // already-current database is safe and a no-op past the pragma settings.
 func Open(path string) (*DB, error) {
+	registerVecExtension()
+
 	// _foreign_keys=1 and _busy_timeout are mattn/go-sqlite3 DSN query
 	// parameters applied at connection-open time; journal_mode is set via an
 	// explicit PRAGMA below since WAL is a persistent, on-disk database

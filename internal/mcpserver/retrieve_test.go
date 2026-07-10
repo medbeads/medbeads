@@ -8,11 +8,12 @@ import (
 	"github.com/medbeads/medbeads/internal/engine/clearance"
 )
 
-// TestRetrieve_SemanticNotYetAvailable checks the lead's scope decision: R4.2
-// (L2 semantic search) is out of scope for this unit, and semantic=true
-// must be a clear tool-level error, not silently ignored or treated as
+// TestRetrieve_SemanticWithoutEmbedder_IsAToolError checks R4.2's "embedder
+// 未設定時は従来エラー" decision: a Server built with no Config.Embedder (the
+// default — newServerT never sets one) must reject semantic=true with a
+// clear tool-level error, not silently ignore the flag or treat it as
 // semantic=false.
-func TestRetrieve_SemanticNotYetAvailable(t *testing.T) {
+func TestRetrieve_SemanticWithoutEmbedder_IsAToolError(t *testing.T) {
 	e := openT(t)
 	seedPatient(t, e, "Semantic Patient")
 	s := newServerT(t, e, SystemRole)
@@ -22,7 +23,7 @@ func TestRetrieve_SemanticNotYetAvailable(t *testing.T) {
 		t.Fatalf("retrieve: unexpected Go error: %v", err)
 	}
 	if res == nil || !res.IsError {
-		t.Fatalf("retrieve(semantic=true): want IsError=true result, got %+v", res)
+		t.Fatalf("retrieve(semantic=true, no embedder configured): want IsError=true result, got %+v", res)
 	}
 }
 

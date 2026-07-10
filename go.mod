@@ -8,6 +8,8 @@ require github.com/klauspost/compress v1.19.0
 
 require github.com/mattn/go-sqlite3 v1.14.47
 
+require github.com/asg017/sqlite-vec-go-bindings v0.1.6
+
 require (
 	github.com/google/jsonschema-go v0.4.3 // indirect
 	github.com/modelcontextprotocol/go-sdk v1.6.1

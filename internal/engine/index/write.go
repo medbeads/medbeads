@@ -192,6 +192,21 @@ func IndexBead(tx *sql.Tx, b bead.Bead, loc BeadLocation, f Flattener) error {
 		); err != nil {
 			return fmt.Errorf("index: index bead %s: insert fts: %w", b.ID, err)
 		}
+
+		// L2 semantic search (R4.2, specs/DESIGN_v3.md §6): every newly-
+		// indexed Bead is enqueued for asynchronous embedding regardless of
+		// whether an embedder is configured for this process at all — the
+		// queue itself is cheap (an id/root/text row), and it is
+		// StartEmbedIndexer's caller (cmd/medbeadsd's `serve -embedder ...`)
+		// that decides whether anything ever drains it. This keeps Ingest's
+		// write path fully decoupled from embedding-server availability: an
+		// embedder being down, slow, or simply never configured never blocks
+		// or fails an Ingest call, only leaves rows queued (see
+		// EnqueueEmbed's own doc comment for the ON CONFLICT replace-on-
+		// reindex behavior).
+		if err := EnqueueEmbed(tx, b.ID, loc.PatientRoot, searchText); err != nil {
+			return fmt.Errorf("index: index bead %s: %w", b.ID, err)
+		}
 	}
 
 	if err := advanceWatermark(tx, podID, loc.Offset+loc.Length); err != nil {

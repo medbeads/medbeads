@@ -16,6 +16,7 @@ import (
 
 	"github.com/medbeads/medbeads/internal/engine"
 	"github.com/medbeads/medbeads/internal/engine/apc"
+	"github.com/medbeads/medbeads/internal/engine/embedder"
 	"github.com/medbeads/medbeads/internal/mcpserver"
 	"github.com/medbeads/medbeads/internal/rest"
 )
@@ -46,6 +47,13 @@ func runServe(args []string, stdout, stderr *os.File) int {
 	role := fs.String("role", mcpserver.DefaultRole, "clearance/write role this server presents as "+
 		"(e.g. viewer, system; system additionally unlocks create_bead)")
 	httpAddr := fs.String("http", "", "if set, serve Streamable HTTP on this address instead of stdio (e.g. :8090)")
+	embedderURL := fs.String("embedder", "", "if set, base URL of an OpenAI-compatible /v1/embeddings "+
+		"server (e.g. http://localhost:8080); enables retrieve(semantic=true), rag_search, and starts the "+
+		"async embed indexer (R4.2). Unset (default): semantic search tools return a clear error, and no "+
+		"embed-indexer goroutine is started at all.")
+	embedModel := fs.String("embed-model", embedder.DefaultModel, "model name sent to the -embedder server "+
+		"(default \"ruri-v3\", cl-nagoya/ruri-v3-310m, 768 dims — must match index.db's migrations/"+
+		"0004_embed.sql vec0 column width)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -61,18 +69,46 @@ func runServe(args []string, stdout, stderr *os.File) int {
 	}
 	defer eng.Close() //nolint:errcheck // best-effort unwind; process is exiting either way
 
-	srv, err := mcpserver.New(mcpserver.Config{
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	// R4.2: an embedder is opt-in via -embedder. When unset, mcpCfg.Embedder
+	// stays nil (mcpserver.Config's own "no embedder configured" default —
+	// retrieve(semantic=true)/rag_search return a clear tool-level error) and
+	// no embed-indexer goroutine is ever started, preserving this project's
+	// "既存の「常駐 goroutine なし」衛生を維持" decision for every invocation
+	// that does not explicitly ask for one.
+	var embedderClient *embedder.Client
+	if *embedderURL != "" {
+		embedderClient = embedder.New(*embedderURL, *embedModel, nil)
+		// StartEmbedIndexer's goroutine is scoped to ctx (the same
+		// SIGINT/SIGTERM shutdown context the MCP/HTTP server below uses),
+		// so it stops at the same point the rest of this process starts
+		// winding down, rather than needing its own separate lifecycle
+		// management. Its returned done channel is intentionally not waited
+		// on here: eng.Close() below (deferred) does not depend on the
+		// indexer goroutine having fully exited first (it only stops
+		// enqueuing new batch transactions once ctx is Done; any batch
+		// transaction already in flight completes or rolls back on its own
+		// via the standard database/sql Tx semantics, same as any other
+		// in-flight write this process might have open at shutdown).
+		fmt.Fprintf(stderr, "medbeadsd serve: embed indexer enabled (embedder=%s, model=%s)\n", *embedderURL, *embedModel)
+		eng.StartEmbedIndexer(ctx, embedderClient, engine.EmbedIndexerOptions{})
+	}
+
+	mcpCfg := mcpserver.Config{
 		Engine:    eng,
 		Role:      *role,
 		APCConfig: apc.Default(),
-	})
+	}
+	if embedderClient != nil {
+		mcpCfg.Embedder = embedderClient
+	}
+	srv, err := mcpserver.New(mcpCfg)
 	if err != nil {
 		fmt.Fprintf(stderr, "medbeadsd serve: build MCP server: %v\n", err)
 		return 1
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 
 	if *httpAddr == "" {
 		return runServeStdio(ctx, srv, stdout, stderr)

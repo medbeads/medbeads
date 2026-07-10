@@ -36,11 +36,16 @@
 // itself (see render.go's accessible doc comment) and drops the
 // corresponding output row rather than relying on FilterByAccess alone.
 //
-// retrieve(semantic=true) is out of scope for this unit (L2 semantic search
-// — sqlite-vec + an embedder — is a separate unit per docs/requirements.md
-// R4.2) and returns a tool-level error rather than silently ignoring the
-// flag. rag_search (pure vector top-k, DESIGN §8) is not registered at all
-// yet, for the same reason.
+// retrieve(semantic=true) and rag_search (pure vector top-k, DESIGN §8,
+// docs/requirements.md R6.3) both require an embedder (Config.Embedder,
+// R4.2): whenever New's caller does not configure one (Config.Embedder ==
+// nil — most tests, and every CLI subcommand other than
+// `serve -embedder ...`), both return a tool-level error rather than
+// silently behaving as if semantic search were unavailable-but-ignored.
+// rag_search is registered as a read tool (see registerReadTools) since it
+// never mutates the data directory, even though it is explicitly an
+// experimental/comparison tool (DESIGN §8's "比較実験用") rather than part of
+// the main agent retrieval path.
 //
 // # ID notation
 //

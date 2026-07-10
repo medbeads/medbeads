@@ -70,6 +70,14 @@ func TestCatchUp_ResumesFromWatermark(t *testing.T) {
 		); err != nil {
 			t.Fatalf("delete fts for %s: %v", b.ID, err)
 		}
+		// bead_embed_queue.bead_id REFERENCES beads(id) (migrations/
+		// 0004_embed.sql: IndexBead's EnqueueEmbed call already queued this
+		// Bead during the Reindex above), so its row must be removed before
+		// the beads row it references, or the DELETE below fails the FK
+		// constraint.
+		if _, err := db.sqlDB.Exec(`DELETE FROM bead_embed_queue WHERE bead_id = ?`, b.ID); err != nil {
+			t.Fatalf("delete embed queue row for %s: %v", b.ID, err)
+		}
 		if _, err := db.sqlDB.Exec(`DELETE FROM beads WHERE id = ?`, b.ID); err != nil {
 			t.Fatalf("delete bead %s: %v", b.ID, err)
 		}
