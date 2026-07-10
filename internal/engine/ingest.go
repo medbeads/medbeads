@@ -9,7 +9,8 @@ import (
 	"github.com/medbeads/medbeads/internal/engine/pod"
 )
 
-// Ingest is the write protocol's single entry point (specs/DESIGN_v3.md §3):
+// Ingest is the write protocol's single entry point (specs/DESIGN_v3.md §3,
+// specs/DESIGN_v3.1_draft.md §2):
 //
 //  1. Verify/assign the Bead's ID: if b.ID is already set it must match its
 //     recomputed content hash (bead.Verify); if unset, it is computed and
@@ -23,16 +24,29 @@ import (
 //     already its own ancestor), this check is O(len(parents)) and needs no
 //     graph walk at all: existence-in-index is sufficient because the
 //     append-only write order already guarantees a parent-before-child
-//     timeline.
+//     timeline. amends/retracts targets are subject to the identical
+//     existence check (requireBeadsIndexed), for the identical structural
+//     reason — see bead.Bead's doc comment on why an amends/retracts cycle
+//     is impossible by construction, not merely rejected here.
 //  3. Pre-resolve patient_root (see resolvePatientRoot): patient_registration
 //     Beads are their own root; other Beads inherit their parents'
 //     patient_root (single IN query, no N+1), falling back to the shared
 //     Pod ("") when there are no parents or the parents disagree.
-//  4. Append to the resolved Pod (fsync included) via this Engine's per-path
+//  4. Reject cross-patient amends/retracts (specs/DESIGN_v3.1_draft.md §2:
+//     "cross-patient の amends/retracts は禁止(ingest 時拒否)"): every Bead
+//     named in b.Amends/b.Retracts must resolve to the same patient_root as
+//     this Bead itself (see requireSamePatientRoot). This mirrors the
+//     existing "cross-patient parents は原則禁止" convention for Parents,
+//     applied to amends/retracts instead of being silently absorbed into a
+//     shared-Pod fallback the way a Parents mismatch is — an amends/retracts
+//     reference crossing patients is always a caller error, never a
+//     legitimate shared-Bead reference (those go through Evidence instead,
+//     per DESIGN §2).
+//  5. Append to the resolved Pod (fsync included) via this Engine's per-path
 //     Writer, then IndexBead in one transaction — "正本が常に先、インデックス
 //     は追いつける": if the process crashes between these two steps, the next
 //     Open's CatchUp recovers it (see open.go).
-//  5. Idempotent replay: if b.ID is already indexed, Ingest returns success
+//  6. Idempotent replay: if b.ID is already indexed, Ingest returns success
 //     without writing anything a second time. A caller retrying a network
 //     call or a batch importer resuming after a partial failure cannot tell,
 //     from Ingest's return value alone, whether an identical Bead it is
@@ -63,9 +77,22 @@ func (e *Engine) Ingest(b bead.Bead) (bead.Bead, error) {
 	if err := e.requireParentsIndexed(normalized.Parents); err != nil {
 		return bead.Bead{}, fmt.Errorf("engine: ingest %s: %w", b.ID, err)
 	}
+	if err := e.requireBeadsIndexed(normalized.Amends); err != nil {
+		return bead.Bead{}, fmt.Errorf("engine: ingest %s: amends: %w", b.ID, err)
+	}
+	if err := e.requireBeadsIndexed(normalized.Retracts); err != nil {
+		return bead.Bead{}, fmt.Errorf("engine: ingest %s: retracts: %w", b.ID, err)
+	}
 
 	patientRoot, err := e.resolvePatientRoot(normalized)
 	if err != nil {
+		return bead.Bead{}, fmt.Errorf("engine: ingest %s: %w", b.ID, err)
+	}
+
+	if err := e.requireSamePatientRoot(patientRoot, normalized.Amends, "amends"); err != nil {
+		return bead.Bead{}, fmt.Errorf("engine: ingest %s: %w", b.ID, err)
+	}
+	if err := e.requireSamePatientRoot(patientRoot, normalized.Retracts, "retracts"); err != nil {
 		return bead.Bead{}, fmt.Errorf("engine: ingest %s: %w", b.ID, err)
 	}
 
@@ -138,16 +165,61 @@ func verifyOrAssignID(b bead.Bead) (bead.Bead, error) {
 // caller; this still works correctly on an unnormalized slice, just doing
 // one redundant lookup per duplicate.
 func (e *Engine) requireParentsIndexed(parents []string) error {
-	if len(parents) == 0 {
+	return e.requireBeadsIndexed(parents)
+}
+
+// requireBeadsIndexed rejects a Bead that references any not-yet-indexed
+// Bead ID in ids — the same existence check requireParentsIndexed applies to
+// Parents, generalized so Ingest can also apply it to Amends/Retracts (see
+// Ingest's doc comment, step 2). ids should already be normalized
+// (deduplicated) by the caller; this still works correctly on an
+// unnormalized slice, just doing one redundant lookup per duplicate.
+func (e *Engine) requireBeadsIndexed(ids []string) error {
+	if len(ids) == 0 {
 		return nil
 	}
-	roots, err := e.idx.PatientRootsFor(parents)
+	roots, err := e.idx.PatientRootsFor(ids)
 	if err != nil {
-		return fmt.Errorf("check parents exist: %w", err)
+		return fmt.Errorf("check beads exist: %w", err)
 	}
-	for _, p := range parents {
-		if _, ok := roots[p]; !ok {
-			return fmt.Errorf("parent %s is not indexed (parents must be written before their children)", p)
+	for _, id := range ids {
+		if _, ok := roots[id]; !ok {
+			return fmt.Errorf("bead %s is not indexed (referenced beads must be written first)", id)
+		}
+	}
+	return nil
+}
+
+// requireSamePatientRoot rejects a Bead whose amends/retracts targets do not
+// all share patientRoot — Ingest step 4's "cross-patient の amends/retracts
+// は禁止" (specs/DESIGN_v3.1_draft.md §2). fieldName ("amends" or "retracts")
+// is included in the error only for diagnostics. ids must already have been
+// confirmed to exist via requireBeadsIndexed (called earlier in Ingest), so
+// every id here is guaranteed present in PatientRootsFor's result map.
+func (e *Engine) requireSamePatientRoot(patientRoot string, ids []string, fieldName string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	roots, err := e.idx.PatientRootsFor(ids)
+	if err != nil {
+		return fmt.Errorf("check %s patient_root: %w", fieldName, err)
+	}
+	for _, id := range ids {
+		root, ok := roots[id]
+		if !ok {
+			// requireBeadsIndexed already checked this; reaching here would
+			// mean the target vanished from the index mid-ingest, which
+			// cannot happen in this append-only, single-Engine-per-data-dir
+			// design (see resolvePatientRoot's identical defensive check),
+			// but fail loudly rather than silently skipping the
+			// cross-patient check if it somehow did.
+			return fmt.Errorf("%s target %s vanished from index mid-ingest", fieldName, id)
+		}
+		if root != patientRoot {
+			return fmt.Errorf(
+				"%s target %s belongs to patient_root %q, this Bead resolves to %q (cross-patient %s is rejected)",
+				fieldName, id, root, patientRoot, fieldName,
+			)
 		}
 	}
 	return nil

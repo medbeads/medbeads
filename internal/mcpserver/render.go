@@ -10,23 +10,37 @@ import (
 // boundary — never inside package engine/bead/graph/index, which all work in
 // plain 64-hex per specs/DESIGN_v3.md §4 ("内部は素の 64 hex、API/表示層での
 // み sha256: プレフィックス"). This is that one API-layer conversion point.
+//
+// No Antigens field: per specs/DESIGN_v3.1_draft.md §5 ("get_bead は正本のみ
+// (タグを含まない)"), the正本 (Bead) view never carries tags — those are
+// projection-only and belong on retrieve's/get_bead_with_projection's
+// response shape instead (a later unit; not yet added).
 type beadView struct {
 	ID        string          `json:"id"`
 	Type      string          `json:"type"`
 	Timestamp string          `json:"timestamp"`
 	Author    string          `json:"author,omitempty"`
 	Parents   []string        `json:"parents"`
-	Antigens  []string        `json:"antigens"`
+	Amends    []string        `json:"amends,omitempty"`
+	Retracts  []string        `json:"retracts,omitempty"`
 	Content   map[string]any  `json:"content"`
 	Evidence  []bead.Evidence `json:"evidence,omitempty"`
 }
 
 // newBeadView converts an engine-internal bead.Bead (plain-hex ID/parents)
-// into its API-layer JSON view (sha256:-prefixed ID/parents).
+// into its API-layer JSON view (sha256:-prefixed ID/parents/amends/retracts).
 func newBeadView(b bead.Bead) beadView {
 	parents := make([]string, len(b.Parents))
 	for i, p := range b.Parents {
 		parents[i] = bead.FormatID(p)
+	}
+	amends := make([]string, len(b.Amends))
+	for i, a := range b.Amends {
+		amends[i] = bead.FormatID(a)
+	}
+	retracts := make([]string, len(b.Retracts))
+	for i, r := range b.Retracts {
+		retracts[i] = bead.FormatID(r)
 	}
 	return beadView{
 		ID:        bead.FormatID(b.ID),
@@ -34,7 +48,8 @@ func newBeadView(b bead.Bead) beadView {
 		Timestamp: b.Timestamp,
 		Author:    b.Author,
 		Parents:   parents,
-		Antigens:  b.Antigens,
+		Amends:    amends,
+		Retracts:  retracts,
 		Content:   b.Content,
 		Evidence:  b.Evidence,
 	}

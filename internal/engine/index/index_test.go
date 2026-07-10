@@ -22,10 +22,19 @@ func openT(t *testing.T) *DB {
 }
 
 // testBead returns a small, deterministic Bead with a real content-hash ID
-// and the given parents/antigens, mirroring internal/engine/pod's testBead
-// helper (kept package-local rather than shared, since exporting test-only
-// helpers across packages is not warranted here).
-func testBead(t *testing.T, typ, note string, parents, antigens []string, content map[string]any) bead.Bead {
+// and the given parents, mirroring internal/engine/pod's testBead helper
+// (kept package-local rather than shared, since exporting test-only helpers
+// across packages is not warranted here).
+//
+// No antigens parameter: v3.1 removed Bead.Antigens entirely (see
+// bead.Bead's doc comment) — bead_antigens rows are now produced only by
+// IndexBead running antigen.Extract(b.Type, b.Content) at index time.
+// Callers that need specific bead_antigens rows for a test either (a) build
+// real FHIR-coding-shaped content antigen.Extract actually recognizes (see
+// TestIndexBead_RoundTrip), or (b) call seedAntigenRow below to inject a row
+// directly, for tests whose subject is bead_antigens plumbing itself
+// (dedup/idempotency) rather than tag derivation.
+func testBead(t *testing.T, typ, note string, parents []string, content map[string]any) bead.Bead {
 	t.Helper()
 	if content == nil {
 		content = map[string]any{}
@@ -36,7 +45,6 @@ func testBead(t *testing.T, typ, note string, parents, antigens []string, conten
 		Timestamp: "2026-03-01T10:00:00Z",
 		Author:    "did:medbeads:doctor:12345",
 		Parents:   parents,
-		Antigens:  antigens,
 		Content:   content,
 	}
 	withID, err := bead.WithID(b)
@@ -44,6 +52,27 @@ func testBead(t *testing.T, typ, note string, parents, antigens []string, conten
 		t.Fatalf("bead.WithID: %v", err)
 	}
 	return withID
+}
+
+// seedAntigenRow inserts one bead_antigens row directly, bypassing
+// antigen.Extract entirely. It exists for tests whose subject is
+// bead_antigens' own storage/idempotency behavior (e.g. duplicate-insert
+// handling), not tag derivation — antigen.Extract's derivation rules are
+// covered by internal/engine/antigen's own fixture-based tests, and
+// TestIndexBead_RoundTrip below covers the real IndexBead-drives-Extract
+// path end to end.
+func seedAntigenRow(t *testing.T, db *DB, tag, beadID, patientRoot string) {
+	t.Helper()
+	var root any
+	if patientRoot != "" {
+		root = patientRoot
+	}
+	if _, err := db.sqlDB.Exec(
+		`INSERT OR IGNORE INTO bead_antigens (antigen, bead_id, patient_root) VALUES (?, ?, ?)`,
+		tag, beadID, root,
+	); err != nil {
+		t.Fatalf("seedAntigenRow(%s, %s): %v", tag, beadID, err)
+	}
 }
 
 // indexBeadT runs IndexBead inside its own transaction and commits,

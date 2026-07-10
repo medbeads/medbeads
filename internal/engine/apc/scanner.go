@@ -371,8 +371,10 @@ func (s *Scanner) candidatesFor(anchor scannedBeadRef) ([]candidate, error) {
 // how "二次応答" scans a sibling_link Bead as an anchor against ordinary
 // Beads), but because letting it also appear on the *other* side, as a
 // same-batch candidate matched purely on the antigens it copied from its own
-// parents (buildSiblingLinkBead sets a sibling_link's Antigens to the
-// matched-antigen set verbatim), would double-count that overlap: the
+// parents (index.IndexBead's extractTags derives a sibling_link Bead's own
+// bead_antigens rows from its content.matched_antigens, which is exactly
+// the matched-antigen set verbatim — see write.go and buildSiblingLinkBead),
+// would double-count that overlap: the
 // sibling_link Bead and (at least) one of its own parents would both surface
 // as separate "matches" for the very same underlying antigen fact, which is
 // redundant rather than new evidence, and would materially inflate this
@@ -462,9 +464,11 @@ func (s *Scanner) frequentAntigensCached(patientRoot string) (map[string]bool, e
 // Both the numerator and denominator here exclude Beads of
 // type='sibling_link' entirely (a JOIN against beads, not a bare COUNT over
 // bead_antigens). This guards against IDF self-contamination: a
-// sibling_link Bead's own Antigens are set to exactly its matched-antigen
-// set (buildSiblingLinkBead), i.e. a *copy* of antigens that already exist
-// on its two parent Beads, not new clinical evidence. Counting them would
+// sibling_link Bead's own bead_antigens rows are derived from exactly its
+// matched-antigen set (index.IndexBead's extractTags, reading
+// content.matched_antigens — see write.go and buildSiblingLinkBead), i.e. a
+// *copy* of antigens that already exist on its two parent Beads, not new
+// clinical evidence. Counting them would
 // make an antigen's measured frequency drift upward purely as a side effect
 // of how many sibling_link Beads Scan has already generated for it — a
 // non-deterministic quantity that depends on scan history/timing/generation

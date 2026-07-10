@@ -67,16 +67,18 @@ func seedPatient(t *testing.T, e *engine.Engine, name string) bead.Bead {
 	return out
 }
 
-// seedChildBead stores a bead with the given type/antigens/content as a
-// child of parent and returns it as ingested, mirroring v2.2.0's
-// seedChildBead test helper.
-func seedChildBead(t *testing.T, e *engine.Engine, parent bead.Bead, beadType string, antigens []string, content map[string]any) bead.Bead {
+// seedChildBead stores a bead with the given type/content as a child of
+// parent and returns it as ingested, mirroring v2.2.0's seedChildBead test
+// helper. No antigens parameter: v3.1 removed Bead.Antigens entirely (tag
+// derivation now happens only at index-projection time — see
+// bead.Bead's doc comment), and no test in this package asserts on
+// bead_antigens content.
+func seedChildBead(t *testing.T, e *engine.Engine, parent bead.Bead, beadType string, content map[string]any) bead.Bead {
 	t.Helper()
 	out, err := e.Ingest(bead.Bead{
 		Type:      beadType,
 		Timestamp: nextTimestamp(),
 		Parents:   []string{parent.ID},
-		Antigens:  antigens,
 		Content:   content,
 	})
 	if err != nil {

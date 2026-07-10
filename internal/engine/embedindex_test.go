@@ -114,8 +114,8 @@ func waitForQueueDepth(t *testing.T, e *Engine, want int, timeout time.Duration)
 // SemanticSearch scoped to the right patient_root.
 func TestStartEmbedIndexer_DrainsQueueAndPopulatesSemanticSearch(t *testing.T) {
 	e := openT(t)
-	root := ingestT(t, e, unsavedBead("patient_registration", nil, nil, map[string]any{"name": "Semantic Patient"}))
-	obs := ingestT(t, e, unsavedBead("fhir_observation", []string{root.ID}, nil, map[string]any{"note": "elevated potassium level"}))
+	root := ingestT(t, e, unsavedBead("patient_registration", nil, map[string]any{"name": "Semantic Patient"}))
+	obs := ingestT(t, e, unsavedBead("fhir_observation", []string{root.ID}, map[string]any{"note": "elevated potassium level"}))
 
 	depth, err := e.idx.EmbedQueueDepth()
 	if err != nil {
@@ -167,10 +167,10 @@ func TestStartEmbedIndexer_DrainsQueueAndPopulatesSemanticSearch(t *testing.T) {
 // entirely, not merely rank it lower.
 func TestStartEmbedIndexer_PatientRootPartitionFilter(t *testing.T) {
 	e := openT(t)
-	rootA := ingestT(t, e, unsavedBead("patient_registration", nil, nil, map[string]any{"name": "Patient A"}))
-	rootB := ingestT(t, e, unsavedBead("patient_registration", nil, nil, map[string]any{"name": "Patient B"}))
-	beadA := ingestT(t, e, unsavedBead("fhir_observation", []string{rootA.ID}, nil, map[string]any{"note": "shared query text"}))
-	beadB := ingestT(t, e, unsavedBead("fhir_observation", []string{rootB.ID}, nil, map[string]any{"note": "shared query text"}))
+	rootA := ingestT(t, e, unsavedBead("patient_registration", nil, map[string]any{"name": "Patient A"}))
+	rootB := ingestT(t, e, unsavedBead("patient_registration", nil, map[string]any{"name": "Patient B"}))
+	beadA := ingestT(t, e, unsavedBead("fhir_observation", []string{rootA.ID}, map[string]any{"note": "shared query text"}))
+	beadB := ingestT(t, e, unsavedBead("fhir_observation", []string{rootB.ID}, map[string]any{"note": "shared query text"}))
 
 	fake := &fakeEmbedder{}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -210,7 +210,7 @@ func TestStartEmbedIndexer_PatientRootPartitionFilter(t *testing.T) {
 // queue row must survive (not be dropped) until the embedder recovers.
 func TestStartEmbedIndexer_EmbedderDown_IngestStillSucceeds_QueueRetained(t *testing.T) {
 	e := openT(t)
-	root := ingestT(t, e, unsavedBead("patient_registration", nil, nil, map[string]any{"name": "Outage Patient"}))
+	root := ingestT(t, e, unsavedBead("patient_registration", nil, map[string]any{"name": "Outage Patient"}))
 
 	fake := &fakeEmbedder{}
 	fake.setFailNext(1000000) // effectively "always fails" for this test's duration
@@ -226,7 +226,7 @@ func TestStartEmbedIndexer_EmbedderDown_IngestStillSucceeds_QueueRetained(t *tes
 
 	// Ingest must succeed (and not hang) even while the indexer goroutine is
 	// continuously failing to embed in the background.
-	obs := ingestT(t, e, unsavedBead("fhir_observation", []string{root.ID}, nil, map[string]any{"note": "ingest must not block on embedder outage"}))
+	obs := ingestT(t, e, unsavedBead("fhir_observation", []string{root.ID}, map[string]any{"note": "ingest must not block on embedder outage"}))
 
 	// Give the indexer goroutine a few failed-retry cycles to run.
 	time.Sleep(80 * time.Millisecond)
@@ -256,8 +256,8 @@ func TestStartEmbedIndexer_EmbedderDown_IngestStillSucceeds_QueueRetained(t *tes
 // re-ingested.
 func TestStartEmbedIndexer_RecoversAfterOutage(t *testing.T) {
 	e := openT(t)
-	root := ingestT(t, e, unsavedBead("patient_registration", nil, nil, map[string]any{"name": "Recovery Patient"}))
-	obs := ingestT(t, e, unsavedBead("fhir_observation", []string{root.ID}, nil, map[string]any{"note": "recovers after outage"}))
+	root := ingestT(t, e, unsavedBead("patient_registration", nil, map[string]any{"name": "Recovery Patient"}))
+	obs := ingestT(t, e, unsavedBead("fhir_observation", []string{root.ID}, map[string]any{"note": "recovers after outage"}))
 
 	fake := &fakeEmbedder{}
 	fake.setFailNext(3) // fails a few times, then starts succeeding
@@ -301,8 +301,8 @@ func TestStartEmbedIndexer_RecoversAfterOutage(t *testing.T) {
 // interval) when StartEmbedIndexer is never invoked at all.
 func TestStartEmbedIndexer_NoGoroutineWithoutExplicitStart(t *testing.T) {
 	e := openT(t)
-	root := ingestT(t, e, unsavedBead("patient_registration", nil, nil, map[string]any{"name": "No Indexer Patient"}))
-	ingestT(t, e, unsavedBead("fhir_observation", []string{root.ID}, nil, map[string]any{"note": "never drained"}))
+	root := ingestT(t, e, unsavedBead("patient_registration", nil, map[string]any{"name": "No Indexer Patient"}))
+	ingestT(t, e, unsavedBead("fhir_observation", []string{root.ID}, map[string]any{"note": "never drained"}))
 
 	time.Sleep(50 * time.Millisecond) // comfortably longer than this test suite's own PollInterval values
 

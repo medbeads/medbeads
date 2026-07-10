@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 
+	"github.com/medbeads/medbeads/internal/engine/antigen"
 	"github.com/medbeads/medbeads/internal/engine/bead"
 )
 
@@ -58,6 +59,18 @@ func RegisterPod(tx *sql.Tx, podPath string, patientRoot string) (int64, error) 
 // It also advances the owning pod's indexed_upto watermark to loc.Offset +
 // loc.Length (R1.3), so a caller that indexes every Append in order keeps
 // the watermark correct without a separate step.
+//
+// # Tag (antigen) extraction happens here, not at ingest (v3.1)
+//
+// specs/DESIGN_v3.1_draft.md §0/§2 moves antigen/tag derivation entirely
+// into the index projection: Bead no longer carries an Antigens field (it
+// was removed from the hash-target payload — see bead.Bead's doc comment),
+// so IndexBead is now the single place antigen.Extract(b.Type, b.Content)
+// ever runs. This makes tag derivation "投影時に決定論実行": the same
+// (Type, Content) always yields the same bead_antigens rows regardless of
+// when or how many times a Bead is (re-)indexed (Reindex/CatchUp included),
+// and re-tagging (a future dictionary update) is purely a projection
+// rebuild — it never touches a Bead's own content hash.
 //
 // f flattens b into search_text/summary (see Flattener); pass
 // DefaultFlattener{} if the caller has no type-specific flattening yet.
@@ -149,12 +162,12 @@ func IndexBead(tx *sql.Tx, b bead.Bead, loc BeadLocation, f Flattener) error {
 		}
 	}
 
-	for _, antigen := range normalized.Antigens {
+	for _, tag := range extractTags(normalized) {
 		if _, err := tx.Exec(
 			`INSERT OR IGNORE INTO bead_antigens (antigen, bead_id, patient_root) VALUES (?, ?, ?)`,
-			antigen, b.ID, root,
+			tag, b.ID, root,
 		); err != nil {
-			return fmt.Errorf("index: index bead %s: insert antigen %s: %w", b.ID, antigen, err)
+			return fmt.Errorf("index: index bead %s: insert antigen %s: %w", b.ID, tag, err)
 		}
 	}
 
@@ -214,6 +227,41 @@ func IndexBead(tx *sql.Tx, b bead.Bead, loc BeadLocation, f Flattener) error {
 	}
 
 	return nil
+}
+
+// extractTags returns the bead_antigens tags b's projection should carry.
+// For every ordinary Bead this is exactly antigen.Extract(b.Type,
+// b.Content) — the deterministic FHIR-coding + dictionary derivation (see
+// IndexBead's "Tag extraction happens here" doc comment).
+//
+// type="sibling_link" is a deliberate, narrow exception: a sibling_link
+// Bead's own content carries no FHIR coding[] for Extract to find (its
+// content shape is {matched_antigens, score, relation, ...} — see
+// apc/link.go's buildSiblingLinkBead), so a bare antigen.Extract call would
+// always yield zero tags for it. Before v3.1, this Bead type's Antigens
+// field was set directly to its own matched_antigens (buildSiblingLinkBead),
+// which made a sibling_link Bead itself carry a tag if and only if it was
+// re-scanned as a candidate in a later Scanner pass (package apc's
+// "二次応答"/generation-2 matching, SIBLING_SPEC §4.5): a later Bead sharing
+// one of those same antigens could match *the link itself* as an anchor's
+// candidate. v3.1 removed Bead.Antigens, but this generation-2 matching
+// behavior is real product behavior this codebase's tests pin (see
+// internal/engine/apc/runaway_test.go's TestRunawayPrevention_C) — so rather
+// than silently dropping it, extractTags derives the identical tag set from
+// content.matched_antigens (a genuine, already-hash-covered field of the
+// Bead's own content, the same source indexSiblingLink already reads for
+// sibling_pairs rows below), which is exactly as deterministic and
+// reindex-safe as antigen.Extract's own FHIR-coding walk.
+func extractTags(b bead.Bead) []string {
+	tags := antigen.Extract(b.Type, b.Content)
+	if b.Type != "sibling_link" {
+		return tags
+	}
+	matched, ok := siblingLinkMatchedAntigens(b)
+	if !ok {
+		return tags
+	}
+	return append(tags, matched...)
 }
 
 // indexSiblingLink derives and records the two pieces of index.db state a

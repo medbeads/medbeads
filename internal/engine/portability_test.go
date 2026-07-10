@@ -44,11 +44,11 @@ func TestOpen_RelativeDataDir_PortableAcrossCwd(t *testing.T) {
 	}
 	e := mustOpen(t, relDataDir)
 
-	root, err := e.Ingest(unsavedBead("patient_registration", nil, nil, map[string]any{"name": "portability test"}))
+	root, err := e.Ingest(unsavedBead("patient_registration", nil, map[string]any{"name": "portability test"}))
 	if err != nil {
 		t.Fatalf("Ingest (root): %v", err)
 	}
-	child, err := e.Ingest(unsavedBead("fhir_observation", []string{root.ID}, nil, map[string]any{"note": "child"}))
+	child, err := e.Ingest(unsavedBead("fhir_observation", []string{root.ID}, map[string]any{"note": "child"}))
 	if err != nil {
 		t.Fatalf("Ingest (child): %v", err)
 	}
@@ -118,7 +118,7 @@ func TestOpen_RelativeDataDir_ReindexPortableAcrossCwd(t *testing.T) {
 		t.Fatalf("Chdir(writerCwd): %v", err)
 	}
 	e := mustOpen(t, relDataDir)
-	root, err := e.Ingest(unsavedBead("patient_registration", nil, nil, map[string]any{"name": "reindex portability test"}))
+	root, err := e.Ingest(unsavedBead("patient_registration", nil, map[string]any{"name": "reindex portability test"}))
 	if err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}

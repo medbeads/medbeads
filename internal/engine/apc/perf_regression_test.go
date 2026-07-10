@@ -152,7 +152,11 @@ func fixedAntigen(patientName string, i int) string {
 }
 
 // ingestFixedT ingests a Bead with an explicit, fixed timestamp (not
-// unsavedBead's nextTimestamp() counter) and fails the test on error.
+// unsavedBead's nextTimestamp() counter) and fails the test on error. If
+// antigens is non-empty, its tags are injected as bead_antigens rows
+// directly via seedAntigens (see unsavedBead's doc comment in apc_test.go
+// for why this package controls tags this way rather than through a Bead
+// field — v3.1 removed Bead.Antigens entirely).
 func ingestFixedT(t *testing.T, e *engine.Engine, typ string, parents, antigens []string, content map[string]any, timestamp string) bead.Bead {
 	t.Helper()
 	if content == nil {
@@ -163,11 +167,13 @@ func ingestFixedT(t *testing.T, e *engine.Engine, typ string, parents, antigens 
 		Timestamp: timestamp,
 		Author:    "did:medbeads:doctor:12345",
 		Parents:   parents,
-		Antigens:  antigens,
 		Content:   content,
 	})
 	if err != nil {
 		t.Fatalf("Ingest: %v", err)
+	}
+	if len(antigens) > 0 {
+		seedAntigens(t, e, out, antigens...)
 	}
 	return out
 }

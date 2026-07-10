@@ -179,7 +179,7 @@ func TestCatchUp_RecoversCrashOnlyAppendedToPod(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenWriter: %v", err)
 	}
-	crashBead := testBead(t, "fhir_observation", "post-crash observation", []string{root.ID}, nil, nil)
+	crashBead := testBead(t, "fhir_observation", "post-crash observation", []string{root.ID}, nil)
 	if _, err := w.Append(crashBead, pod.CodecZstd, pod.NewMeta(root.ID)); err != nil {
 		t.Fatalf("Append (crash bead): %v", err)
 	}

@@ -19,12 +19,18 @@ func openT(t *testing.T) *Engine {
 	return e
 }
 
-// unsavedBead returns an ID-less Bead with the given type/parents/antigens/
-// content, for tests that want to exercise Ingest's own ID-assignment path
+// unsavedBead returns an ID-less Bead with the given type/parents/content,
+// for tests that want to exercise Ingest's own ID-assignment path
 // (verifyOrAssignID). Timestamps increase per call (via a package-level
 // counter) so ListPatientBeads ordering is deterministic and distinct Beads
 // with otherwise-identical content still get distinct content hashes.
-func unsavedBead(typ string, parents, antigens []string, content map[string]any) bead.Bead {
+//
+// No antigens parameter: v3.1 removed Bead.Antigens entirely (tag
+// derivation now happens only at index-projection time, from Type+Content —
+// see antigen.Extract / index.IndexBead). No test in this package asserts on
+// bead_antigens content, so there is nothing for a caller here to need to
+// control.
+func unsavedBead(typ string, parents []string, content map[string]any) bead.Bead {
 	if content == nil {
 		content = map[string]any{}
 	}
@@ -33,7 +39,6 @@ func unsavedBead(typ string, parents, antigens []string, content map[string]any)
 		Timestamp: nextTimestamp(),
 		Author:    "did:medbeads:doctor:12345",
 		Parents:   parents,
-		Antigens:  antigens,
 		Content:   content,
 	}
 }

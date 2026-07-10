@@ -48,7 +48,15 @@ func fmtTimestamp(h, m, s int) string {
 	return "2026-01-01T" + pad(h) + ":" + pad(m) + ":" + pad(s) + "Z"
 }
 
-func unsavedBead(typ string, parents, antigens []string, content map[string]any) bead.Bead {
+// unsavedBead returns an ID-less Bead for the given type/parents/content. No
+// antigens parameter: v3.1 removed Bead.Antigens entirely (see bead.Bead's
+// doc comment) — tag derivation now happens only at index-projection time
+// (antigen.Extract), a fixed deterministic function with no override hook.
+// See seedAntigens below for how a caller gets specific bead_antigens rows
+// onto a seeded Bead for tests whose subject is Scanner/tag-filter behavior
+// rather than tag derivation itself (mirrors
+// internal/engine/apc/apc_test.go's identical helper and reasoning).
+func unsavedBead(typ string, parents []string, content map[string]any) bead.Bead {
 	if content == nil {
 		content = map[string]any{}
 	}
@@ -57,7 +65,6 @@ func unsavedBead(typ string, parents, antigens []string, content map[string]any)
 		Timestamp: nextTimestamp(),
 		Author:    "did:medbeads:doctor:12345",
 		Parents:   parents,
-		Antigens:  antigens,
 		Content:   content,
 	}
 }
@@ -71,14 +78,51 @@ func ingestT(t *testing.T, e *engine.Engine, b bead.Bead) bead.Bead {
 	return out
 }
 
-func seedPatient(t *testing.T, e *engine.Engine, name string) bead.Bead {
+// seedAntigens inserts bead_antigens rows for the already-ingested Bead b
+// directly (bypassing antigen.Extract entirely) — see unsavedBead's doc
+// comment. patient_root is resolved from the index (e.Index().GetBead) —
+// not trusted from a caller-supplied parameter — since b's own parent Bead
+// is not necessarily the patient root (e.g. a Bead seeded under an
+// intermediate encounter), and every downstream Scanner query
+// (candidatesFor/frequentAntigens) is scoped by patient_root, so a wrong
+// value here would silently break IDF-threshold/matching assertions for a
+// reason unrelated to what a test is actually checking (mirrors
+// internal/engine/apc/apc_test.go's identical helper and reasoning).
+func seedAntigens(t *testing.T, e *engine.Engine, b bead.Bead, tags ...string) {
 	t.Helper()
-	return ingestT(t, e, unsavedBead("patient_registration", nil, nil, map[string]any{"name": name}))
+	ref, err := e.Index().GetBead(b.ID)
+	if err != nil {
+		t.Fatalf("seedAntigens(%s): resolve patient_root: %v", b.ID, err)
+	}
+	var root any
+	if ref.PatientRoot != "" {
+		root = ref.PatientRoot
+	}
+	for _, tag := range tags {
+		if _, err := e.Index().SQLDB().Exec(
+			`INSERT OR IGNORE INTO bead_antigens (antigen, bead_id, patient_root) VALUES (?, ?, ?)`,
+			tag, b.ID, root,
+		); err != nil {
+			t.Fatalf("seedAntigens(%s, %v): %v", b.ID, tags, err)
+		}
+	}
 }
 
+func seedPatient(t *testing.T, e *engine.Engine, name string) bead.Bead {
+	t.Helper()
+	return ingestT(t, e, unsavedBead("patient_registration", nil, map[string]any{"name": name}))
+}
+
+// seedChildBead ingests a Bead of the given type/content as a child of
+// parent, then (if antigens is non-empty) injects bead_antigens rows for it
+// directly via seedAntigens — see unsavedBead's doc comment.
 func seedChildBead(t *testing.T, e *engine.Engine, parent bead.Bead, typ string, antigens []string, content map[string]any) bead.Bead {
 	t.Helper()
-	return ingestT(t, e, unsavedBead(typ, []string{parent.ID}, antigens, content))
+	b := ingestT(t, e, unsavedBead(typ, []string{parent.ID}, content))
+	if len(antigens) > 0 {
+		seedAntigens(t, e, b, antigens...)
+	}
+	return b
 }
 
 // padWithNoiseBeads mirrors internal/engine/apc/apc_test.go's helper of the

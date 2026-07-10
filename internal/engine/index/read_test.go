@@ -11,14 +11,14 @@ import "testing"
 func TestListPatients_ReturnsOnlyRegistrations(t *testing.T) {
 	db := openT(t)
 
-	p1 := testBead(t, "patient_registration", "Patient One", nil, nil, nil)
+	p1 := testBead(t, "patient_registration", "Patient One", nil, nil)
 	indexBeadT(t, db, p1, BeadLocation{PodPath: "pods/_shared.pod", PatientRoot: p1.ID, Offset: 0, Length: 100})
 
-	p2 := testBead(t, "patient_registration", "Patient Two", nil, nil, nil)
+	p2 := testBead(t, "patient_registration", "Patient Two", nil, nil)
 	indexBeadT(t, db, p2, BeadLocation{PodPath: "pods/_shared.pod", PatientRoot: p2.ID, Offset: 100, Length: 100})
 
 	// A non-patient child bead must not be returned by ListPatients.
-	child := testBead(t, "fhir_encounter", "visit", []string{p1.ID}, nil, nil)
+	child := testBead(t, "fhir_encounter", "visit", []string{p1.ID}, nil)
 	indexBeadT(t, db, child, BeadLocation{PodPath: "pods/_shared.pod", PatientRoot: p1.ID, Offset: 200, Length: 100})
 
 	refs, err := db.ListPatients()

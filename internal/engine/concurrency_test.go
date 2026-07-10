@@ -79,7 +79,7 @@ func TestIngest_ConcurrentMultiPatient(t *testing.T) {
 func TestIngest_ConcurrentSamePatient(t *testing.T) {
 	e := openT(t)
 
-	root, err := e.Ingest(unsavedBead("patient_registration", nil, nil, map[string]any{"name": "shared root"}))
+	root, err := e.Ingest(unsavedBead("patient_registration", nil, map[string]any{"name": "shared root"}))
 	if err != nil {
 		t.Fatalf("Ingest (root): %v", err)
 	}
@@ -143,7 +143,7 @@ func TestIngest_PerformanceSmoke(t *testing.T) {
 	}
 	e := openT(t)
 
-	root, err := e.Ingest(unsavedBead("patient_registration", nil, nil, map[string]any{"name": "perf patient"}))
+	root, err := e.Ingest(unsavedBead("patient_registration", nil, map[string]any{"name": "perf patient"}))
 	if err != nil {
 		t.Fatalf("Ingest (root): %v", err)
 	}
@@ -152,7 +152,7 @@ func TestIngest_PerformanceSmoke(t *testing.T) {
 	start := time.Now()
 	prev := root.ID
 	for i := 0; i < n; i++ {
-		b, err := e.Ingest(unsavedBead("fhir_observation", []string{prev}, nil, map[string]any{"i": i}))
+		b, err := e.Ingest(unsavedBead("fhir_observation", []string{prev}, map[string]any{"i": i}))
 		if err != nil {
 			t.Fatalf("Ingest %d: %v", i, err)
 		}

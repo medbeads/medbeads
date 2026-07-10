@@ -76,7 +76,7 @@ func TestFilterByAccess_MasksRestrictedContent(t *testing.T) {
 	e := openT(t)
 
 	patient := seedPatient(t, e, "Patient")
-	psych := seedChildBead(t, e, patient, "fhir_condition", nil, map[string]any{
+	psych := seedChildBead(t, e, patient, "fhir_condition", map[string]any{
 		"diagnosis": "psychiatric evaluation",
 	})
 	seedClearanceRule(t, e, psych.ID, []string{"insurance"}, nil)
@@ -128,7 +128,7 @@ func TestFilterByAccess_AuthorizedSeesContent(t *testing.T) {
 	e := openT(t)
 
 	patient := seedPatient(t, e, "Patient")
-	psych := seedChildBead(t, e, patient, "fhir_condition", nil, map[string]any{
+	psych := seedChildBead(t, e, patient, "fhir_condition", map[string]any{
 		"diagnosis": "psychiatric evaluation",
 	})
 	seedClearanceRule(t, e, psych.ID, []string{"insurance"}, nil)

@@ -173,7 +173,7 @@ func rolesIntersect(a, b []string) bool {
 // bead.Clearance overlay. A restricted Bead keeps its ID/Type/Timestamp/
 // Parents (so the DAG structure and a future "locked node" UI rendering
 // stay intact) but its Content is replaced with {"_restricted": true} and
-// its Clearance/Antigens/Evidence/Author/Signature are dropped. Accessible
+// its Clearance/Amends/Retracts/Evidence/Author/Signature are dropped. Accessible
 // Beads are returned unchanged. Ported from v2.2.0's
 // core/store.FilterByAccess.
 func FilterByAccess(db *index.DB, beads []bead.Bead, viewerRoles []string) ([]bead.Bead, error) {

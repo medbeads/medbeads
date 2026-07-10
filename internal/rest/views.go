@@ -8,12 +8,12 @@ import (
 // beadView is this package's wire shape for a Bead — v2.2.0's
 // core/types.Bead JSON shape verbatim (id/type/content/parents/timestamp,
 // plain-hex id, no sha256: prefix — see doc.go's "ID notation"). v2's
-// types.Bead carried only these five fields (no author/antigens/evidence),
-// and ui/src/lib/api.ts's Bead interface mirrors exactly that same five-field
+// types.Bead carried only these five fields (no author/evidence), and
+// ui/src/lib/api.ts's Bead interface mirrors exactly that same five-field
 // shape, so this package intentionally narrows internal/engine/bead.Bead
-// (which additionally carries Author/Antigens/Evidence/Clearance/Signature)
-// down to those five fields here rather than exposing its full v3 shape —
-// widening the frozen contract is itself a contract change.
+// (which additionally carries Author/Amends/Retracts/Evidence/Clearance/
+// Signature) down to those five fields here rather than exposing its full v3
+// shape — widening the frozen contract is itself a contract change.
 type beadView struct {
 	ID        string         `json:"id,omitempty"`
 	Type      string         `json:"type"`

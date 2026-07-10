@@ -141,11 +141,14 @@ func TestCreateBead_RegisteredForSystemRole(t *testing.T) {
 	t.Fatalf("ListTools for system role does not include create_bead")
 }
 
-// TestCreateBead_AntigensAreDeterministicallyDerived checks the task's
-// "antigen.Extract を適用して antigens を決定論生成" requirement: caller-
-// supplied antigens are irrelevant (createBeadIn has no antigens field at
-// all — content drives extraction), and the same content always yields the
-// same derived antigens regardless of what a caller might have guessed.
+// TestCreateBead_AntigensAreDeterministicallyDerived checks the v3.1
+// projection-time tag derivation requirement (specs/DESIGN_v3.1_draft.md
+// §2/§5): create_bead never accepts or computes antigens/tags at all
+// (createBeadIn has no antigens field, and the returned/persisted Bead
+// itself carries no Antigens field either — see bead.Bead's doc comment);
+// tag derivation runs only when index.IndexBead projects the Bead, via
+// antigen.Extract(b.Type, b.Content), and its result lives in bead_antigens
+// (queried here via e.Index().GetAntigens), not on the Bead.
 func TestCreateBead_AntigensAreDeterministicallyDerived(t *testing.T) {
 	e := openT(t)
 	p := seedPatient(t, e, "Antigen Patient")
@@ -169,36 +172,37 @@ func TestCreateBead_AntigensAreDeterministicallyDerived(t *testing.T) {
 		t.Fatalf("createBead: %v", err)
 	}
 
-	wantAntigen := "snomed:44054006"
-	found := false
-	for _, ag := range out.Bead.Antigens {
-		if ag == wantAntigen {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("createBead(...).Bead.Antigens = %v, want to contain %q", out.Bead.Antigens, wantAntigen)
-	}
-
-	// Re-fetching via engine.GetBead directly must show the same derived
-	// antigen was actually persisted (not just present in the tool's
-	// in-process response).
 	plainID, err := bead.ParseID(out.Bead.ID)
 	if err != nil {
 		t.Fatalf("bead.ParseID(%q): %v", out.Bead.ID, err)
 	}
+
+	// The Bead itself (正本) carries no antigens — get_bead-equivalent access
+	// must never expose a tag field (specs/DESIGN_v3.1_draft.md §5: "get_bead
+	// は正本のみ、タグを含まない").
 	saved, err := e.GetBead(plainID)
 	if err != nil {
 		t.Fatalf("e.GetBead(%s): %v", plainID, err)
 	}
-	found = false
-	for _, ag := range saved.Antigens {
+	if saved.Content == nil {
+		t.Fatalf("e.GetBead(%s) returned no Content", plainID)
+	}
+
+	// The projection (bead_antigens, populated by IndexBead's
+	// antigen.Extract call) must carry the deterministically-derived tag.
+	wantAntigen := "snomed:44054006"
+	gotAntigens, err := e.Index().GetAntigens(plainID)
+	if err != nil {
+		t.Fatalf("e.Index().GetAntigens(%s): %v", plainID, err)
+	}
+	found := false
+	for _, ag := range gotAntigens {
 		if ag == wantAntigen {
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("persisted Bead.Antigens = %v, want to contain %q", saved.Antigens, wantAntigen)
+		t.Errorf("GetAntigens(%s) = %v, want to contain %q", plainID, gotAntigens, wantAntigen)
 	}
 }
 

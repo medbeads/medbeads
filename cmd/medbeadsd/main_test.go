@@ -251,6 +251,37 @@ func apcIngestT(t *testing.T, e *engine.Engine, b bead.Bead) bead.Bead {
 	return out
 }
 
+// apcSeedAntigens inserts bead_antigens rows for the already-ingested Bead b
+// directly (bypassing antigen.Extract entirely) — mirrors
+// internal/engine/apc/apc_test.go's seedAntigens and identical reasoning: v3.1
+// removed Bead.Antigens entirely (tag derivation now happens only at
+// index-projection time, from a fixed antigen.Extract with no override
+// hook), and this package's apc end-to-end tests exercise `medbeadsd apc`
+// given certain tags exist, not tag derivation itself. patient_root is
+// resolved from the index (e.Index().GetBead) rather than trusted from a
+// caller-supplied value, since every downstream Scanner query is scoped by
+// patient_root and a wrong value would silently break IDF-threshold/
+// matching assertions.
+func apcSeedAntigens(t *testing.T, e *engine.Engine, b bead.Bead, tags ...string) {
+	t.Helper()
+	ref, err := e.Index().GetBead(b.ID)
+	if err != nil {
+		t.Fatalf("apcSeedAntigens(%s): resolve patient_root: %v", b.ID, err)
+	}
+	var root any
+	if ref.PatientRoot != "" {
+		root = ref.PatientRoot
+	}
+	for _, tag := range tags {
+		if _, err := e.Index().SQLDB().Exec(
+			`INSERT OR IGNORE INTO bead_antigens (antigen, bead_id, patient_root) VALUES (?, ?, ?)`,
+			tag, b.ID, root,
+		); err != nil {
+			t.Fatalf("apcSeedAntigens(%s, %v): %v", b.ID, tags, err)
+		}
+	}
+}
+
 // apcTimestamp returns a distinct RFC3339 timestamp per call (Beads within
 // the same patient must have distinct timestamps for a deterministic Bead
 // ID), mirroring internal/engine/apc/apc_test.go's nextTimestamp.
@@ -283,32 +314,32 @@ func seedApcMatchablePair(t *testing.T, e *engine.Engine) (patientID string) {
 	})
 
 	for i := 0; i < 10; i++ {
-		apcIngestT(t, e, bead.Bead{
+		noise := apcIngestT(t, e, bead.Bead{
 			Type:      "fhir_observation",
 			Timestamp: apcTimestamp(),
 			Author:    "did:medbeads:doctor:12345",
 			Parents:   []string{root.ID},
-			Antigens:  []string{fmt.Sprintf("loinc:noise-%d", i)},
 			Content:   map[string]any{"noise": i},
 		})
+		apcSeedAntigens(t, e, noise, fmt.Sprintf("loinc:noise-%d", i))
 	}
 
-	apcIngestT(t, e, bead.Bead{
+	rx := apcIngestT(t, e, bead.Bead{
 		Type:      "fhir_medicationrequest",
 		Timestamp: apcTimestamp(),
 		Author:    "did:medbeads:doctor:12345",
 		Parents:   []string{root.ID},
-		Antigens:  []string{"risk:nephrotoxic", "organ:renal"},
 		Content:   map[string]any{"drug": "meropenem"},
 	})
-	apcIngestT(t, e, bead.Bead{
+	apcSeedAntigens(t, e, rx, "risk:nephrotoxic", "organ:renal")
+	lab := apcIngestT(t, e, bead.Bead{
 		Type:      "fhir_observation",
 		Timestamp: apcTimestamp(),
 		Author:    "did:medbeads:doctor:12345",
 		Parents:   []string{root.ID},
-		Antigens:  []string{"risk:nephrotoxic", "organ:renal"},
 		Content:   map[string]any{"test": "eGFR"},
 	})
+	apcSeedAntigens(t, e, lab, "risk:nephrotoxic", "organ:renal")
 
 	return root.ID
 }
@@ -422,31 +453,31 @@ func TestRun_ApcPatientScope(t *testing.T) {
 		Content:   map[string]any{"name": "Other Patient"},
 	})
 	for i := 0; i < 10; i++ {
-		apcIngestT(t, e, bead.Bead{
+		otherNoise := apcIngestT(t, e, bead.Bead{
 			Type:      "fhir_observation",
 			Timestamp: apcTimestamp(),
 			Author:    "did:medbeads:doctor:12345",
 			Parents:   []string{otherRoot.ID},
-			Antigens:  []string{fmt.Sprintf("loinc:other-noise-%d", i)},
 			Content:   map[string]any{"noise": i},
 		})
+		apcSeedAntigens(t, e, otherNoise, fmt.Sprintf("loinc:other-noise-%d", i))
 	}
-	apcIngestT(t, e, bead.Bead{
+	otherRx := apcIngestT(t, e, bead.Bead{
 		Type:      "fhir_medicationrequest",
 		Timestamp: apcTimestamp(),
 		Author:    "did:medbeads:doctor:12345",
 		Parents:   []string{otherRoot.ID},
-		Antigens:  []string{"risk:nephrotoxic", "organ:renal"},
 		Content:   map[string]any{"drug": "meropenem"},
 	})
-	apcIngestT(t, e, bead.Bead{
+	apcSeedAntigens(t, e, otherRx, "risk:nephrotoxic", "organ:renal")
+	otherLab := apcIngestT(t, e, bead.Bead{
 		Type:      "fhir_observation",
 		Timestamp: apcTimestamp(),
 		Author:    "did:medbeads:doctor:12345",
 		Parents:   []string{otherRoot.ID},
-		Antigens:  []string{"risk:nephrotoxic", "organ:renal"},
 		Content:   map[string]any{"test": "eGFR"},
 	})
+	apcSeedAntigens(t, e, otherLab, "risk:nephrotoxic", "organ:renal")
 	if err := e.Close(); err != nil {
 		t.Fatalf("engine.Close: %v", err)
 	}

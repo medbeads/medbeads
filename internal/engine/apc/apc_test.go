@@ -48,7 +48,20 @@ func fmtTimestamp(h, m, s int) string {
 	return "2026-01-01T" + pad(h) + ":" + pad(m) + ":" + pad(s) + "Z"
 }
 
-func unsavedBead(typ string, parents, antigens []string, content map[string]any) bead.Bead {
+// unsavedBead returns an ID-less Bead for the given type/parents/content. No
+// antigens parameter: v3.1 removed Bead.Antigens entirely (see bead.Bead's
+// doc comment) — tag derivation now happens only at index-projection time,
+// from antigen.Extract(b.Type, b.Content), which is a fixed deterministic
+// function (real FHIR coding + a small static dictionary, no override hook,
+// no LLM). This package's own tests exercise Scanner behavior *given*
+// certain bead_antigens tags exist, not tag derivation itself (that is
+// package antigen's job, covered by its own fixture-based tests) — many of
+// the tag strings these tests need (loinc:noise-N uniqueness markers,
+// risk:nephrotoxic alone without organ:renal, etc.) do not correspond to any
+// real FHIR coding or dictionary.json entry antigen.Extract could ever
+// produce. See seedAntigens below for how a caller gets specific
+// bead_antigens rows onto a seeded Bead instead.
+func unsavedBead(typ string, parents []string, content map[string]any) bead.Bead {
 	if content == nil {
 		content = map[string]any{}
 	}
@@ -57,7 +70,6 @@ func unsavedBead(typ string, parents, antigens []string, content map[string]any)
 		Timestamp: nextTimestamp(),
 		Author:    "did:medbeads:doctor:12345",
 		Parents:   parents,
-		Antigens:  antigens,
 		Content:   content,
 	}
 }
@@ -71,14 +83,61 @@ func ingestT(t *testing.T, e *engine.Engine, b bead.Bead) bead.Bead {
 	return out
 }
 
-func seedPatient(t *testing.T, e *engine.Engine, name string) bead.Bead {
+// seedAntigens inserts bead_antigens rows for the already-ingested Bead b
+// directly (bypassing antigen.Extract entirely), for tests whose subject is
+// Scanner behavior given a Bead carries certain tags, not tag derivation
+// itself — see unsavedBead's doc comment. This mirrors exactly the row
+// shape/table IndexBead itself would have written had Extract produced
+// these tags (INSERT OR IGNORE INTO bead_antigens(antigen, bead_id,
+// patient_root)), so every downstream Scanner code path (GetAntigens,
+// frequentAntigens, candidateRows) sees the identical shape of data it would
+// from a real projection run.
+//
+// patient_root is resolved from the index (e.Index().GetBead(b.ID)) rather
+// than trusted from a caller-supplied parameter: candidatesFor/
+// frequentAntigens scope every query by patient_root, so a wrong value here
+// would silently scope a seeded tag to the wrong patient (or the shared
+// pod) and break IDF-threshold/matching assertions in a way that has
+// nothing to do with what the test is actually checking. b's own parent
+// bead is not necessarily the patient root (e.g. a Bead seeded under an
+// intermediate encounter), so re-deriving it from what Ingest itself
+// already resolved is the only reliable source.
+func seedAntigens(t *testing.T, e *engine.Engine, b bead.Bead, tags ...string) {
 	t.Helper()
-	return ingestT(t, e, unsavedBead("patient_registration", nil, nil, map[string]any{"name": name}))
+	ref, err := e.Index().GetBead(b.ID)
+	if err != nil {
+		t.Fatalf("seedAntigens(%s): resolve patient_root: %v", b.ID, err)
+	}
+	var root any
+	if ref.PatientRoot != "" {
+		root = ref.PatientRoot
+	}
+	for _, tag := range tags {
+		if _, err := e.Index().SQLDB().Exec(
+			`INSERT OR IGNORE INTO bead_antigens (antigen, bead_id, patient_root) VALUES (?, ?, ?)`,
+			tag, b.ID, root,
+		); err != nil {
+			t.Fatalf("seedAntigens(%s, %v): %v", b.ID, tags, err)
+		}
+	}
 }
 
+func seedPatient(t *testing.T, e *engine.Engine, name string) bead.Bead {
+	t.Helper()
+	return ingestT(t, e, unsavedBead("patient_registration", nil, map[string]any{"name": name}))
+}
+
+// seedChildBead ingests a Bead of the given type/content as a child of
+// parent, then (if antigens is non-empty) injects bead_antigens rows for it
+// directly via seedAntigens — see unsavedBead's doc comment for why this
+// package's tests control tags this way rather than through a Bead field.
 func seedChildBead(t *testing.T, e *engine.Engine, parent bead.Bead, typ string, antigens []string, content map[string]any) bead.Bead {
 	t.Helper()
-	return ingestT(t, e, unsavedBead(typ, []string{parent.ID}, antigens, content))
+	b := ingestT(t, e, unsavedBead(typ, []string{parent.ID}, content))
+	if len(antigens) > 0 {
+		seedAntigens(t, e, b, antigens...)
+	}
+	return b
 }
 
 func storeFor(e *engine.Engine) *pod.Store {
@@ -361,26 +420,25 @@ func TestBuildSiblingLink_DeterministicID(t *testing.T) {
 			Author: "did:medbeads:doctor:12345", Content: map[string]any{"name": "patient A"},
 		})
 		for i := 0; i < 10; i++ {
-			ingestT(t, e, bead.Bead{
+			noise := ingestT(t, e, bead.Bead{
 				Type: "fhir_observation", Timestamp: fmt.Sprintf("2026-01-15T%02d:00:00Z", i),
 				Author: "did:medbeads:doctor:12345", Parents: []string{root.ID},
-				Antigens: []string{fmt.Sprintf("loinc:noise-%d", i)},
-				Content:  map[string]any{"noise": i},
+				Content: map[string]any{"noise": i},
 			})
+			seedAntigens(t, e, noise, fmt.Sprintf("loinc:noise-%d", i))
 		}
 		rx := ingestT(t, e, bead.Bead{
 			Type: "fhir_medicationrequest", Timestamp: "2026-02-01T09:00:00Z",
 			Author: "did:medbeads:doctor:12345", Parents: []string{root.ID},
-			Antigens: []string{"risk:nephrotoxic", "organ:renal"},
-			Content:  map[string]any{"drug": "meropenem"},
+			Content: map[string]any{"drug": "meropenem"},
 		})
-		ingestT(t, e, bead.Bead{
+		seedAntigens(t, e, rx, "risk:nephrotoxic", "organ:renal")
+		lab := ingestT(t, e, bead.Bead{
 			Type: "fhir_observation", Timestamp: "2026-02-01T10:00:00Z",
 			Author: "did:medbeads:doctor:12345", Parents: []string{root.ID},
-			Antigens: []string{"risk:nephrotoxic", "organ:renal"},
-			Content:  map[string]any{"test": "eGFR"},
+			Content: map[string]any{"test": "eGFR"},
 		})
-		_ = rx
+		seedAntigens(t, e, lab, "risk:nephrotoxic", "organ:renal")
 
 		scanner := apc.New(e, e.Index(), apc.Default())
 		if _, err := scanner.Scan(); err != nil {

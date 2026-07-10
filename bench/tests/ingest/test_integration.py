@@ -160,8 +160,10 @@ def test_medication_reference_bead_gets_rxnorm_antigen(
 ) -> None:
     """Reviewer-mandated fix verification: ingest one real Bundle known to
     contain a `medicationReference`-shaped MedicationRequest (no inline
-    `medicationCodeableConcept`), then confirm via get_bead that its
-    server-computed antigens include an `rxnorm:` entry — i.e. this
+    `medicationCodeableConcept`), then confirm via search_antigens that its
+    server-computed tags (index.IndexBead's antigen.Extract, run at
+    projection time — v3.1 moved this off create_bead entirely, see
+    get_bead's doc comment) include an `rxnorm:` entry — i.e. this
     module's inline medication-code synthesis actually reaches
     antigen.Extract, not just that the synthesized content looks right in
     isolation (test_medication_reference.py already covers that in
@@ -198,16 +200,35 @@ async def _run_medication_reference(tmp_path: Path, medbeadsd_binary: Path, synt
         for fhir_id in medication_request_fhir_ids:
             bead_id = bead_id_by_fhir_id[fhir_id]
             bead = await client.get_bead(bead_id)
-            assert "medicationCodeableConcept" in bead["content"], (
+            content = bead["content"]
+            assert "medicationCodeableConcept" in content, (
                 f"MedicationRequest {fhir_id}'s Bead content is missing the synthesized "
                 "medicationCodeableConcept"
             )
-            if any(a.startswith("rxnorm:") for a in bead["antigens"]):
-                found_rxnorm = True
+
+            # Derive the exact rxnorm: tag antigen.Extract should have
+            # produced from this Bead's own synthesized coding[], then
+            # confirm the projection (bead_antigens, via search_antigens)
+            # actually carries it for this bead_id — a precise round-trip
+            # check, not merely "get_bead returned something antigen-shaped"
+            # (which is no longer possible post-v3.1: get_bead's Bead never
+            # carries tags at all).
+            codings = content["medicationCodeableConcept"].get("coding", [])
+            rxnorm_codes = [
+                c["code"]
+                for c in codings
+                if isinstance(c, dict) and c.get("system") == "http://www.nlm.nih.gov/research/umls/rxnorm"
+            ]
+            if not rxnorm_codes:
+                continue
+            for code in rxnorm_codes:
+                hits = await client.search_antigens(f"rxnorm:{code}")
+                if any(h["id"] == bead["id"] for h in hits):
+                    found_rxnorm = True
 
         assert found_rxnorm, (
-            "no medicationReference-shaped MedicationRequest Bead carried an rxnorm: antigen "
-            "after inline medication-code synthesis"
+            "no medicationReference-shaped MedicationRequest Bead's rxnorm: tag was found via "
+            "search_antigens after inline medication-code synthesis"
         )
 
 

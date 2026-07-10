@@ -57,8 +57,10 @@ func fmtTimestamp(h, m, s int) string {
 }
 
 // unsavedBead returns an ID-less Bead ready for e.Ingest, mirroring
-// internal/engine/engine_test.go's unsavedBead.
-func unsavedBead(typ string, parents, antigens []string, content map[string]any) bead.Bead {
+// internal/engine/engine_test.go's unsavedBead. No antigens parameter: v3.1
+// removed Bead.Antigens entirely (see bead.Bead's doc comment) — no test in
+// this package asserts on bead_antigens content.
+func unsavedBead(typ string, parents []string, content map[string]any) bead.Bead {
 	if content == nil {
 		content = map[string]any{}
 	}
@@ -67,7 +69,6 @@ func unsavedBead(typ string, parents, antigens []string, content map[string]any)
 		Timestamp: nextTimestamp(),
 		Author:    "did:medbeads:doctor:12345",
 		Parents:   parents,
-		Antigens:  antigens,
 		Content:   content,
 	}
 }
@@ -87,14 +88,14 @@ func ingestT(t *testing.T, e *engine.Engine, b bead.Bead) bead.Bead {
 // mirroring v2.2.0's core/store/graph_test.go seedPatient.
 func seedPatient(t *testing.T, e *engine.Engine, name string) bead.Bead {
 	t.Helper()
-	return ingestT(t, e, unsavedBead("patient_registration", nil, nil, map[string]any{"name": name}))
+	return ingestT(t, e, unsavedBead("patient_registration", nil, map[string]any{"name": name}))
 }
 
 // seedChildBead ingests a Bead of the given type/content with parent as its
 // sole parent, mirroring v2.2.0's core/store/graph_test.go seedChildBead.
 func seedChildBead(t *testing.T, e *engine.Engine, parent bead.Bead, typ string, content map[string]any) bead.Bead {
 	t.Helper()
-	return ingestT(t, e, unsavedBead(typ, []string{parent.ID}, nil, content))
+	return ingestT(t, e, unsavedBead(typ, []string{parent.ID}, content))
 }
 
 // collectIDs returns the set of Bead IDs in beads, for order-independent
@@ -370,13 +371,13 @@ func indexFor(t *testing.T, e *engine.Engine) *index.DB {
 func TestChainAcrossPatients_SharedParentReachableFromBothPatients(t *testing.T) {
 	e := openT(t)
 
-	shared := ingestT(t, e, unsavedBead("drug_master", nil, []string{"rxnorm:6919"}, map[string]any{"drug": "meropenem"}))
+	shared := ingestT(t, e, unsavedBead("drug_master", nil, map[string]any{"drug": "meropenem"}))
 
 	patientA := seedPatient(t, e, "A")
-	rxA := ingestT(t, e, unsavedBead("fhir_medicationrequest", []string{patientA.ID, shared.ID}, nil, map[string]any{"n": "rxA"}))
+	rxA := ingestT(t, e, unsavedBead("fhir_medicationrequest", []string{patientA.ID, shared.ID}, map[string]any{"n": "rxA"}))
 
 	patientB := seedPatient(t, e, "B")
-	rxB := ingestT(t, e, unsavedBead("fhir_medicationrequest", []string{patientB.ID, shared.ID}, nil, map[string]any{"n": "rxB"}))
+	rxB := ingestT(t, e, unsavedBead("fhir_medicationrequest", []string{patientB.ID, shared.ID}, map[string]any{"n": "rxB"}))
 
 	db := indexFor(t, e)
 
@@ -413,10 +414,10 @@ func TestChainAcrossPatients_SharedParentReachableFromBothPatients(t *testing.T)
 func TestChainAcrossPatients_RespectsDepth(t *testing.T) {
 	e := openT(t)
 
-	shared := ingestT(t, e, unsavedBead("drug_master", nil, nil, map[string]any{"drug": "meropenem"}))
+	shared := ingestT(t, e, unsavedBead("drug_master", nil, map[string]any{"drug": "meropenem"}))
 	patientA := seedPatient(t, e, "A")
-	mid := ingestT(t, e, unsavedBead("fhir_medicationrequest", []string{patientA.ID, shared.ID}, nil, nil))
-	leaf := ingestT(t, e, unsavedBead("fhir_observation", []string{mid.ID}, nil, nil))
+	mid := ingestT(t, e, unsavedBead("fhir_medicationrequest", []string{patientA.ID, shared.ID}, nil))
+	leaf := ingestT(t, e, unsavedBead("fhir_observation", []string{mid.ID}, nil))
 
 	db := indexFor(t, e)
 

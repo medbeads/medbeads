@@ -17,7 +17,7 @@ func TestOpen_CatchUpRecoversPodOnlyWrite(t *testing.T) {
 	dir := t.TempDir()
 
 	e := mustOpen(t, dir)
-	root, err := e.Ingest(unsavedBead("patient_registration", nil, nil, map[string]any{"name": "crash test"}))
+	root, err := e.Ingest(unsavedBead("patient_registration", nil, map[string]any{"name": "crash test"}))
 	if err != nil {
 		t.Fatalf("Ingest (root): %v", err)
 	}

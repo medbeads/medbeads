@@ -19,9 +19,9 @@ const bigPatientBeadCount = 900
 // helper itself becoming the bottleneck under test).
 func seedBigPatient(t testing.TB, e *engine.Engine, n int) bead.Bead {
 	t.Helper()
-	root := ingestT2(t, e, unsavedBead("patient_registration", nil, nil, map[string]any{"name": "bench patient"}))
+	root := ingestT2(t, e, unsavedBead("patient_registration", nil, map[string]any{"name": "bench patient"}))
 	for i := 1; i < n; i++ {
-		ingestT2(t, e, unsavedBead("fhir_observation", []string{root.ID}, []string{"loinc:718-7"},
+		ingestT2(t, e, unsavedBead("fhir_observation", []string{root.ID},
 			map[string]any{"note": "observation content for performance smoke testing, long enough to be realistic"}))
 	}
 	return root

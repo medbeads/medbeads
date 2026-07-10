@@ -22,7 +22,6 @@ func testBead(t *testing.T, note string) bead.Bead {
 		Timestamp: "2026-03-01T10:00:00Z",
 		Author:    "did:medbeads:doctor:12345",
 		Parents:   []string{"a1"},
-		Antigens:  []string{"organ:renal"},
 		Content: map[string]any{
 			"note": note,
 		},

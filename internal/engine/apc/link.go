@@ -86,7 +86,16 @@ func buildSiblingLinkBead(a, b bead.Bead, matched []string, score float64, gener
 		Timestamp: ts,
 		Author:    "apc_daemon",
 		Parents:   []string{pairA.ID, pairB.ID},
-		Antigens:  append([]string(nil), matched...),
+		// No Antigens field to set (v3.1 removed it from Bead entirely — see
+		// bead.Bead's doc comment). content.matched_antigens below is now the
+		// sole source for this Bead's own projected tags too:
+		// index.IndexBead's extractTags special-cases type="sibling_link" to
+		// read this same field (in addition to indexSiblingLink's identical
+		// read for sibling_pairs rows), specifically to preserve
+		// generation-2 ("二次応答") matching — a later Bead sharing one of
+		// these antigens can still match this sibling_link Bead itself as a
+		// Scanner candidate, exactly as it could when Antigens was a direct
+		// Bead field (see extractTags' doc comment for the full reasoning).
 		Content: map[string]any{
 			"matched_antigens": append([]string(nil), matched...),
 			"score":            score,

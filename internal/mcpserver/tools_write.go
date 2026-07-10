@@ -6,7 +6,6 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/medbeads/medbeads/internal/engine/antigen"
 	"github.com/medbeads/medbeads/internal/engine/bead"
 )
 
@@ -29,10 +28,10 @@ import (
 func (s *Server) registerWriteTools() {
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name: "create_bead",
-		Description: "Ingest a new Bead (system role only). antigens are always re-derived " +
-			"deterministically from type+content via antigen.Extract (any antigens supplied here " +
-			"are ignored) before the content hash is computed, so the resulting ID is reproducible " +
-			"from type+content alone.",
+		Description: "Ingest a new Bead (system role only). This tool does not accept antigens/tags " +
+			"at all: tag derivation (antigen.Extract) runs only at index-projection time, from the " +
+			"stored type+content, so a Bead's content hash never depends on which tagging dictionary " +
+			"happened to be current when it was ingested (specs/DESIGN_v3.1_draft.md §2).",
 	}, s.createBead)
 
 	mcp.AddTool(s.mcp, &mcp.Tool{
@@ -62,10 +61,12 @@ func (s *Server) apcTrigger(_ context.Context, _ *mcp.CallToolRequest, _ apcTrig
 }
 
 type createBeadIn struct {
-	Type      string         `json:"type" jsonschema:"Bead type, e.g. fhir_observation"`
+	Type      string         `json:"type" jsonschema:"Bead type, e.g. fhir_observation, clinical_note, assessment, attestation, retraction"`
 	Timestamp string         `json:"timestamp" jsonschema:"RFC3339 timestamp"`
 	Author    string         `json:"author,omitempty" jsonschema:"author DID/identifier"`
 	Parents   []string       `json:"parents,omitempty" jsonschema:"parent Bead IDs (sha256: prefix optional); every parent must already be indexed"`
+	Amends    []string       `json:"amends,omitempty" jsonschema:"Bead IDs this Bead corrects (sha256: prefix optional); every target must already be indexed and share this Bead's patient_root"`
+	Retracts  []string       `json:"retracts,omitempty" jsonschema:"Bead IDs this Bead retracts as entered-in-error (sha256: prefix optional); every target must already be indexed and share this Bead's patient_root"`
 	Content   map[string]any `json:"content" jsonschema:"Bead content (FHIR-shaped for antigen.Extract to find coding[] in)"`
 }
 
@@ -73,11 +74,11 @@ type createBeadOut struct {
 	Bead beadView `json:"bead"`
 }
 
-// createBead builds a bead.Bead from in, applies antigen.Extract to
-// determine its Antigens (the task's "antigen.Extract を適用して antigens を
-// 決定論生成"), assigns its content-hash ID via bead.WithID (delegated to
-// engine.Ingest, which calls this internally for an ID-less Bead — see
-// verifyOrAssignID), and ingests it via engine.Ingest.
+// createBead builds a bead.Bead from in, assigns its content-hash ID via
+// bead.WithID (delegated to engine.Ingest, which calls this internally for
+// an ID-less Bead — see verifyOrAssignID), and ingests it via engine.Ingest.
+// It does not compute or accept antigens/tags at all (v3.1: tag derivation
+// runs only at index-projection time — see index.IndexBead).
 func (s *Server) createBead(_ context.Context, _ *mcp.CallToolRequest, in createBeadIn) (*mcp.CallToolResult, createBeadOut, error) {
 	if in.Type == "" {
 		res, jerr := toolError("create_bead", fmt.Errorf("type must not be empty"))
@@ -88,14 +89,20 @@ func (s *Server) createBead(_ context.Context, _ *mcp.CallToolRequest, in create
 		return res, createBeadOut{}, jerr
 	}
 
-	parents := make([]string, len(in.Parents))
-	for i, p := range in.Parents {
-		id, err := bead.ParseID(p)
-		if err != nil {
-			res, jerr := toolError("create_bead: parse parent", err)
-			return res, createBeadOut{}, jerr
-		}
-		parents[i] = id
+	parents, err := parseIDs(in.Parents)
+	if err != nil {
+		res, jerr := toolError("create_bead: parse parent", err)
+		return res, createBeadOut{}, jerr
+	}
+	amends, err := parseIDs(in.Amends)
+	if err != nil {
+		res, jerr := toolError("create_bead: parse amends", err)
+		return res, createBeadOut{}, jerr
+	}
+	retracts, err := parseIDs(in.Retracts)
+	if err != nil {
+		res, jerr := toolError("create_bead: parse retracts", err)
+		return res, createBeadOut{}, jerr
 	}
 
 	content := in.Content
@@ -108,7 +115,8 @@ func (s *Server) createBead(_ context.Context, _ *mcp.CallToolRequest, in create
 		Timestamp: in.Timestamp,
 		Author:    in.Author,
 		Parents:   parents,
-		Antigens:  antigen.Extract(in.Type, content),
+		Amends:    amends,
+		Retracts:  retracts,
 		Content:   content,
 	}
 
@@ -119,4 +127,20 @@ func (s *Server) createBead(_ context.Context, _ *mcp.CallToolRequest, in create
 	}
 
 	return nil, createBeadOut{Bead: newBeadView(saved)}, nil
+}
+
+// parseIDs runs bead.ParseID over every element of ids, normalizing each to
+// its plain-hex form (accepting an optional "sha256:" prefix on input — see
+// bead.ParseID). Returns the first parse error encountered, wrapped with
+// enough context to identify which ID was malformed.
+func parseIDs(ids []string) ([]string, error) {
+	out := make([]string, len(ids))
+	for i, id := range ids {
+		parsed, err := bead.ParseID(id)
+		if err != nil {
+			return nil, fmt.Errorf("id %q: %w", id, err)
+		}
+		out[i] = parsed
+	}
+	return out, nil
 }

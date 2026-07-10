@@ -24,7 +24,7 @@ import (
 func TestGetBead_And_GetBeadVerified_AgreeOnUntamperedData(t *testing.T) {
 	e := openT(t)
 
-	root, err := e.Ingest(unsavedBead("patient_registration", nil, nil, map[string]any{"name": "verify-mode test"}))
+	root, err := e.Ingest(unsavedBead("patient_registration", nil, map[string]any{"name": "verify-mode test"}))
 	if err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestGetBead_And_GetBeadVerified_AgreeOnUntamperedData(t *testing.T) {
 func TestGetBead_DetectsStorageCorruptionViaCRC(t *testing.T) {
 	e := openT(t)
 
-	root, err := e.Ingest(unsavedBead("patient_registration", nil, nil, map[string]any{"name": "corruption test"}))
+	root, err := e.Ingest(unsavedBead("patient_registration", nil, map[string]any{"name": "corruption test"}))
 	if err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}

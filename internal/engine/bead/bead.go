@@ -38,17 +38,43 @@ type Clearance struct {
 
 // Bead is the fundamental content-addressed unit in MedBeads v3.
 //
-// ID = sha256(JCS({type, timestamp, author, parents, antigens, content, evidence})).
-// clearance and signature are deliberately excluded from the hash. patient_root
-// is NOT a field of Bead: it is derived (Pod frame meta + index column only).
-// See specs/DESIGN_v3.md §4.
+// ID = sha256(JCS({type, timestamp, author, parents, amends, retracts,
+// content, evidence})). clearance and signature are deliberately excluded
+// from the hash. patient_root is NOT a field of Bead: it is derived (Pod
+// frame meta + index column only). See specs/DESIGN_v3.1_draft.md §2.
+//
+// # No Antigens field (v3.1: 事実と解釈の二層分離)
+//
+// v3.0 carried an Antigens []string hash-target field. v3.1 removes it
+// entirely: antigen/tag derivation is knowledge-based interpretation, not an
+// immutable fact about the Bead, so it now lives exclusively in the index
+// projection (antigen.Extract, run at IndexBead time from Type+Content —
+// see internal/engine/index.IndexBead). A Bead's hash is therefore
+// independent of which tagging dictionary happens to be current when it was
+// ingested, and re-tagging (a dictionary update) never changes any Bead's
+// ID — only its projection. specs/DESIGN_v3.1_draft.md §0/§2.
+//
+// # amends / retracts and cycle-freedom
+//
+// amends and retracts name other Bead IDs (existing corrections/retraction
+// facts), mirroring Parents' hash-target-normalization treatment (dedup +
+// lexicographic sort — see Normalize). A cycle (Bead A amends/retracts B
+// while B amends/retracts A) is structurally impossible, not merely
+// forbidden by convention: computing A's ID requires content-hash B's ID to
+// already be known (B must exist, fully hashed, before A can reference it),
+// so no chain of amends/retracts references can ever loop back to a
+// not-yet-hashed Bead. This follows directly from content-addressing's
+// forward-reference-only property, the same structural argument that already
+// makes the Parents DAG acyclic (see engine.Ingest's doc comment) — no
+// runtime cycle check is needed or implemented here.
 type Bead struct {
 	ID        string         `json:"id,omitempty"`
 	Type      string         `json:"type"`
 	Timestamp string         `json:"timestamp"`
 	Author    string         `json:"author,omitempty"`
 	Parents   []string       `json:"parents"`
-	Antigens  []string       `json:"antigens"`
+	Amends    []string       `json:"amends"`
+	Retracts  []string       `json:"retracts"`
 	Content   map[string]any `json:"content"`
 	Evidence  []Evidence     `json:"evidence,omitempty"`
 
@@ -58,25 +84,27 @@ type Bead struct {
 }
 
 // hashPayload is the exact set of hash-target fields, in the field order
-// mandated by specs/DESIGN_v3.md §4: {type, timestamp, author, parents,
-// antigens, content, evidence}. JCS re-sorts object keys lexicographically
-// regardless of struct field/json order, but keeping this order documents the
-// spec and keeps json.Marshal output stable prior to canonicalization.
+// mandated by specs/DESIGN_v3.1_draft.md §2: {type, timestamp, author,
+// parents, amends, retracts, content, evidence}. JCS re-sorts object keys
+// lexicographically regardless of struct field/json order, but keeping this
+// order documents the spec and keeps json.Marshal output stable prior to
+// canonicalization.
 type hashPayload struct {
 	Type      string         `json:"type"`
 	Timestamp string         `json:"timestamp"`
 	Author    string         `json:"author,omitempty"`
 	Parents   []string       `json:"parents"`
-	Antigens  []string       `json:"antigens"`
+	Amends    []string       `json:"amends"`
+	Retracts  []string       `json:"retracts"`
 	Content   map[string]any `json:"content"`
 	Evidence  []Evidence     `json:"evidence,omitempty"`
 }
 
 // normalizeStrings returns a deduplicated, lexicographically sorted copy of
 // ss. A nil or empty input yields a non-nil empty slice so that Bead.Parents /
-// Bead.Antigens serialize as JSON `[]` rather than `null` (RFC 8785 has no
-// canonical form for JSON null-vs-missing arrays, and `null` would change the
-// hash payload's shape). See specs/DESIGN_v3.md §4.
+// Bead.Amends / Bead.Retracts serialize as JSON `[]` rather than `null` (RFC
+// 8785 has no canonical form for JSON null-vs-missing arrays, and `null`
+// would change the hash payload's shape). See specs/DESIGN_v3.1_draft.md §2.
 func normalizeStrings(ss []string) []string {
 	out := make([]string, 0, len(ss))
 	seen := make(map[string]struct{}, len(ss))
@@ -91,24 +119,27 @@ func normalizeStrings(ss []string) []string {
 	return out
 }
 
-// Normalize returns a copy of b with Parents and Antigens deduplicated and
-// sorted into lexicographic order, per specs/DESIGN_v3.md §4 ("parents /
-// antigens は重複除去 + 辞書順ソート"). Canonicalize and ComputeID always apply
-// this normalization internally, so callers never need to call it themselves
-// merely to get a correct ID — it is exported so callers (e.g. ingest code)
-// can normalize a Bead once before repeated use.
+// Normalize returns a copy of b with Parents, Amends, and Retracts each
+// deduplicated and sorted into lexicographic order, per
+// specs/DESIGN_v3.1_draft.md §2 ("amends: dedup+辞書順 = parents と同じ正規化").
+// Canonicalize and ComputeID always apply this normalization internally, so
+// callers never need to call it themselves merely to get a correct ID — it
+// is exported so callers (e.g. ingest code) can normalize a Bead once before
+// repeated use.
 func Normalize(b Bead) Bead {
 	out := b
 	out.Parents = normalizeStrings(b.Parents)
-	out.Antigens = normalizeStrings(b.Antigens)
+	out.Amends = normalizeStrings(b.Amends)
+	out.Retracts = normalizeStrings(b.Retracts)
 	return out
 }
 
 // Canonicalize returns the RFC 8785 (JCS) canonical JSON encoding of the
-// hash-target fields of b: {type, timestamp, author, parents, antigens,
-// content, evidence}. clearance and signature are never included. parents and
-// antigens are normalized (dedup + sort) before encoding so that the result
-// is order-independent, per specs/DESIGN_v3.md §4.
+// hash-target fields of b: {type, timestamp, author, parents, amends,
+// retracts, content, evidence}. clearance and signature are never included.
+// parents, amends, and retracts are normalized (dedup + sort) before
+// encoding so that the result is order-independent, per
+// specs/DESIGN_v3.1_draft.md §2.
 func Canonicalize(b Bead) ([]byte, error) {
 	n := Normalize(b)
 	payload := hashPayload{
@@ -116,7 +147,8 @@ func Canonicalize(b Bead) ([]byte, error) {
 		Timestamp: n.Timestamp,
 		Author:    n.Author,
 		Parents:   n.Parents,
-		Antigens:  n.Antigens,
+		Amends:    n.Amends,
+		Retracts:  n.Retracts,
 		Content:   n.Content,
 		Evidence:  n.Evidence,
 	}
@@ -158,9 +190,9 @@ func WithID(b Bead) (Bead, error) {
 
 // Verify reports whether b.ID matches the content hash recomputed from b's
 // hash-target fields. A tampered Content, Type, Timestamp, Author, Parents,
-// Antigens, or Evidence — or a mismatched ID — makes Verify return an error.
-// Verify never fails due to Clearance or Signature, since those are outside
-// the hash by design.
+// Amends, Retracts, or Evidence — or a mismatched ID — makes Verify return
+// an error. Verify never fails due to Clearance or Signature, since those
+// are outside the hash by design.
 func Verify(b Bead) error {
 	if b.ID == "" {
 		return fmt.Errorf("bead: verify: empty ID")

@@ -137,15 +137,31 @@ class MedBeadsClient:
         return out.get("beads", [])
 
     async def get_bead(self, bead_id: str) -> dict[str, Any]:
-        """One Bead's full, hash-verified content by ID (including
-        server-derived `antigens` — see internal/mcpserver/tools_read.go's
-        getBead / getBeadOut.Bead). Used by tests to verify antigen.Extract
-        actually ran server-side on the content this client submitted (the
-        reviewer's rxnorm-antigen assertion needs this, not just the
-        create_bead response, to be an honest round-trip check).
+        """One Bead's full, hash-verified content by ID.
+
+        v3.1 (specs/DESIGN_v3.1_draft.md §2/§5): the returned Bead never
+        carries antigens/tags — those are index-projection-only now (Bead
+        itself has no Antigens field at all; see internal/engine/bead's
+        Bead.Antigens removal). To check what tags a Bead was
+        server-side-derived to carry, use search_antigens instead (it
+        queries bead_antigens, which IndexBead populates via
+        antigen.Extract at index time, not at create_bead time).
         """
         out = await self.call_tool("get_bead", {"id": bead_id})
         return out["bead"]
+
+    async def search_antigens(self, antigen: str, *, patient_id: str | None = None) -> list[dict[str, Any]]:
+        """Every Bead carrying `antigen` in the bead_antigens projection
+        (internal/mcpserver/tools_read.go's search_antigens tool), i.e. the
+        server-side antigen.Extract(b.Type, b.Content) result at index time
+        — the only place a Bead's derived tags are queryable after v3.1
+        removed Bead.Antigens (see get_bead's doc comment).
+        """
+        args: dict[str, Any] = {"antigen": antigen}
+        if patient_id is not None:
+            args["patient_id"] = patient_id
+        out = await self.call_tool("search_antigens", args)
+        return out.get("beads", [])
 
     async def retrieve(
         self,

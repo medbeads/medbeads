@@ -138,7 +138,7 @@ func TestPod_RoundTrip_PersistsClearanceAndSignature(t *testing.T) {
 
 	// No Clearance/Signature at all (the common case, and the "nil Meta
 	// field" case that must not panic on decode).
-	plain := seedChildBead(t, e, patient, "fhir_observation", nil, map[string]any{"value": "normal"})
+	plain := seedChildBead(t, e, patient, "fhir_observation", map[string]any{"value": "normal"})
 	reloadedPlain, err := e.GetBead(plain.ID)
 	if err != nil {
 		t.Fatalf("GetBead(plain): %v", err)
@@ -232,8 +232,8 @@ func TestFilterByAccess_MultiViewer_SameBeadSet(t *testing.T) {
 	e := openT(t)
 
 	patient := seedPatient(t, e, "Patient")
-	open := seedChildBead(t, e, patient, "fhir_observation", nil, map[string]any{"value": "normal"})
-	restricted := seedChildBead(t, e, patient, "fhir_condition", nil, map[string]any{"diagnosis": "restricted"})
+	open := seedChildBead(t, e, patient, "fhir_observation", map[string]any{"value": "normal"})
+	restricted := seedChildBead(t, e, patient, "fhir_condition", map[string]any{"diagnosis": "restricted"})
 	seedClearanceRule(t, e, restricted.ID, []string{"insurance", "researcher"}, nil)
 
 	beads := []bead.Bead{open, restricted}

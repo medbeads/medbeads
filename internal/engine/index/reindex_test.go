@@ -42,12 +42,24 @@ func writeRealPod(t *testing.T, dataDir string) (podPath string, beads []bead.Be
 	}
 	beads = append(beads, root)
 
+	// obs1's content carries a real LOINC Coding (718-7, Hemoglobin) so
+	// antigen.Extract(b.Type, b.Content) — which IndexBead now runs at index
+	// time instead of reading a Bead.Antigens field (removed in v3.1) —
+	// derives "loinc:718-7" the same deterministic way a real FHIR-ingest
+	// Bead would, rather than this test hand-asserting a tag no extraction
+	// path actually produces.
 	obs1, err := bead.WithID(bead.Bead{
 		Type:      "fhir_observation",
 		Timestamp: "2026-01-02T00:00:00Z",
 		Parents:   []string{root.ID},
-		Antigens:  []string{"loinc:718-7", "organ:renal"},
-		Content:   map[string]any{"note": "hemoglobin 12.3 g/dL"},
+		Content: map[string]any{
+			"note": "hemoglobin 12.3 g/dL",
+			"code": map[string]any{
+				"coding": []any{
+					map[string]any{"system": "http://loinc.org", "code": "718-7", "display": "Hemoglobin"},
+				},
+			},
+		},
 	})
 	if err != nil {
 		t.Fatalf("bead.WithID (obs1): %v", err)
@@ -57,12 +69,21 @@ func writeRealPod(t *testing.T, dataDir string) (podPath string, beads []bead.Be
 	}
 	beads = append(beads, obs1)
 
+	// obs2 carries a real RxNorm Coding (6919, meropenem — not in
+	// dictionary.json, so antigen.Extract yields exactly "rxnorm:6919" via
+	// direct extraction, no dictionary-derived atc:/organ:/risk: antigens).
 	obs2, err := bead.WithID(bead.Bead{
 		Type:      "fhir_medicationrequest",
 		Timestamp: "2026-01-03T00:00:00Z",
 		Parents:   []string{root.ID, obs1.ID},
-		Antigens:  []string{"rxnorm:6919"},
-		Content:   map[string]any{"drug": "メロペネム 1g 点滴静注 8時間毎"},
+		Content: map[string]any{
+			"drug": "メロペネム 1g 点滴静注 8時間毎",
+			"medicationCodeableConcept": map[string]any{
+				"coding": []any{
+					map[string]any{"system": "http://www.nlm.nih.gov/research/umls/rxnorm", "code": "6919", "display": "meropenem"},
+				},
+			},
+		},
 	})
 	if err != nil {
 		t.Fatalf("bead.WithID (obs2): %v", err)
@@ -227,7 +248,7 @@ func TestReindex_StartsFromScratch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open (pre-existing): %v", err)
 	}
-	bogus := testBead(t, "bogus", "should not survive reindex", nil, nil, nil)
+	bogus := testBead(t, "bogus", "should not survive reindex", nil, nil)
 	indexBeadT(t, pre, bogus, BeadLocation{PodPath: "nonexistent.pod", PatientRoot: "", Offset: 0, Length: 1})
 	if err := pre.Close(); err != nil {
 		t.Fatalf("Close (pre-existing): %v", err)

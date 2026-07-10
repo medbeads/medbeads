@@ -15,7 +15,7 @@ import "testing"
 func TestSearch_TrigramMatchesJapaneseSubstring(t *testing.T) {
 	db := openT(t)
 
-	b := testBead(t, "fhir_medicationrequest", "", nil, nil, map[string]any{
+	b := testBead(t, "fhir_medicationrequest", "", nil, map[string]any{
 		"drug": "メロペネム 1g 点滴静注 8時間毎",
 	})
 	indexBeadT(t, db, b, BeadLocation{PodPath: "p.pod", PatientRoot: "", Offset: 0, Length: 10})
@@ -42,7 +42,7 @@ func TestSearch_TrigramMatchesJapaneseSubstring(t *testing.T) {
 func TestSearch_NoMatch(t *testing.T) {
 	db := openT(t)
 
-	b := testBead(t, "fhir_observation", "unrelated content", nil, nil, nil)
+	b := testBead(t, "fhir_observation", "unrelated content", nil, nil)
 	indexBeadT(t, db, b, BeadLocation{PodPath: "p.pod", PatientRoot: "", Offset: 0, Length: 10})
 
 	results, err := db.Search("完全に無関係な文字列", 0)
