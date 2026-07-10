@@ -261,6 +261,176 @@ func TestBuildContext_DeduplicatesAcrossTiers(t *testing.T) {
 	}
 }
 
+// TestBuildContext_WithSiblingsFalse_SkipsBothSiblingTiers checks
+// graph.WithSiblings(false): with a generous budget, both the explicit
+// (sibling_link) and implicit (same-parent) sibling tiers are omitted
+// entirely — neither in Items nor TruncatedRefs — while every other tier
+// (anchor, ancestor, descendant) is unaffected, matching bench/'s dag_nosib
+// arm's need to isolate DAG traversal without sibling_link contribution
+// (docs/requirements.md R8.2).
+func TestBuildContext_WithSiblingsFalse_SkipsBothSiblingTiers(t *testing.T) {
+	bd, ids := buildTestBundle(t)
+
+	cbFull := graph.BuildContext(bd, []string{ids["anchor"]}, 10_000, 10, 10)
+	if _, ok := itemFor(cbFull, ids["explicitSib"]); !ok {
+		t.Fatalf("sanity: default (siblings included) call should surface explicitSib")
+	}
+	if _, ok := itemFor(cbFull, ids["implicitSib"]); !ok {
+		t.Fatalf("sanity: default (siblings included) call should surface implicitSib")
+	}
+
+	cbNoSib := graph.BuildContext(bd, []string{ids["anchor"]}, 10_000, 10, 10, graph.WithSiblings(false))
+
+	for _, want := range []string{"explicitSib", "implicitSib"} {
+		if _, ok := itemFor(cbNoSib, ids[want]); ok {
+			t.Errorf("WithSiblings(false): %s present in Items, want excluded entirely", want)
+		}
+		if _, ok := truncatedFor(cbNoSib, ids[want]); ok {
+			t.Errorf("WithSiblings(false): %s present in TruncatedRefs, want excluded entirely (not even as an L2 ref)", want)
+		}
+	}
+
+	// Non-sibling tiers must be unaffected: anchor, ancestor, descendant
+	// still present exactly as in the siblings-included call.
+	if _, ok := itemFor(cbNoSib, ids["anchor"]); !ok {
+		t.Errorf("WithSiblings(false): anchor missing from Items")
+	}
+	if _, ok := itemFor(cbNoSib, ids["mid"]); !ok {
+		t.Errorf("WithSiblings(false): ancestor (mid) missing from Items")
+	}
+	if _, ok := itemFor(cbNoSib, ids["descendant"]); !ok {
+		t.Errorf("WithSiblings(false): descendant missing from Items")
+	}
+
+	// WithSiblings(false) must also mean fewer (or equal) UsedTokens than the
+	// siblings-included call, since two whole tiers' worth of candidates are
+	// no longer competing for budget.
+	if cbNoSib.UsedTokens >= cbFull.UsedTokens {
+		t.Errorf("WithSiblings(false) UsedTokens = %d, want < siblings-included UsedTokens = %d", cbNoSib.UsedTokens, cbFull.UsedTokens)
+	}
+}
+
+// TestBuildContext_NoOptions_DefaultsToSiblingsIncluded checks that omitting
+// opts entirely (every pre-existing call site's shape) is identical to
+// explicitly passing WithSiblings(true) — BuildContext's signature change
+// must not alter behavior for callers that pass no options.
+func TestBuildContext_NoOptions_DefaultsToSiblingsIncluded(t *testing.T) {
+	bd, ids := buildTestBundle(t)
+
+	cbNoOpts := graph.BuildContext(bd, []string{ids["anchor"]}, 10_000, 10, 10)
+	cbExplicitTrue := graph.BuildContext(bd, []string{ids["anchor"]}, 10_000, 10, 10, graph.WithSiblings(true))
+
+	if len(cbNoOpts.Items) != len(cbExplicitTrue.Items) {
+		t.Fatalf("Items length differs: no-opts=%d explicit-true=%d", len(cbNoOpts.Items), len(cbExplicitTrue.Items))
+	}
+	if cbNoOpts.UsedTokens != cbExplicitTrue.UsedTokens {
+		t.Errorf("UsedTokens differs: no-opts=%d explicit-true=%d", cbNoOpts.UsedTokens, cbExplicitTrue.UsedTokens)
+	}
+}
+
+// TestBuildContext_MultiAnchor_CrossAnchorTierPromotion_NoDuplicate is the
+// Go-level regression for a real duplicate-ContextItem bug found via
+// bench/'s dag_full/dag_nosib comparison integration test (multi-anchor
+// semantic=true retrieve calls, up to 50 anchors): a Bead reachable at a
+// low-priority tier (e.g. descendant, tier 4) via one anchor, and later
+// re-reached at a *higher*-priority tier (e.g. explicit sibling, tier 2) via
+// a later anchor in the same anchors slice, must appear exactly once in
+// Items — at its final, highest-priority tier — never twice.
+//
+// Reproduction shape: anchor1 -> descendant walk reaches shared (tier 4,
+// first, in the old single-pass "claim" design); anchor2 (processed after
+// anchor1) explicit-sibling-links to shared (tier 2) — a strictly *better*
+// tier than the one shared was already claimed at. The old bug: seen[shared]
+// only blocked a re-claim into an equal-or-*worse* tier, so anchor2's better
+// claim overwrote seen[shared] and appended a *second* candidate to
+// tiers[2], leaving the original tiers[4] entry in place too — shared ended
+// up in Items twice (once at L2/descendant, once at L1/sibling).
+func TestBuildContext_MultiAnchor_CrossAnchorTierPromotion_NoDuplicate(t *testing.T) {
+	e := openT(t)
+
+	root := seedPatient(t, e, "cross-tier promotion patient")
+	anchor1 := seedChildBead(t, e, root, "fhir_encounter", map[string]any{"n": "anchor1, shared is its descendant"})
+	shared := seedChildBead(t, e, anchor1, "fhir_observation", map[string]any{"n": "shared bead: anchor1's descendant AND anchor2's explicit sibling"})
+	anchor2 := seedChildBead(t, e, root, "fhir_medicationrequest", map[string]any{"n": "anchor2, explicit-sibling-linked to shared"})
+
+	bd, err := graph.LoadBundle(storeFor(e), root.ID)
+	if err != nil {
+		t.Fatalf("LoadBundle: %v", err)
+	}
+	bd.AddSiblingEdge(anchor2.ID, shared.ID)
+
+	// anchor1 first, anchor2 second: anchor1's descendant walk (tier 4)
+	// claims `shared` before anchor2's explicit-sibling walk (tier 2) does —
+	// exactly the ordering that triggered the old bug (a later, better
+	// claim after an earlier, worse one).
+	cb := graph.BuildContext(bd, []string{anchor1.ID, anchor2.ID}, 10_000, 10, 10)
+
+	seenCount := map[string]int{}
+	for _, it := range cb.Items {
+		seenCount[it.ID]++
+	}
+	for _, it := range cb.TruncatedRefs {
+		seenCount[it.ID]++
+	}
+	for id, count := range seenCount {
+		if count != 1 {
+			t.Errorf("Bead %s appears %d times across Items+TruncatedRefs, want exactly 1", id, count)
+		}
+	}
+
+	sharedItem, ok := itemFor(cb, shared.ID)
+	if !ok {
+		t.Fatalf("shared Bead missing from Items entirely: %+v", cb)
+	}
+	if sharedItem.Provenance != graph.ProvenanceSibling {
+		t.Errorf("shared Bead Provenance = %s, want sibling (its final, highest-priority tier — not descendant, its first-claimed tier)", sharedItem.Provenance)
+	}
+	if sharedItem.Granularity != graph.GranularityL1 {
+		t.Errorf("shared Bead Granularity = %s, want L1 (the explicit-sibling tier's granularity)", sharedItem.Granularity)
+	}
+
+	// UsedTokens must equal the sum of Items' own EstimatedTokens exactly —
+	// this is only guaranteed once `shared` is packed exactly once (a stale
+	// duplicate entry would have paid its EstimatedTokens cost a second
+	// time against remaining/UsedTokens without a second Items entry to
+	// show for it, silently wasting budget the caller could never account
+	// for from the response alone — lead's item 5, "UsedTokens が重複除去後
+	// の実態と一致すること").
+	var sumItemTokens int
+	for _, it := range cb.Items {
+		sumItemTokens += it.EstimatedTokens
+	}
+	if cb.UsedTokens != sumItemTokens {
+		t.Errorf("UsedTokens = %d, want == sum(Items[].EstimatedTokens) = %d (a stale duplicate claim would inflate UsedTokens beyond what Items actually accounts for)", cb.UsedTokens, sumItemTokens)
+	}
+}
+
+// TestBuildContext_ItemsAndTruncatedRefs_NeverContainDuplicateBeadIDs is a
+// general invariant check (not tied to the specific multi-anchor
+// reproduction above): across every existing BuildContext scenario this
+// test file already exercises (buildTestBundle's shapes, several budgets),
+// no Bead ID ever appears more than once across Items+TruncatedRefs
+// combined.
+func TestBuildContext_ItemsAndTruncatedRefs_NeverContainDuplicateBeadIDs(t *testing.T) {
+	bd, ids := buildTestBundle(t)
+
+	for _, budget := range []int{0, 50, 200, 10_000} {
+		cb := graph.BuildContext(bd, []string{ids["anchor"], ids["mid"]}, budget, 10, 10)
+		seenCount := map[string]int{}
+		for _, it := range cb.Items {
+			seenCount[it.ID]++
+		}
+		for _, it := range cb.TruncatedRefs {
+			seenCount[it.ID]++
+		}
+		for id, count := range seenCount {
+			if count != 1 {
+				t.Errorf("budget=%d: Bead %s appears %d times across Items+TruncatedRefs, want exactly 1", budget, id, count)
+			}
+		}
+	}
+}
+
 // --- EstimateTokens ------------------------------------------------------
 
 func TestEstimateTokens_MonotonicInLength(t *testing.T) {

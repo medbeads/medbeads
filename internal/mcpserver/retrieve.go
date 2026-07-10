@@ -46,6 +46,29 @@ type retrieveIn struct {
 	Semantic    bool         `json:"semantic,omitempty" jsonschema:"also run L2 vector search (sqlite-vec) over query and merge hits into the anchor set; requires this server to have an embedder configured, or it is a tool-level error"`
 	ChainDepth  int          `json:"chain_depth,omitempty" jsonschema:"ancestor/descendant BFS depth from each anchor (default 3)"`
 	TokenBudget int          `json:"token_budget,omitempty" jsonschema:"greedy packing budget in estimated tokens (default 4000)"`
+	// IncludeSiblings controls whether graph.BuildContext's explicit-sibling
+	// and implicit-sibling tiers are populated at all (graph.WithSiblings).
+	// Defaults to true (existing behavior) when the caller omits the field;
+	// jsonschema's default annotation documents that default for MCP
+	// clients, since Go's zero value for bool is false and this field must
+	// not be confused with "explicitly asked for false" — see
+	// retrieveIncludeSiblings below, which is what actually resolves the
+	// default (mcp.CallToolRequest gives no signal for "field omitted" vs.
+	// "field explicitly false" once decoded into a Go bool).
+	IncludeSiblings *bool `json:"include_siblings,omitempty" jsonschema:"include explicit (sibling_link) and implicit (same-parent) sibling tiers in the context bundle (default true); set false to isolate DAG traversal without siblings, e.g. bench/'s dag_nosib retrieval arm"`
+}
+
+// retrieveIncludeSiblings resolves retrieveIn.IncludeSiblings' documented
+// default (true) — a *bool rather than bool specifically so "omitted" and
+// "explicitly false" are distinguishable at the JSON layer (a plain bool
+// field would make both cases decode to the Go zero value, false, making
+// the R6.2 default impossible to express without breaking every existing
+// caller that never sets the field).
+func retrieveIncludeSiblings(in retrieveIn) bool {
+	if in.IncludeSiblings == nil {
+		return true
+	}
+	return *in.IncludeSiblings
 }
 
 type dateRangeIn struct {
@@ -170,7 +193,8 @@ func (s *Server) retrieve(ctx context.Context, _ *mcp.CallToolRequest, in retrie
 		return res, retrieveOut{}, jerr
 	}
 
-	bundle := graph.BuildContext(bd, scopedIDs, tokenBudget, chainDepth, chainDepth)
+	bundle := graph.BuildContext(bd, scopedIDs, tokenBudget, chainDepth, chainDepth,
+		graph.WithSiblings(retrieveIncludeSiblings(in)))
 
 	items, truncated, err := s.filterContextBundle(bundle, scopedProvenance)
 	if err != nil {

@@ -104,6 +104,37 @@ const (
 	tierDescendant
 )
 
+// ContextOption customizes a single BuildContext call. Options are additive
+// (new callers opt in; existing positional callers that pass none keep
+// today's behavior unchanged) — see WithSiblings.
+type ContextOption func(*contextOptions)
+
+// contextOptions holds BuildContext's optional knobs, defaulted so the zero
+// value matches BuildContext's pre-existing (siblings-included) behavior.
+type contextOptions struct {
+	includeSiblings bool
+}
+
+func newContextOptions(opts []ContextOption) contextOptions {
+	o := contextOptions{includeSiblings: true}
+	for _, opt := range opts {
+		opt(&o)
+	}
+	return o
+}
+
+// WithSiblings controls whether BuildContext's explicit-sibling and
+// implicit-sibling tiers (tierExplicitSibling/tierImplicitSibling) are
+// populated at all. Defaults to true (existing behavior). Pass
+// WithSiblings(false) to skip both sibling tiers entirely — e.g. bench/'s
+// dag_nosib retrieval arm (docs/requirements.md R8.2), which needs a DAG
+// bundle that walks ancestors/descendants but never sibling_link edges, to
+// isolate sibling_link's contribution to retrieval quality from the rest of
+// DAG traversal.
+func WithSiblings(include bool) ContextOption {
+	return func(o *contextOptions) { o.includeSiblings = include }
+}
+
 // BuildContext assembles a token-budgeted ContextBundle for anchors within
 // bd, per specs/DESIGN_v3.md §8: starting from anchors (full content, L0),
 // then ancestors (L1 summary), explicit siblings (L1 summary), implicit
@@ -122,16 +153,37 @@ const (
 // bd.Ancestors/bd.Descendants from each anchor before ranking candidates;
 // they are independent of the token budget itself (a large depth just means
 // more low-priority candidates competing for whatever budget remains).
-func BuildContext(bd *Bundle, anchors []string, budget int, ancestorDepth, descendantDepth int) ContextBundle {
+//
+// opts customizes this call; see ContextOption/WithSiblings. Omitting opts
+// keeps BuildContext's original (siblings-included) behavior, so every
+// pre-existing call site is unaffected by this parameter's addition.
+func BuildContext(bd *Bundle, anchors []string, budget int, ancestorDepth, descendantDepth int, opts ...ContextOption) ContextBundle {
+	o := newContextOptions(opts)
 	out := ContextBundle{
 		AnchorIDs:    append([]string(nil), anchors...),
 		BudgetTokens: budget,
 	}
 
-	seen := make(map[string]int, len(bd.beads)) // id -> tier that first claimed it
-	tiers := make([][]candidate, 5)
+	// Two-pass claim resolution (fixes a duplicate-ContextItem bug found via
+	// bench/'s dag_full/dag_nosib comparison, R8.2): pass 1 below only
+	// resolves, per Bead ID, the single *best* (lowest-index) tier/
+	// provenance it is ever reachable at across every anchor — nothing is
+	// appended to tiers[] yet, so there is no stale-entry-from-an-earlier-
+	// tier-assignment to leave behind when a later anchor reaches the same
+	// Bead at a higher-priority tier. tiers[] is materialized once, after
+	// resolution, entirely from claims map (see below) — structurally
+	// impossible for the same Bead ID to land in two different tiers[]
+	// slices, unlike the prior single-pass "claim = seen-check + immediate
+	// append" design, whose seen[id] guard only blocked a re-claim into an
+	// equal-or-*worse* tier: a later claim into a *better* tier updated
+	// seen[id] but never removed the earlier, now-stale entry already
+	// sitting in tiers[oldTier], so the same Bead could appear twice in
+	// Items/TruncatedRefs (VERIFIED against real scratch data via a
+	// multi-anchor semantic=true retrieve call, see
+	// TestBuildContext_MultiAnchor_CrossAnchorTierPromotion_NoDuplicate).
+	claims := make(map[string]candidate, len(bd.beads)) // id -> its resolved (best-tier) candidate
 
-	claim := func(id string, tier int, provenance Provenance) {
+	resolve := func(id string, tier int, provenance Provenance) {
 		if id == "" {
 			return
 		}
@@ -139,41 +191,49 @@ func BuildContext(bd *Bundle, anchors []string, budget int, ancestorDepth, desce
 		if !ok {
 			return
 		}
-		if priorTier, ok := seen[id]; ok && priorTier <= tier {
+		if prior, ok := claims[id]; ok && prior.tier <= tier {
 			return
 		}
-		seen[id] = tier
-		tiers[tier] = append(tiers[tier], candidate{b: b, provenance: provenance, tier: tier})
+		claims[id] = candidate{b: b, provenance: provenance, tier: tier}
 	}
 
 	// Anchors first, so they always win the highest tier regardless of
 	// whether some other anchor's ancestor/descendant walk also reaches
 	// them.
 	for _, id := range anchors {
-		claim(id, tierAnchor, ProvenanceAnchor)
+		resolve(id, tierAnchor, ProvenanceAnchor)
 	}
 	for _, id := range anchors {
 		for _, a := range bd.Ancestors(id, ancestorDepth) {
 			if a.ID == id {
 				continue // Ancestors includes the anchor itself at depth 0
 			}
-			claim(a.ID, tierAncestor, ProvenanceAncestor)
+			resolve(a.ID, tierAncestor, ProvenanceAncestor)
 		}
-		for _, sib := range bd.siblings[id] {
-			claim(sib, tierExplicitSibling, ProvenanceSibling)
-		}
-		for _, sib := range implicitSiblingsOnly(bd, id) {
-			claim(sib, tierImplicitSibling, ProvenanceSibling)
+		if o.includeSiblings {
+			for _, sib := range bd.siblings[id] {
+				resolve(sib, tierExplicitSibling, ProvenanceSibling)
+			}
+			for _, sib := range implicitSiblingsOnly(bd, id) {
+				resolve(sib, tierImplicitSibling, ProvenanceSibling)
+			}
 		}
 		for _, d := range bd.Descendants(id, descendantDepth) {
 			if d.ID == id {
 				continue // Descendants includes the anchor itself at depth 0
 			}
-			claim(d.ID, tierDescendant, ProvenanceDescendant)
+			resolve(d.ID, tierDescendant, ProvenanceDescendant)
 		}
 	}
 
-	// Deterministic ordering within a tier (map iteration over bd.beads is
+	// Pass 2: materialize tiers[] once, from each Bead's single resolved
+	// candidate — every Bead ID appears in exactly one tiers[] slice.
+	tiers := make([][]candidate, 5)
+	for _, c := range claims {
+		tiers[c.tier] = append(tiers[c.tier], c)
+	}
+
+	// Deterministic ordering within a tier (map iteration over claims is
 	// not stable) so BuildContext's output — and therefore which items get
 	// truncated first under a tight budget — does not vary run to run.
 	for _, t := range tiers {

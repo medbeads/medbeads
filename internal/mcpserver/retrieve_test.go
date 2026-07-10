@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/medbeads/medbeads/internal/engine/apc"
 	"github.com/medbeads/medbeads/internal/engine/bead"
 	"github.com/medbeads/medbeads/internal/engine/clearance"
 )
@@ -213,6 +214,135 @@ func TestRetrieve_ClearanceFilterDropsRestrictedItems(t *testing.T) {
 	if !foundAnchor {
 		t.Fatalf("system retrieve AnchorIDs = %v, want to include %s (system bypasses clearance)", systemOut.AnchorIDs, restrictedView)
 	}
+}
+
+// TestRetrieve_IncludeSiblingsFalse_DropsSiblingTierEndToEnd is the
+// mcpserver-level companion to
+// graph.TestBuildContext_WithSiblingsFalse_SkipsBothSiblingTiers: with a
+// real APC-generated sibling_link (via apc.Scanner.Scan, mirroring
+// TestIntegration_RetrieveOneRoundTrip's setup) on a shared risk:/organ:
+// antigen pair, retrieve(include_siblings=false) must not surface the
+// sibling observation at all (neither Items nor TruncatedRefs), while the
+// default (include_siblings omitted, i.e. true) call does — the
+// docs/requirements.md R8.2 dag_nosib vs. dag_full distinction bench/ needs.
+func TestRetrieve_IncludeSiblingsFalse_DropsSiblingTierEndToEnd(t *testing.T) {
+	e := openT(t)
+
+	patient := seedPatient(t, e, "Sibling Toggle Patient")
+	encounter := seedChildBead(t, e, patient, "fhir_encounter", nil, map[string]any{
+		"reason": "acute kidney injury follow-up",
+	})
+	for i := 0; i < 10; i++ {
+		seedChildBead(t, e, encounter, "fhir_observation",
+			[]string{"loinc:noise-" + string(rune('a'+i))},
+			map[string]any{"noise": i})
+	}
+	medication := seedChildBead(t, e, encounter, "fhir_medicationrequest",
+		[]string{"risk:nephrotoxic", "organ:renal"},
+		map[string]any{"drug": "meropenem 1g IV every 8 hours"})
+	observation := seedChildBead(t, e, encounter, "fhir_observation",
+		[]string{"risk:nephrotoxic", "organ:renal"},
+		map[string]any{"test": "eGFR renal function panel"})
+
+	scanner := apc.New(e, e.Index(), apc.Default())
+	for i := 0; i < 10; i++ {
+		res, err := scanner.Scan()
+		if err != nil {
+			t.Fatalf("Scan: %v", err)
+		}
+		if res.BeadsScanned == 0 {
+			break
+		}
+	}
+	if !siblingLinkExists(t, e) {
+		t.Fatalf("APC scan produced no sibling_link Bead for the shared risk:/organ: antigens; test setup assumption violated")
+	}
+
+	s := newServerT(t, e, SystemRole)
+	observationView := bead.FormatID(observation.ID)
+
+	// Default (include_siblings omitted -> true): the sibling observation is
+	// present, reached via the sibling_link's bead_edges row.
+	_, defaultOut, err := s.retrieve(context.Background(), nil, retrieveIn{
+		Query:       "meropenem",
+		PatientID:   patient.ID,
+		TokenBudget: 4000,
+		ChainDepth:  5,
+	})
+	if err != nil {
+		t.Fatalf("retrieve (default): %v", err)
+	}
+	if !containsItemID(defaultOut.Items, observationView) {
+		t.Fatalf("retrieve default (include_siblings omitted): sibling observation %s missing from Items=%+v", observationView, defaultOut.Items)
+	}
+
+	// include_siblings=false: the same sibling observation must be dropped
+	// entirely (not demoted to TruncatedRefs either — the sibling tiers are
+	// skipped before any candidate is claimed, per graph.WithSiblings).
+	includeFalse := false
+	_, noSibOut, err := s.retrieve(context.Background(), nil, retrieveIn{
+		Query:           "meropenem",
+		PatientID:       patient.ID,
+		TokenBudget:     4000,
+		ChainDepth:      5,
+		IncludeSiblings: &includeFalse,
+	})
+	if err != nil {
+		t.Fatalf("retrieve (include_siblings=false): %v", err)
+	}
+	if containsItemID(noSibOut.Items, observationView) {
+		t.Errorf("retrieve(include_siblings=false): sibling observation %s present in Items, want excluded", observationView)
+	}
+	if containsRefID(noSibOut.TruncatedRefs, observationView) {
+		t.Errorf("retrieve(include_siblings=false): sibling observation %s present in TruncatedRefs, want excluded entirely", observationView)
+	}
+
+	// The anchor (medicationrequest) and its ancestor (encounter) must be
+	// unaffected by include_siblings=false — only the sibling tiers are
+	// skipped.
+	medicationView := bead.FormatID(medication.ID)
+	encounterView := bead.FormatID(encounter.ID)
+	if !containsItemID(noSibOut.Items, medicationView) {
+		t.Errorf("retrieve(include_siblings=false): anchor medicationrequest %s missing from Items", medicationView)
+	}
+	if !containsItemID(noSibOut.Items, encounterView) {
+		t.Errorf("retrieve(include_siblings=false): ancestor encounter %s missing from Items", encounterView)
+	}
+
+	// include_siblings=true explicitly must behave identically to omitting
+	// the field (both resolve to true per retrieveIncludeSiblings' default).
+	includeTrue := true
+	_, explicitTrueOut, err := s.retrieve(context.Background(), nil, retrieveIn{
+		Query:           "meropenem",
+		PatientID:       patient.ID,
+		TokenBudget:     4000,
+		ChainDepth:      5,
+		IncludeSiblings: &includeTrue,
+	})
+	if err != nil {
+		t.Fatalf("retrieve (include_siblings=true): %v", err)
+	}
+	if !containsItemID(explicitTrueOut.Items, observationView) {
+		t.Errorf("retrieve(include_siblings=true): sibling observation %s missing from Items, want present (same as default)", observationView)
+	}
+}
+
+func containsItemID(items []provenanceView, id string) bool {
+	for _, it := range items {
+		if it.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func containsRefID(refs []contextItemView, id string) bool {
+	for _, it := range refs {
+		if it.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 // TestRetrieve_AnchorIDsDropRestrictedAnchorAmongMultiple is Fix 4's
