@@ -1,0 +1,722 @@
+{
+  "calls": [
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.12093366589397192,
+      "patient_root": "sha256:960223e7d90f1788bcbc88eb0cb22bb33b7b64d82478b4258c81cf9b7a6011ec",
+      "query": "disorder",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.0254146670922637,
+      "patient_root": "sha256:960223e7d90f1788bcbc88eb0cb22bb33b7b64d82478b4258c81cf9b7a6011ec",
+      "query": "educated",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.1708302500192076,
+      "patient_root": "sha256:34be02c882a356d95ac1eefe7c97608228baa7099af597e2024912f1187020aa",
+      "query": "medication",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.008385790977627039,
+      "patient_root": "sha256:34be02c882a356d95ac1eefe7c97608228baa7099af597e2024912f1187020aa",
+      "query": "involvement",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.024585791863501072,
+      "patient_root": "sha256:a6f0880ac48f39b1c3904ef2c4e566ee2b96c4195841333b615e85d5442499e5",
+      "query": "educated",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.03671083296649158,
+      "patient_root": "sha256:a6f0880ac48f39b1c3904ef2c4e566ee2b96c4195841333b615e85d5442499e5",
+      "query": "employment",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.17022612504661083,
+      "patient_root": "sha256:da12637cfc885b609215eb145b53ddf6dfa3fdd822debb26772934f2c15ecf91",
+      "query": "medication",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.01630658283829689,
+      "patient_root": "sha256:da12637cfc885b609215eb145b53ddf6dfa3fdd822debb26772934f2c15ecf91",
+      "query": "pharyngitis",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 2,
+      "elapsed_s": 0.013999500079080462,
+      "patient_root": "sha256:3ab067dc900e9087bc65bd12cc9e52f22e0d0dc6d9b2f2394858a4f58f55ea1a",
+      "query": "pulmonic",
+      "used_tokens": 921
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.17243037489242852,
+      "patient_root": "sha256:3ab067dc900e9087bc65bd12cc9e52f22e0d0dc6d9b2f2394858a4f58f55ea1a",
+      "query": "medication",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.02456495794467628,
+      "patient_root": "sha256:2fd6326a1683f90dd2c1ba442fcc89f2f3f01bbac23748d4c388739acf8c7f84",
+      "query": "educated",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 1,
+      "elapsed_s": 0.03356308303773403,
+      "patient_root": "sha256:2fd6326a1683f90dd2c1ba442fcc89f2f3f01bbac23748d4c388739acf8c7f84",
+      "query": "isolation",
+      "used_tokens": 399
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.17094412515871227,
+      "patient_root": "sha256:0775e2ee16ca395bf4ac213e97e95e61a4e8eabf635c201224b782ec9f139088",
+      "query": "medication",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.00894529209472239,
+      "patient_root": "sha256:0775e2ee16ca395bf4ac213e97e95e61a4e8eabf635c201224b782ec9f139088",
+      "query": "involvement",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 1,
+      "elapsed_s": 0.02865162491798401,
+      "patient_root": "sha256:0c6a0b1fd63cb80f600876d3abe233c425451c591e516edfbf5b0a9b018e66d9",
+      "query": "unsatisfactory",
+      "used_tokens": 388
+    },
+    {
+      "anchor_count": 1,
+      "elapsed_s": 0.09956833394244313,
+      "patient_root": "sha256:0c6a0b1fd63cb80f600876d3abe233c425451c591e516edfbf5b0a9b018e66d9",
+      "query": "education",
+      "used_tokens": 411
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.017403334146365523,
+      "patient_root": "sha256:82b8d2a51823c9a635b7479e7e28da2cc1b994a55ab1e5970de7170f62eb9678",
+      "query": "sinusitis",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.024575584102422,
+      "patient_root": "sha256:82b8d2a51823c9a635b7479e7e28da2cc1b994a55ab1e5970de7170f62eb9678",
+      "query": "educated",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.007303292164579034,
+      "patient_root": "sha256:20e392f70aa20e57149404f8051a33e2ac8171bb2f8a1748506ed070dc60b885",
+      "query": "adolescent",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.07820191700011492,
+      "patient_root": "sha256:20e392f70aa20e57149404f8051a33e2ac8171bb2f8a1748506ed070dc60b885",
+      "query": "education",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.07856312510557473,
+      "patient_root": "sha256:a57cc8c22030f3139779a8103dd38f200ac7f4be5f622881efe3555e234978b9",
+      "query": "education",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.02373091597110033,
+      "patient_root": "sha256:a57cc8c22030f3139779a8103dd38f200ac7f4be5f622881efe3555e234978b9",
+      "query": "prediabetes",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.07951337494887412,
+      "patient_root": "sha256:9847568c95003dd5c3e96d385af29afdcd0df2b3ae3ba68a5d1ac3fd9842106b",
+      "query": "education",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.021631249925121665,
+      "patient_root": "sha256:9847568c95003dd5c3e96d385af29afdcd0df2b3ae3ba68a5d1ac3fd9842106b",
+      "query": "intimate",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.169386750087142,
+      "patient_root": "sha256:6f52815aea63c7215f40127e62ae10434afefcb0cadc08f07850846868e6f232",
+      "query": "medication",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.00848270789720118,
+      "patient_root": "sha256:6f52815aea63c7215f40127e62ae10434afefcb0cadc08f07850846868e6f232",
+      "query": "involvement",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 1,
+      "elapsed_s": 0.013854082906618714,
+      "patient_root": "sha256:013d43ca7ced392fc6cd2003855e6f65a6c3a533f1e365d1274d2bf80d66ed3a",
+      "query": "unsatisfactory",
+      "used_tokens": 463
+    },
+    {
+      "anchor_count": 1,
+      "elapsed_s": 0.0312782081309706,
+      "patient_root": "sha256:013d43ca7ced392fc6cd2003855e6f65a6c3a533f1e365d1274d2bf80d66ed3a",
+      "query": "educated",
+      "used_tokens": 467
+    },
+    {
+      "anchor_count": 1,
+      "elapsed_s": 0.040299874963238835,
+      "patient_root": "sha256:6aad8005f9aae32f860517a415e81d7d2b93dcf5cb7e55baa4f7fe08f4123545",
+      "query": "loratadine",
+      "used_tokens": 365
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.0060510828625410795,
+      "patient_root": "sha256:6aad8005f9aae32f860517a415e81d7d2b93dcf5cb7e55baa4f7fe08f4123545",
+      "query": "epinephrine",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.07830729195848107,
+      "patient_root": "sha256:88571aa22b4e089a8c8dafe0ee79a549dfb4273b4f0fb9fec7e8ab343b83296c",
+      "query": "education",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.006895540980622172,
+      "patient_root": "sha256:88571aa22b4e089a8c8dafe0ee79a549dfb4273b4f0fb9fec7e8ab343b83296c",
+      "query": "obesity",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.17149337497539818,
+      "patient_root": "sha256:d64f1beb35140616a3d14f78f99727ea7200f79f8e1ba0870c3240a52d3703bb",
+      "query": "medication",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.017419708892703056,
+      "patient_root": "sha256:d64f1beb35140616a3d14f78f99727ea7200f79f8e1ba0870c3240a52d3703bb",
+      "query": "sinusitis",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.16771125001832843,
+      "patient_root": "sha256:5da493e565b306d2bdcac139f73fb2fafed575770cd59f3a15d04aa05a5878f6",
+      "query": "medication",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.042105000000447035,
+      "patient_root": "sha256:5da493e565b306d2bdcac139f73fb2fafed575770cd59f3a15d04aa05a5878f6",
+      "query": "fracture",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.0787168750539422,
+      "patient_root": "sha256:74e551f7c365bbc4eb0c13356ee1844b7366b4d704177e726886b940c62d8088",
+      "query": "education",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.03590862499549985,
+      "patient_root": "sha256:74e551f7c365bbc4eb0c13356ee1844b7366b4d704177e726886b940c62d8088",
+      "query": "employment",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 1,
+      "elapsed_s": 0.0210419581271708,
+      "patient_root": "sha256:eec4b8428d4cea55b82a7dd92822aa75b2204cd625e7e5ddf5905eb77f87fd8c",
+      "query": "intractable",
+      "used_tokens": 418
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.023552499944344163,
+      "patient_root": "sha256:eec4b8428d4cea55b82a7dd92822aa75b2204cd625e7e5ddf5905eb77f87fd8c",
+      "query": "chronic",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.12195683317258954,
+      "patient_root": "sha256:1f578ee3fd224e0bfe1dd0290ee10c98ded63df1b801085b8c266129972b62d5",
+      "query": "disorder",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 1,
+      "elapsed_s": 0.07388545898720622,
+      "patient_root": "sha256:1f578ee3fd224e0bfe1dd0290ee10c98ded63df1b801085b8c266129972b62d5",
+      "query": "situation",
+      "used_tokens": 387
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.16911783278919756,
+      "patient_root": "sha256:ae95228f560e0594a6b605d7d604f0552089dfaa63ac151fbdea724d743bbeee",
+      "query": "medication",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.12157025001943111,
+      "patient_root": "sha256:ae95228f560e0594a6b605d7d604f0552089dfaa63ac151fbdea724d743bbeee",
+      "query": "disorder",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 1,
+      "elapsed_s": 0.01380345900543034,
+      "patient_root": "sha256:9b621e33419b874dadf1d5d089ad508749a48861e611b7b8f9d217b78af32e1a",
+      "query": "military",
+      "used_tokens": 466
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.02458687499165535,
+      "patient_root": "sha256:9b621e33419b874dadf1d5d089ad508749a48861e611b7b8f9d217b78af32e1a",
+      "query": "educated",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.16867629089392722,
+      "patient_root": "sha256:2e14ca9644a0f753a325c7fa561d01cf60c446be821ed1e808300fa4048460ae",
+      "query": "medication",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.04699674993753433,
+      "patient_root": "sha256:2e14ca9644a0f753a325c7fa561d01cf60c446be821ed1e808300fa4048460ae",
+      "query": "gingivitis",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.1697354579810053,
+      "patient_root": "sha256:bfd187a10d1595556e6f99ff33a3a75b6df7cb935481928323378c4e42dac04b",
+      "query": "medication",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.031205957988277078,
+      "patient_root": "sha256:bfd187a10d1595556e6f99ff33a3a75b6df7cb935481928323378c4e42dac04b",
+      "query": "height",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.16834470792673528,
+      "patient_root": "sha256:3011a68098b3080a8cae881f27072b3f9e12b175d8056cce5597790023721757",
+      "query": "medication",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.00990145793184638,
+      "patient_root": "sha256:3011a68098b3080a8cae881f27072b3f9e12b175d8056cce5597790023721757",
+      "query": "levonorgestrel",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.07996462495066226,
+      "patient_root": "sha256:01bdd99df6bb2bc80ddcd9f2e440dd1eb1aaf50528206fa3de081c01a2753060",
+      "query": "education",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.12451324984431267,
+      "patient_root": "sha256:01bdd99df6bb2bc80ddcd9f2e440dd1eb1aaf50528206fa3de081c01a2753060",
+      "query": "disorder",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.17086574994027615,
+      "patient_root": "sha256:55f32fe29743626d447c737086625a7e406d98032c1c0f4b1068ef933c6cb8e3",
+      "query": "medication",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.1228466669563204,
+      "patient_root": "sha256:55f32fe29743626d447c737086625a7e406d98032c1c0f4b1068ef933c6cb8e3",
+      "query": "disorder",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.17172987502999604,
+      "patient_root": "sha256:b2da825f44edd9a476f3f21246a28c7928d35345eac625bf2f68785123a1b8df",
+      "query": "medication",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.01604395918548107,
+      "patient_root": "sha256:b2da825f44edd9a476f3f21246a28c7928d35345eac625bf2f68785123a1b8df",
+      "query": "pharyngitis",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 1,
+      "elapsed_s": 0.023086583940312266,
+      "patient_root": "sha256:38b947c8ca3b4794b4143824fab02f2eea4457d1f5930b97aa46c1d78a49b462",
+      "query": "involvement",
+      "used_tokens": 390
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.080282166833058,
+      "patient_root": "sha256:38b947c8ca3b4794b4143824fab02f2eea4457d1f5930b97aa46c1d78a49b462",
+      "query": "education",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.07874691695906222,
+      "patient_root": "sha256:9b9cc9002a79bc1aa59f03446b701f6c14094fffd0fc7d644839909236980c2d",
+      "query": "education",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.03636824991554022,
+      "patient_root": "sha256:9b9cc9002a79bc1aa59f03446b701f6c14094fffd0fc7d644839909236980c2d",
+      "query": "employment",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.018230916932225227,
+      "patient_root": "sha256:5b02ffe16fe73ea38838d6945fa380144857795f6850d07823ab5eecd2e63a0a",
+      "query": "sinusitis",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.1716905408538878,
+      "patient_root": "sha256:5b02ffe16fe73ea38838d6945fa380144857795f6850d07823ab5eecd2e63a0a",
+      "query": "medication",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 1,
+      "elapsed_s": 0.027512999949976802,
+      "patient_root": "sha256:1d06d376fb9b291b3563629ff3ee008e51e7fa82a011cc5e00548c3b1e5df4db",
+      "query": "involvement",
+      "used_tokens": 375
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.07998783397488296,
+      "patient_root": "sha256:1d06d376fb9b291b3563629ff3ee008e51e7fa82a011cc5e00548c3b1e5df4db",
+      "query": "education",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.1724156669806689,
+      "patient_root": "sha256:a8745d879e1c0a46914ba76dd3c34bbe32b492031e946a143d59acaad0a16e3a",
+      "query": "medication",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.016238332958891988,
+      "patient_root": "sha256:a8745d879e1c0a46914ba76dd3c34bbe32b492031e946a143d59acaad0a16e3a",
+      "query": "pharyngitis",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.17171329190023243,
+      "patient_root": "sha256:b59c55b7cd393cccbe9e78fae0edd98f4e0a1f266a6e3b495a69d02846395d1b",
+      "query": "medication",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.12417283398099244,
+      "patient_root": "sha256:b59c55b7cd393cccbe9e78fae0edd98f4e0a1f266a6e3b495a69d02846395d1b",
+      "query": "disorder",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 1,
+      "elapsed_s": 0.01735841715708375,
+      "patient_root": "sha256:4ba4b6070d0ad0c1b9c23ba87836f4ee986aac93d090d357a9e8588996b7fc5d",
+      "query": "chlorpheniramine",
+      "used_tokens": 376
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.07955729099921882,
+      "patient_root": "sha256:4ba4b6070d0ad0c1b9c23ba87836f4ee986aac93d090d357a9e8588996b7fc5d",
+      "query": "education",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.17249716608785093,
+      "patient_root": "sha256:6b3f471f2a07a3f2695c7b9672e000c61d1cb2e8e209dc1185fed413cbafacc1",
+      "query": "medication",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.08130070799961686,
+      "patient_root": "sha256:6b3f471f2a07a3f2695c7b9672e000c61d1cb2e8e209dc1185fed413cbafacc1",
+      "query": "education",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 1,
+      "elapsed_s": 0.024942666990682483,
+      "patient_root": "sha256:6356d074123151b4b9ad95ab496ad93be33344d1c14428790771b1e50eb82b09",
+      "query": "diphenhydramine",
+      "used_tokens": 376
+    },
+    {
+      "anchor_count": 2,
+      "elapsed_s": 0.0412858328782022,
+      "patient_root": "sha256:6356d074123151b4b9ad95ab496ad93be33344d1c14428790771b1e50eb82b09",
+      "query": "dermatitis",
+      "used_tokens": 757
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.025899667060002685,
+      "patient_root": "sha256:e4b2a92eaed367eada44e6fde5a556a2c66094dd127a8a6c75c46ec971bc4f14",
+      "query": "educated",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.02988562500104308,
+      "patient_root": "sha256:e4b2a92eaed367eada44e6fde5a556a2c66094dd127a8a6c75c46ec971bc4f14",
+      "query": "transport",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.025214249966666102,
+      "patient_root": "sha256:f11320cd85402c195904b4d9d47bbcc0b3391a15bd8b8b03ef51954565331ee3",
+      "query": "educated",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.0072549579199403524,
+      "patient_root": "sha256:f11320cd85402c195904b4d9d47bbcc0b3391a15bd8b8b03ef51954565331ee3",
+      "query": "obesity",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.01837920886464417,
+      "patient_root": "sha256:944adc68a58c378ec4a2d1ddd8442bff1703f7a18671526863afc09f98fafc04",
+      "query": "sinusitis",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.08205829211510718,
+      "patient_root": "sha256:944adc68a58c378ec4a2d1ddd8442bff1703f7a18671526863afc09f98fafc04",
+      "query": "education",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.00844708294607699,
+      "patient_root": "sha256:64060f664701a6a34bd7c1a6c2a3758ef652881d706735ae4e2789771b58bce4",
+      "query": "involvement",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.02455979213118553,
+      "patient_root": "sha256:64060f664701a6a34bd7c1a6c2a3758ef652881d706735ae4e2789771b58bce4",
+      "query": "educated",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.007295917021110654,
+      "patient_root": "sha256:df89dec54e70be39d3280cf2db7425d68226ff5d6c325dd542ee7285484866eb",
+      "query": "adolescent",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.006433458067476749,
+      "patient_root": "sha256:df89dec54e70be39d3280cf2db7425d68226ff5d6c325dd542ee7285484866eb",
+      "query": "appendectomy",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.1727160830050707,
+      "patient_root": "sha256:e69a4f8e70303d594bc2d75bcfa05fbabaa1656befd07dcd312fae502d63c57c",
+      "query": "medication",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.03381995903328061,
+      "patient_root": "sha256:e69a4f8e70303d594bc2d75bcfa05fbabaa1656befd07dcd312fae502d63c57c",
+      "query": "laceration",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 1,
+      "elapsed_s": 0.04483025008812547,
+      "patient_root": "sha256:1e7df01a4d11a89786a888f52b3e6e22527231e5646c354a0afcdbdf559f9cb6",
+      "query": "educated",
+      "used_tokens": 512
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.009856791002675891,
+      "patient_root": "sha256:1e7df01a4d11a89786a888f52b3e6e22527231e5646c354a0afcdbdf559f9cb6",
+      "query": "limited",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 1,
+      "elapsed_s": 0.019990833941847086,
+      "patient_root": "sha256:3c1cfea1bd5211bdfa629dd28bff4a215569259322d8d84bfc73ef133b5d3707",
+      "query": "diphenhydramine",
+      "used_tokens": 376
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.07993808318860829,
+      "patient_root": "sha256:3c1cfea1bd5211bdfa629dd28bff4a215569259322d8d84bfc73ef133b5d3707",
+      "query": "education",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.17239004210568964,
+      "patient_root": "sha256:4b597c51f2833701db708d6c292b43b8c6b02f9beb577f5a820699a6f914f08a",
+      "query": "medication",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.04751775017939508,
+      "patient_root": "sha256:4b597c51f2833701db708d6c292b43b8c6b02f9beb577f5a820699a6f914f08a",
+      "query": "gingivitis",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.17268875008448958,
+      "patient_root": "sha256:5ffe599b88d7c020ab9f0dcb59c7ba5d6a873b9da147ed66ab8155241abf268b",
+      "query": "medication",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.017469500191509724,
+      "patient_root": "sha256:5ffe599b88d7c020ab9f0dcb59c7ba5d6a873b9da147ed66ab8155241abf268b",
+      "query": "sinusitis",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 1,
+      "elapsed_s": 0.043660791823640466,
+      "patient_root": "sha256:1e60555f14eb9dba9e1abdb670505823e9d43838b1c083dc2cd022ee90ba0272",
+      "query": "unsatisfactory",
+      "used_tokens": 403
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.08163383300416172,
+      "patient_root": "sha256:1e60555f14eb9dba9e1abdb670505823e9d43838b1c083dc2cd022ee90ba0272",
+      "query": "education",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.1725442500319332,
+      "patient_root": "sha256:a287c97735d4d14efa9e11093e0dd61edb0fa660191ac69ca26ad38a2be09352",
+      "query": "medication",
+      "used_tokens": 0
+    },
+    {
+      "anchor_count": 0,
+      "elapsed_s": 0.12400924996472895,
+      "patient_root": "sha256:a287c97735d4d14efa9e11093e0dd61edb0fa660191ac69ca26ad38a2be09352",
+      "query": "disorder",
+      "used_tokens": 0
+    }
+  ],
+  "data_dir": "/Users/sojin/medbeads-synthea/medbeads_data",
+  "distinct_patients": 1135,
+  "distinct_queries": 90,
+  "finished_at": "2026-07-10T07:22:25.261496+00:00",
+  "git_commit": "f463237214f3cd370a1881c032e2ac6d6a1b4ad2",
+  "medbeadsd_role": "viewer",
+  "started_at": "2026-07-10T07:22:17.160529+00:00",
+  "stats": {
+    "max_s": 0.1727160830050707,
+    "median_s": 0.040299874963238835,
+    "n": 100,
+    "p95_s": 0.1724156669806689,
+    "p99_s": 0.17268875008448958
+  },
+  "target_met": true,
+  "target_p95_s": 0.5,
+  "token_budget": 2000,
+  "total_calls": 100
+}

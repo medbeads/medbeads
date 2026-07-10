@@ -29,6 +29,23 @@ median は 12.6ms — 帯域判定は情報提供(ゲートは overall median)�
 再現: `MEDBEADS_PERF_DATA=<store> CGO_ENABLED=1 go test -tags sqlite_fts5 ./internal/engine/ -run TestPerf -v`
 および `uv run python -m bench.perf --data-dir <store> --fhir-dir <synthea fhir> --medbeadsd <bin>`。
 
+## 追記(2026-07-10): APC フルスキャン + L2 semantic 後の状態
+
+計測コミット f463237(APC 性能修正 0005 + frequentAntigens キャッシュ、~4,000x 高速化)。
+
+| 項目 | 結果 |
+|---|---|
+| APC フルスキャン | 1,135患者を1パス目 ≈10分で完走、2パス目(5.8s)で新規0 = 収束 |
+| 生成物 | sibling_link Bead **82,013**(gen≤2)、双方向 sibling エッジ 164,026、pair 台帳 862,945、重複 pair **0** |
+| 台帳整合 | bead_apc_scan 1,042,456 = 元 960,443 + sibling_link 82,013(完全一致) |
+| verify | 1,042,456 フレーム全 OK(5.6秒) |
+| reindex 往復 | 7m31s、**sibling エッジ・pair 台帳含む全カウントが Pod 正本のみから完全復元** |
+| retrieve p95(sibling 込み) | **172.4ms** < 500ms(`retrieve_with_siblings_1135.json`) |
+
+L2 semantic(R4.2、コミット 7784f13)は vec0 + 非同期インデクサ + rag_search が実装済み。
+埋め込みバックフィル(96万 Bead × embedder)は埋め込みサーバー選定後の別オペレーション
+(`medbeadsd embed -data <dir> -embedder <url>`)。
+
 ## M1 完了基準(§9)との対応
 
 - ゴールデンハッシュ一致: bead パッケージ(RFC 8785 ベクタ + 回帰ピン、9b18719)
