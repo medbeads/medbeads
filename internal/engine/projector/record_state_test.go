@@ -136,6 +136,85 @@ func TestStatusReproject_PlainActiveCondition_WritesActiveConditionRow(t *testin
 	}
 }
 
+// --- real Synthea shape: clinicalStatus/verificationStatus as a FHIR
+// CodeableConcept ({"coding":[{"code":"active"}]}), not a plain string. This
+// is the shape the actual Synthea corpus uses for both fields — a bare
+// content["clinicalStatus"].(string) type assertion silently fails against a
+// map and yields "", which never equals "active", so this test FAILS against
+// the pre-fix code (active_conditions row never written) and PASSES once
+// insertActiveConditionRow reads through fhirCodeString.
+
+func TestStatusReproject_CodeableConceptActiveCondition_WritesActiveConditionRow(t *testing.T) {
+	e := openT(t)
+	root := seedPatient(t, e, "patient A")
+	cond := ingestT(t, e, unsavedBead("fhir_condition", []string{root.ID}, map[string]any{
+		"clinicalStatus": map[string]any{
+			"coding": []any{
+				map[string]any{
+					"system": "http://terminology.hl7.org/CodeSystem/condition-clinical",
+					"code":   "active",
+				},
+			},
+		},
+		"verificationStatus": map[string]any{
+			"coding": []any{
+				map[string]any{
+					"system": "http://terminology.hl7.org/CodeSystem/condition-ver-status",
+					"code":   "confirmed",
+				},
+			},
+		},
+	}))
+
+	if _, err := projector.StatusReproject(e.Index(), e, "test-code-v1", "2026-07-11T00:00:00Z"); err != nil {
+		t.Fatalf("StatusReproject: %v", err)
+	}
+
+	conds := queryActiveConditions(t, e.Index(), root.ID)
+	if len(conds) != 1 {
+		t.Fatalf("active_conditions rows = %d, want 1 (CodeableConcept clinicalStatus.coding[0].code=='active' must be read): %+v", len(conds), conds)
+	}
+	if conds[0].BeadID != cond.ID || conds[0].CurrentBeadID != cond.ID {
+		t.Errorf("active_conditions row = %+v, want bead_id/current_bead_id = %s", conds[0], cond.ID)
+	}
+	if conds[0].ClinicalStatus != "active" || conds[0].VerificationStatus != "confirmed" {
+		t.Errorf("active_conditions row clinical/verification status = %q/%q, want active/confirmed (resolved codes, not raw JSON)",
+			conds[0].ClinicalStatus, conds[0].VerificationStatus)
+	}
+}
+
+// --- same CodeableConcept shape but code=="resolved": must NOT get a row,
+// mirroring TestStatusReproject_ResolvedClinicalStatus_NoActiveConditionRow
+// but for the map form.
+
+func TestStatusReproject_CodeableConceptResolvedCondition_NoActiveConditionRow(t *testing.T) {
+	e := openT(t)
+	root := seedPatient(t, e, "patient A")
+	cond := ingestT(t, e, unsavedBead("fhir_condition", []string{root.ID}, map[string]any{
+		"clinicalStatus": map[string]any{
+			"coding": []any{
+				map[string]any{
+					"system": "http://terminology.hl7.org/CodeSystem/condition-clinical",
+					"code":   "resolved",
+				},
+			},
+		},
+	}))
+
+	if _, err := projector.StatusReproject(e.Index(), e, "test-code-v1", "2026-07-11T00:00:00Z"); err != nil {
+		t.Fatalf("StatusReproject: %v", err)
+	}
+
+	st := queryBeadStatus(t, e.Index(), cond.ID)
+	if st.Status != "active" {
+		t.Errorf("bead_status = %q, want active (record itself is not retracted/amended)", st.Status)
+	}
+	conds := queryActiveConditions(t, e.Index(), root.ID)
+	if len(conds) != 0 {
+		t.Fatalf("active_conditions rows = %d, want 0 (CodeableConcept clinicalStatus.coding[0].code=='resolved', not 'active')", len(conds))
+	}
+}
+
 // --- a fhir_condition Bead whose content.clinicalStatus is NOT "active" (a
 // resolved/inactive condition) must NOT get an active_conditions row, even
 // though its bead_status is "active" (the two axes are independent — the

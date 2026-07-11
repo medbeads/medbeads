@@ -286,13 +286,20 @@ func insertBeadStatusRow(tx *sql.Tx, beadID, patientRoot, runID string, st beadS
 // section: "active 判定 = FHIR content.clinicalStatus=='active' かつ
 // bead_status.status='active'"; the record_status half was already checked
 // by writePatientState's caller before this function is ever invoked).
-// Returns whether a row was actually written.
+//
+// content.clinicalStatus/verificationStatus are read via fhirCodeString,
+// which handles BOTH shapes this codebase's real Synthea corpus mixes: a
+// plain string, and a FHIR CodeableConcept
+// ({"coding":[{"code":"active"}]}) — the shape Synthea's own Condition
+// resources actually use for both fields, which a bare ".(string)" type
+// assertion silently misses (it never panics; it just always yields "",
+// which never equals "active"). Returns whether a row was actually written.
 func insertActiveConditionRow(tx *sql.Tx, conditionBead bead.Bead, patientRoot, runID, currentBeadID string) (bool, error) {
-	clinicalStatus, _ := conditionBead.Content["clinicalStatus"].(string)
+	clinicalStatus := fhirCodeString(conditionBead.Content, "clinicalStatus")
 	if clinicalStatus != "active" {
 		return false, nil
 	}
-	verificationStatus, _ := conditionBead.Content["verificationStatus"].(string)
+	verificationStatus := fhirCodeString(conditionBead.Content, "verificationStatus")
 
 	if _, err := tx.Exec(`
 		INSERT INTO active_conditions
@@ -310,14 +317,18 @@ func insertActiveConditionRow(tx *sql.Tx, conditionBead bead.Bead, patientRoot, 
 // fhir_medicationrequest content carries the FHIR MedicationRequest
 // resource's own top-level "status" field (not "medicationStatus" — verified
 // against this store's demo_data corpus), analogous to
-// insertActiveConditionRow's clinicalStatus check. Returns whether a row was
-// actually written.
+// insertActiveConditionRow's clinicalStatus check. status/intent are plain
+// strings in this corpus (unlike fhir_condition's clinicalStatus/
+// verificationStatus), but this also routes through fhirCodeString: it
+// returns a string field unchanged, so behavior for the string case is
+// identical to the previous direct ".(string)" assertion. Returns whether a
+// row was actually written.
 func insertActiveMedicationRow(tx *sql.Tx, medicationBead bead.Bead, patientRoot, runID, currentBeadID string) (bool, error) {
-	medicationStatus, _ := medicationBead.Content["status"].(string)
+	medicationStatus := fhirCodeString(medicationBead.Content, "status")
 	if medicationStatus != "active" {
 		return false, nil
 	}
-	intent, _ := medicationBead.Content["intent"].(string)
+	intent := fhirCodeString(medicationBead.Content, "intent")
 
 	if _, err := tx.Exec(`
 		INSERT INTO active_medications
@@ -328,6 +339,42 @@ func insertActiveMedicationRow(tx *sql.Tx, medicationBead bead.Bead, patientRoot
 		return false, err
 	}
 	return true, nil
+}
+
+// fhirCodeString reads a FHIR status-code-shaped field out of content[key],
+// tolerating the two shapes this codebase's real data mixes for such fields:
+//
+//   - a plain string (e.g. fhir_medicationrequest's "status"/"intent" in
+//     this store's Synthea corpus) — returned as-is.
+//   - a FHIR CodeableConcept (e.g. fhir_condition's "clinicalStatus"/
+//     "verificationStatus" in the same corpus):
+//     {"coding": [{"system": "...", "code": "active"}], ...}
+//     — decoded from JSON via a Pod-frame round-trip, so "coding" comes back
+//     as []any (not []map[string]any) and each element as map[string]any;
+//     this reads the first coding entry's "code" and returns it.
+//
+// Any other shape (missing key, wrong type, empty coding, missing/non-string
+// code) returns "" — the same "absent" signal a failed type assertion would
+// have produced, so callers comparing against a specific status string need
+// no other changes.
+func fhirCodeString(content map[string]any, key string) string {
+	switch v := content[key].(type) {
+	case string:
+		return v
+	case map[string]any:
+		coding, ok := v["coding"].([]any)
+		if !ok || len(coding) == 0 {
+			return ""
+		}
+		first, ok := coding[0].(map[string]any)
+		if !ok {
+			return ""
+		}
+		code, _ := first["code"].(string)
+		return code
+	default:
+		return ""
+	}
 }
 
 // nullIfEmpty converts ""'s beadState/content convention (empty string means
