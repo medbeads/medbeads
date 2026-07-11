@@ -16,10 +16,10 @@ var ErrPatientNotFound = errors.New("graph: patient not found")
 
 // Bundle is a patient's entire Bead sub-graph, expanded into memory once
 // (LoadBundle) and then queried purely via map operations (Ancestors /
-// Descendants / Siblings / BuildContext) — no further disk or SQL access.
-// Per specs/DESIGN_v3.md §3, this is the "桁改善の本体": a patient's
-// sub-graph (~900 Beads, ~300-500KB compressed) is read with one Pod open +
-// one sequential scan rather than one random-access read per Bead.
+// Descendants / BuildContext) — no further disk or SQL access. Per
+// specs/DESIGN_v3.md §3, this is the "桁改善の本体": a patient's sub-graph
+// (~900 Beads, ~300-500KB compressed) is read with one Pod open + one
+// sequential scan rather than one random-access read per Bead.
 type Bundle struct {
 	// PatientRoot is the patient_registration Bead ID this Bundle was loaded
 	// for.
@@ -33,20 +33,6 @@ type Bundle struct {
 	// the reverse adjacency: a Bead ID to the IDs of its direct children.
 	parents  map[string][]string
 	children map[string][]string
-
-	// siblings maps a Bead ID to the IDs of its explicit siblings: Beads
-	// connected via a bidirectional edge_type='sibling' bead_edges row (see
-	// specs/MEDBEADS_SIBLING_SPEC.md §5.2 — sibling edges are registered in
-	// both directions when a sibling_link Bead is created by the APC batch
-	// scanner). Those rows are now written to index.db by IndexBead
-	// (docs/requirements.md R5 is implemented — see internal/engine/index/
-	// write.go). LoadBundle, however, reads only the patient's Pod frames
-	// and does not (yet) query bead_edges, so this map is empty for any
-	// Bundle loaded from real ingest data today; wiring the index.db sibling
-	// rows into LoadBundle is a later unit (M3 GraphView 結線). It exists now
-	// so BuildContext's explicit-sibling priority tier has something to grow
-	// into, and so tests can exercise it by injecting sibling edges by hand.
-	siblings map[string][]string
 }
 
 // Beads returns the number of Beads in the bundle.
@@ -58,26 +44,6 @@ func (bd *Bundle) Beads() int {
 func (bd *Bundle) Get(id string) (bead.Bead, bool) {
 	b, ok := bd.beads[id]
 	return b, ok
-}
-
-// AddSiblingEdge registers an explicit (bidirectional) sibling edge between
-// two Beads already present in the bundle. This is how a caller (or a test)
-// injects the equivalent of index.db's edge_type='sibling' bead_edges rows
-// into a Bundle. IndexBead already writes those rows (docs/requirements.md
-// R5 is implemented — see internal/engine/index/write.go), but LoadBundle
-// does not yet read them (it decodes Pod frames only), so today this is
-// exercised by tests and by any caller that has the sibling pairs in hand;
-// LoadBundle-side wiring is a later unit (M3 GraphView 結線 — see doc comment
-// on Bundle.siblings). It is a no-op if either id is not in the bundle.
-func (bd *Bundle) AddSiblingEdge(a, b string) {
-	if _, ok := bd.beads[a]; !ok {
-		return
-	}
-	if _, ok := bd.beads[b]; !ok {
-		return
-	}
-	bd.siblings[a] = appendUnique(bd.siblings[a], b)
-	bd.siblings[b] = appendUnique(bd.siblings[b], a)
 }
 
 // appendUnique appends v to ss unless it is already present.
@@ -161,7 +127,6 @@ func LoadBundle(store *pod.Store, patientRoot string) (*Bundle, error) {
 		beads:       make(map[string]bead.Bead, len(scan.Records)),
 		parents:     make(map[string][]string, len(scan.Records)),
 		children:    make(map[string][]string, len(scan.Records)),
-		siblings:    make(map[string][]string, len(scan.Records)),
 	}
 
 	for _, rec := range scan.Records {

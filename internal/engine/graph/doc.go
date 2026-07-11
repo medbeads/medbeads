@@ -1,10 +1,17 @@
 // Package graph handles in-memory expansion of a patient bundle: loading a
 // whole patient's Beads with one sequential Pod scan (LoadBundle), BFS
 // traversal over the resulting in-memory adjacency lists (Ancestors /
-// Descendants / Siblings), a shallow cross-patient chain via a recursive
-// bead_edges CTE (ChainAcrossPatients), and token-budgeted context bundle
-// assembly for agent retrieval (BuildContext). See specs/DESIGN_v3.md §3, §6,
-// §8 and docs/requirements.md R4.3.
+// Descendants), a shallow cross-patient chain via a recursive bead_edges CTE
+// (ChainAcrossPatients), and token-budgeted context bundle assembly for
+// agent retrieval (BuildContext). See specs/DESIGN_v3.md §3, §6, §8 and
+// docs/requirements.md R4.3.
+//
+// U5a (specs/U5_api_retrieve.md) removed this package's sibling tiers
+// entirely (Siblings, AddSiblingEdge, WithSiblings, the explicit/implicit
+// sibling priority tiers in BuildContext) along with package apc, the
+// scanner that produced the sibling_link Beads those tiers read —
+// clinical_links (package projector, U3) is now the sole link mechanism;
+// BuildContext's context bundle is anchor/ancestor/descendant only.
 //
 // graph deliberately depends only on package pod and package index (and
 // package bead for the Bead type itself), not on package engine: per

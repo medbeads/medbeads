@@ -6,14 +6,15 @@
 // # Scope (this unit)
 //
 // New builds one *Server per Engine + role: every read tool (list_patients,
-// search_beads, get_bead, get_context, get_timeline, get_siblings,
-// get_sibling_links, search_antigens, verify_integrity, apc_status,
-// retrieve) is always registered; create_bead and apc_trigger are
-// registered only when Config.Role == SystemRole (docs/requirements.md
-// R6.3's "書き込みは system ロール限定"). apc_trigger is a write tool despite
-// its empty input schema — apc.Scanner.Scan durably ingests any new
-// sibling_link Bead it finds — so it is gated alongside create_bead rather
-// than exposed to every role; see registerWriteTools' own doc comment.
+// search_beads, get_bead, get_context, get_timeline, get_links,
+// search_antigens, verify_integrity, retrieve) is always registered;
+// create_bead is registered only when Config.Role == SystemRole
+// (docs/requirements.md R6.3's "書き込みは system ロール限定"). U5a
+// (specs/U5_api_retrieve.md) removed the old get_siblings/get_sibling_links/
+// apc_status/apc_trigger tools entirely along with package apc, the scanner
+// that produced the sibling_link Beads those tools read — clinical_links
+// (package projector, U3), surfaced via get_links and retrieve's
+// ClinicalLinks sidecar, is now the sole link mechanism.
 //
 // # Clearance: mask-then-drop, not mask-and-forward
 //
@@ -29,8 +30,8 @@
 // matters beyond get_bead/retrieve's own Content masking: several tools
 // (search_beads, list_patients, get_timeline, search_antigens) attach
 // index-derived metadata (a Summary fragment of the Bead's own Content)
-// alongside the Bead, and get_sibling_links exposes another Bead's mere
-// existence-as-a-sibling plus its matched_antigen (itself often a
+// alongside the Bead, and get_links exposes another Bead's mere
+// existence-as-a-link plus its matched_tag (itself often a
 // diagnosis-suggestive risk:/organ: tag) — none of which FilterByAccess's
 // own Content-masking touches. Every such call site checks accessible()
 // itself (see render.go's accessible doc comment) and drops the

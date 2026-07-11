@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/medbeads/medbeads/internal/engine"
-	"github.com/medbeads/medbeads/internal/engine/apc"
 	"github.com/medbeads/medbeads/internal/engine/bead"
 	"github.com/medbeads/medbeads/internal/engine/clearance"
 	"github.com/medbeads/medbeads/internal/engine/projector"
@@ -388,72 +387,6 @@ func TestSearchAntigens_DropsRestrictedSummary(t *testing.T) {
 	}
 }
 
-// --- data-reviewer regression: get_sibling_links clearance ---------------
-
-// TestGetSiblingLinks_DropsRestrictedPair checks that a sibling_pairs row
-// naming a restricted other Bead is dropped entirely for a viewer session
-// (neither the other Bead's ID nor its matched_antigen leaks), while a
-// system session sees the full row.
-func TestGetSiblingLinks_DropsRestrictedPair(t *testing.T) {
-	e := openT(t)
-	root := seedPatient(t, e, "Sibling Links Patient")
-	padWithNoiseBeads(t, e, root, 10)
-
-	rx := seedChildBead(t, e, root, "fhir_medicationrequest",
-		[]string{"risk:nephrotoxic", "organ:renal"},
-		map[string]any{"drug": "meropenem"})
-	lab := seedChildBead(t, e, root, "fhir_observation",
-		[]string{"risk:nephrotoxic", "organ:renal"},
-		map[string]any{"test": "eGFR"})
-
-	if err := clearance.SaveRule(e.Index(), clearance.Rule{
-		ID:          "rule-" + lab.ID,
-		BeadID:      lab.ID,
-		DeniedRoles: []string{"viewer"},
-		CreatedBy:   "test",
-		CreatedAt:   "2026-01-01T00:00:00Z",
-	}); err != nil {
-		t.Fatalf("SaveRule: %v", err)
-	}
-
-	scanner := apc.New(e, e.Index(), apc.Default())
-	for i := 0; i < 10; i++ {
-		res, err := scanner.Scan()
-		if err != nil {
-			t.Fatalf("Scan: %v", err)
-		}
-		if res.BeadsScanned == 0 {
-			break
-		}
-	}
-
-	viewer := newServerT(t, e, DefaultRole)
-	_, viewerOut, err := viewer.getSiblingLinks(context.Background(), nil, getSiblingLinksIn{ID: rx.ID})
-	if err != nil {
-		t.Fatalf("viewer getSiblingLinks: %v", err)
-	}
-	for _, link := range viewerOut.Links {
-		if link.OtherBeadID == bead.FormatID(lab.ID) {
-			t.Fatalf("viewer get_sibling_links exposed the restricted sibling pair: %+v", link)
-		}
-	}
-
-	system := newServerT(t, e, SystemRole)
-	_, systemOut, err := system.getSiblingLinks(context.Background(), nil, getSiblingLinksIn{ID: rx.ID})
-	if err != nil {
-		t.Fatalf("system getSiblingLinks: %v", err)
-	}
-	found := false
-	for _, link := range systemOut.Links {
-		if link.OtherBeadID == bead.FormatID(lab.ID) {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("system get_sibling_links did not include the sibling pair; want it present (system bypasses clearance). Links=%+v", systemOut.Links)
-	}
-}
-
 // --- U3c: get_links (clinical_links read path) ---------------------------
 
 // seedCooccurrenceLinkT ingests the built-in cooccurrence link_rule Bead and
@@ -597,43 +530,31 @@ func TestGetLinks_DropsRestrictedLink(t *testing.T) {
 	}
 }
 
-// --- data-reviewer regression: apc_trigger is a write tool ---------------
+// --- U5a regression: apc_trigger/get_siblings/get_sibling_links/apc_status
+// tools removed entirely ---------------------------------------------------
 
-// TestApcTrigger_NotRegisteredForViewerRole checks apc_trigger is gated
-// alongside create_bead (system role only), since apc.Scanner.Scan durably
-// ingests sibling_link Beads — a write, not a read, despite its empty input
-// schema.
-func TestApcTrigger_NotRegisteredForViewerRole(t *testing.T) {
+// TestU5a_ApcToolsRemoved checks specs/U5_api_retrieve.md's U5a removal is
+// complete at the MCP tool-registration surface: none of the old
+// apc_trigger/get_siblings/get_sibling_links/apc_status tools are registered
+// for either role, for any Server built after package apc's deletion.
+func TestU5a_ApcToolsRemoved(t *testing.T) {
 	e := openT(t)
-	s := newServerT(t, e, DefaultRole)
-	cs := connectInMemoryT(t, s)
+	removed := []string{"apc_trigger", "get_siblings", "get_sibling_links", "apc_status"}
 
-	tools, err := cs.ListTools(context.Background(), nil)
-	if err != nil {
-		t.Fatalf("ListTools: %v", err)
-	}
-	for _, tool := range tools.Tools {
-		if tool.Name == "apc_trigger" {
-			t.Fatalf("ListTools for viewer role includes apc_trigger; want it absent")
+	for _, role := range []string{DefaultRole, SystemRole} {
+		s := newServerT(t, e, role)
+		cs := connectInMemoryT(t, s)
+
+		tools, err := cs.ListTools(context.Background(), nil)
+		if err != nil {
+			t.Fatalf("ListTools(role=%s): %v", role, err)
+		}
+		for _, tool := range tools.Tools {
+			for _, name := range removed {
+				if tool.Name == name {
+					t.Errorf("ListTools(role=%s) includes removed tool %q; want absent", role, name)
+				}
+			}
 		}
 	}
-}
-
-// TestApcTrigger_RegisteredForSystemRole is TestApcTrigger_
-// NotRegisteredForViewerRole's converse.
-func TestApcTrigger_RegisteredForSystemRole(t *testing.T) {
-	e := openT(t)
-	s := newServerT(t, e, SystemRole)
-	cs := connectInMemoryT(t, s)
-
-	tools, err := cs.ListTools(context.Background(), nil)
-	if err != nil {
-		t.Fatalf("ListTools: %v", err)
-	}
-	for _, tool := range tools.Tools {
-		if tool.Name == "apc_trigger" {
-			return
-		}
-	}
-	t.Fatalf("ListTools for system role does not include apc_trigger")
 }

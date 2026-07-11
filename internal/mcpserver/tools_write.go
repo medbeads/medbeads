@@ -10,21 +10,12 @@ import (
 )
 
 // registerWriteTools adds every tool that durably mutates the data
-// directory to s.mcp: create_bead, and apc_trigger. Per the lead's decision
-// ("書き込み(create_bead)は system ロール限定" — R6.3), New only calls this
-// when Role() == SystemRole; every other role never sees these tools in
+// directory to s.mcp: create_bead. Per the lead's decision ("書き込み
+// (create_bead)は system ロール限定" — R6.3), New only calls this when
+// Role() == SystemRole; every other role never sees these tools in
 // tools/list at all (not merely denied at call time), which is the simplest
 // possible enforcement for a single-process, single-role-per-launch server
 // (no per-request identity to check against).
-//
-// apc_trigger belongs here, not among the read tools, even though it takes
-// no Bead content as input: apc.Scanner.Scan calls engine.Ingest to
-// durably persist any new sibling_link Bead it finds (see apc/scanner.go),
-// making it a write path in every sense R6.3 cares about (it appends Pod
-// frames and index rows exactly like create_bead does) — a viewer-role
-// session must not be able to trigger new, permanent Beads being written
-// into the data directory just because the tool's own input schema happens
-// to be empty.
 func (s *Server) registerWriteTools() {
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name: "create_bead",
@@ -33,31 +24,6 @@ func (s *Server) registerWriteTools() {
 			"stored type+content, so a Bead's content hash never depends on which tagging dictionary " +
 			"happened to be current when it was ingested (specs/DESIGN_v3.1_draft.md §2).",
 	}, s.createBead)
-
-	mcp.AddTool(s.mcp, &mcp.Tool{
-		Name: "apc_trigger",
-		Description: "Run one APC batch scan (apc.Scanner.Scan) now (system role only: this durably " +
-			"ingests any new sibling_link Beads it finds), generating sibling_link Beads for new matches.",
-	}, s.apcTrigger)
-}
-
-type apcTriggerIn struct{}
-
-type apcTriggerOut struct {
-	BeadsScanned        int `json:"beads_scanned"`
-	SiblingLinksCreated int `json:"sibling_links_created"`
-}
-
-// apcTrigger runs one apc.Scanner.Scan pass. See registerWriteTools' doc
-// comment for why this is a write tool (system role only) despite its empty
-// input schema: Scan durably ingests any new sibling_link Bead it finds.
-func (s *Server) apcTrigger(_ context.Context, _ *mcp.CallToolRequest, _ apcTriggerIn) (*mcp.CallToolResult, apcTriggerOut, error) {
-	res, err := s.scan.Scan()
-	if err != nil {
-		errRes, jerr := toolError("apc_trigger", err)
-		return errRes, apcTriggerOut{}, jerr
-	}
-	return nil, apcTriggerOut{BeadsScanned: res.BeadsScanned, SiblingLinksCreated: res.SiblingLinksCreated}, nil
 }
 
 type createBeadIn struct {

@@ -47,16 +47,15 @@ type retrieveIn struct {
 	Semantic    bool         `json:"semantic,omitempty" jsonschema:"also run L2 vector search (sqlite-vec) over query and merge hits into the anchor set; requires this server to have an embedder configured, or it is a tool-level error"`
 	ChainDepth  int          `json:"chain_depth,omitempty" jsonschema:"ancestor/descendant BFS depth from each anchor (default 3)"`
 	TokenBudget int          `json:"token_budget,omitempty" jsonschema:"greedy packing budget in estimated tokens (default 4000)"`
-	// IncludeSiblings controls whether graph.BuildContext's explicit-sibling
-	// and implicit-sibling tiers are populated at all (graph.WithSiblings).
-	// Defaults to true (existing behavior) when the caller omits the field;
-	// jsonschema's default annotation documents that default for MCP
-	// clients, since Go's zero value for bool is false and this field must
-	// not be confused with "explicitly asked for false" — see
-	// retrieveIncludeSiblings below, which is what actually resolves the
-	// default (mcp.CallToolRequest gives no signal for "field omitted" vs.
-	// "field explicitly false" once decoded into a Go bool).
-	IncludeSiblings *bool `json:"include_siblings,omitempty" jsonschema:"include explicit (sibling_link) and implicit (same-parent) sibling tiers in the context bundle (default true); set false to isolate DAG traversal without siblings, e.g. bench/'s dag_nosib retrieval arm"`
+	// IncludeSiblings now gates only retrieveOut.ClinicalLinks (the
+	// clinical_links sidecar): U5a (specs/U5_api_retrieve.md) removed package
+	// apc and graph's sibling tiers entirely — graph.BuildContext no longer
+	// has an explicit/implicit sibling tier to toggle, so this field's
+	// context-bundle-shaping effect is gone. The field itself is kept
+	// (rather than removed) because U5b renames it to include_links without
+	// changing its JSON shape (*bool, defaulting to true) — see
+	// retrieveIncludeSiblings below.
+	IncludeSiblings *bool `json:"include_siblings,omitempty" jsonschema:"include the clinical_links sidecar in the response (default true); set false to omit it"`
 }
 
 // retrieveIncludeSiblings resolves retrieveIn.IncludeSiblings' documented
@@ -64,7 +63,9 @@ type retrieveIn struct {
 // "explicitly false" are distinguishable at the JSON layer (a plain bool
 // field would make both cases decode to the Go zero value, false, making
 // the R6.2 default impossible to express without breaking every existing
-// caller that never sets the field).
+// caller that never sets the field). Since U5a, this only gates
+// retrieveOut.ClinicalLinks (see retrieve's own call site) — it no longer
+// affects Items/TruncatedRefs' context-bundle shape at all.
 func retrieveIncludeSiblings(in retrieveIn) bool {
 	if in.IncludeSiblings == nil {
 		return true
@@ -113,21 +114,16 @@ type retrieveOut struct {
 	UsedTokens    int               `json:"used_tokens"`
 	// ClinicalLinks surfaces the U3b-projected clinical_links rows for every
 	// Bead that made it into Items (U3c's "retrieve を clinical_links 読取に対応
-	// させる" scope) — the interpretation-layer link projector's successor to
-	// the older bead_edges('sibling') tier BuildContext's own sibling
-	// options already expand into Items itself. This is deliberately an
-	// additive, separate field rather than a rewiring of graph.Bundle's
-	// sibling tiers: doing so keeps this unit's blast radius to "add a new
-	// read surface" rather than "change what Items already contains" (the
-	// full graph.Bundle rewire — replacing loadExplicitSiblingEdges'
-	// bead_edges('sibling') source with clinical_links inside package graph
-	// itself — is left to U5, which is also when include_siblings/
-	// get_siblings/get_sibling_links are renamed/removed; see this package's
-	// U3c delegation prompt for the explicit judgment call). Gated by the
-	// same IncludeSiblings flag Items' own sibling tiers use (retrieveIn's
-	// doc comment: this flag becomes include_links in U5), and clearance-
-	// filtered exactly like get_links (a link whose other endpoint is
-	// inaccessible is dropped, never masked).
+	// させる" scope) — the interpretation-layer link projector, and (since
+	// U5a deleted package apc and graph's sibling tiers) the sole link
+	// mechanism this response surfaces at all. This is deliberately an
+	// additive sidecar field rather than a context-bundle expansion: a link's
+	// other endpoint is surfaced as relation/severity/evidence metadata here,
+	// not pulled into Items itself (see include_links' future "近傍展開" design
+	// note in specs/U5_api_retrieve.md if that ever changes). Gated by the
+	// IncludeSiblings flag (retrieveIn's doc comment: renamed to include_links
+	// in U5b), and clearance-filtered exactly like get_links (a link whose
+	// other endpoint is inaccessible is dropped, never masked).
 	ClinicalLinks []retrievedLinkView `json:"clinical_links,omitempty"`
 }
 
@@ -137,8 +133,8 @@ type retrieveOut struct {
 // (rather than reusing clinicalLinkView bare) so retrieve's response makes
 // explicit which of the two linked Beads is "the one already in this
 // context bundle" versus OtherBeadID ("the one the link points at" — which
-// may or may not itself be in Items, exactly as get_sibling_links/get_links
-// never guaranteed the sibling itself is in the caller's already-loaded set).
+// may or may not itself be in Items, exactly as get_links never guaranteed
+// the other endpoint itself is in the caller's already-loaded set).
 type retrievedLinkView struct {
 	BeadID string `json:"bead_id"`
 	clinicalLinkView
@@ -220,13 +216,8 @@ func (s *Server) retrieve(ctx context.Context, _ *mcp.CallToolRequest, in retrie
 		res, jerr := toolError("retrieve: load bundle", err)
 		return res, retrieveOut{}, jerr
 	}
-	if err := loadExplicitSiblingEdges(s, bd); err != nil {
-		res, jerr := toolError("retrieve: load sibling edges", err)
-		return res, retrieveOut{}, jerr
-	}
 
-	bundle := graph.BuildContext(bd, scopedIDs, tokenBudget, chainDepth, chainDepth,
-		graph.WithSiblings(retrieveIncludeSiblings(in)))
+	bundle := graph.BuildContext(bd, scopedIDs, tokenBudget, chainDepth, chainDepth)
 
 	items, truncated, err := s.filterContextBundle(bundle, scopedProvenance)
 	if err != nil {

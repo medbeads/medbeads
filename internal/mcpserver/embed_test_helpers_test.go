@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/medbeads/medbeads/internal/engine"
-	"github.com/medbeads/medbeads/internal/engine/apc"
 	"github.com/medbeads/medbeads/internal/engine/index"
 )
 
@@ -47,7 +46,7 @@ func deterministicTestVector(text string) []float32 {
 // mcpserver_test.go's own newServerT (which never sets one).
 func newServerWithEmbedderT(t testing.TB, e *engine.Engine, role string) *Server {
 	t.Helper()
-	s, err := New(Config{Engine: e, Role: role, APCConfig: apc.Default(), Embedder: fakeQueryEmbedder{}})
+	s, err := New(Config{Engine: e, Role: role, Embedder: fakeQueryEmbedder{}})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

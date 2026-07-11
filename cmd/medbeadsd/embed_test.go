@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,6 +13,30 @@ import (
 	"github.com/medbeads/medbeads/internal/engine/bead"
 	"github.com/medbeads/medbeads/internal/engine/index"
 )
+
+// embedIngestT is a small local Ingest helper (this file's own scaffolding —
+// the old apcIngestT/apcTimestamp helpers it used before U5a removed
+// package apc lived in main_test.go's apc-CLI-subcommand tests, which are
+// gone along with the apc subcommand itself; see specs/U5_api_retrieve.md).
+func embedIngestT(t *testing.T, e *engine.Engine, b bead.Bead) bead.Bead {
+	t.Helper()
+	out, err := e.Ingest(b)
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	return out
+}
+
+// embedTimestampCounter backs embedTimestamp's strictly-increasing RFC3339
+// timestamps (Beads within the same patient must have distinct timestamps
+// for a deterministic Bead ID).
+var embedTimestampCounter int
+
+func embedTimestamp() string {
+	embedTimestampCounter++
+	return fmt.Sprintf("2026-01-01T%02d:%02d:%02dZ",
+		embedTimestampCounter/3600, (embedTimestampCounter%3600)/60, embedTimestampCounter%60)
+}
 
 // TestRun_EmbedUsageErrors checks embed's two required flags (-data,
 // -embedder) are both enforced as usage errors (exit 2), matching every
@@ -99,16 +124,16 @@ func TestRun_EmbedEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("engine.Open: %v", err)
 	}
-	root := apcIngestT(t, e, bead.Bead{
+	root := embedIngestT(t, e, bead.Bead{
 		Type:      "patient_registration",
-		Timestamp: apcTimestamp(),
+		Timestamp: embedTimestamp(),
 		Author:    "did:medbeads:doctor:12345",
 		Content:   map[string]any{"name": "Embed CLI Patient"},
 	})
 	for i := 0; i < 5; i++ {
-		apcIngestT(t, e, bead.Bead{
+		embedIngestT(t, e, bead.Bead{
 			Type:      "fhir_observation",
-			Timestamp: apcTimestamp(),
+			Timestamp: embedTimestamp(),
 			Author:    "did:medbeads:doctor:12345",
 			Parents:   []string{root.ID},
 			Content:   map[string]any{"note": "obs"},

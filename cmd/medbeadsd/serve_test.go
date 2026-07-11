@@ -11,7 +11,6 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/medbeads/medbeads/internal/engine"
-	"github.com/medbeads/medbeads/internal/engine/apc"
 	"github.com/medbeads/medbeads/internal/engine/index"
 	"github.com/medbeads/medbeads/internal/mcpserver"
 )
@@ -42,7 +41,7 @@ func TestServeWiring_BuildsMCPServerOverRealEngine(t *testing.T) {
 	}
 	defer eng.Close()
 
-	viewer, err := mcpserver.New(mcpserver.Config{Engine: eng, Role: mcpserver.DefaultRole, APCConfig: apc.Default()})
+	viewer, err := mcpserver.New(mcpserver.Config{Engine: eng, Role: mcpserver.DefaultRole})
 	if err != nil {
 		t.Fatalf("mcpserver.New(role=%s): %v", mcpserver.DefaultRole, err)
 	}
@@ -53,7 +52,7 @@ func TestServeWiring_BuildsMCPServerOverRealEngine(t *testing.T) {
 		t.Errorf("viewer-role server registers create_bead; want it absent")
 	}
 
-	system, err := mcpserver.New(mcpserver.Config{Engine: eng, Role: mcpserver.SystemRole, APCConfig: apc.Default()})
+	system, err := mcpserver.New(mcpserver.Config{Engine: eng, Role: mcpserver.SystemRole})
 	if err != nil {
 		t.Fatalf("mcpserver.New(role=%s): %v", mcpserver.SystemRole, err)
 	}

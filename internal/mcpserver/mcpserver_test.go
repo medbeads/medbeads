@@ -9,14 +9,11 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/medbeads/medbeads/internal/engine"
-	"github.com/medbeads/medbeads/internal/engine/apc"
 	"github.com/medbeads/medbeads/internal/engine/bead"
 )
 
-// --- shared test scaffolding (mirrors internal/engine/apc/apc_test.go's
-// openT/unsavedBead/ingestT/seedPatient/seedChildBead conventions — this
-// project's established "each package's tests re-derive these small
-// helpers" pattern, per apc_test.go's own doc comment on why) -------------
+// --- shared test scaffolding (this project's established "each package's
+// tests re-derive these small helpers" pattern) --------------------------
 
 func openT(t testing.TB) *engine.Engine {
 	t.Helper()
@@ -52,10 +49,9 @@ func fmtTimestamp(h, m, s int) string {
 // antigens parameter: v3.1 removed Bead.Antigens entirely (see bead.Bead's
 // doc comment) — tag derivation now happens only at index-projection time
 // (antigen.Extract), a fixed deterministic function with no override hook.
-// See seedAntigens below for how a caller gets specific bead_tags rows
-// onto a seeded Bead for tests whose subject is Scanner/tag-filter behavior
-// rather than tag derivation itself (mirrors
-// internal/engine/apc/apc_test.go's identical helper and reasoning).
+// See seedAntigens below for how a caller gets specific bead_tags rows onto
+// a seeded Bead for tests whose subject is tag-filter behavior rather than
+// tag derivation itself.
 func unsavedBead(typ string, parents []string, content map[string]any) bead.Bead {
 	if content == nil {
 		content = map[string]any{}
@@ -83,11 +79,9 @@ func ingestT(t *testing.T, e *engine.Engine, b bead.Bead) bead.Bead {
 // comment. patient_root is resolved from the index (e.Index().GetBead) —
 // not trusted from a caller-supplied parameter — since b's own parent Bead
 // is not necessarily the patient root (e.g. a Bead seeded under an
-// intermediate encounter), and every downstream Scanner query
-// (candidatesFor/frequentAntigens) is scoped by patient_root, so a wrong
-// value here would silently break IDF-threshold/matching assertions for a
-// reason unrelated to what a test is actually checking (mirrors
-// internal/engine/apc/apc_test.go's identical helper and reasoning).
+// intermediate encounter), and bead_tags rows are patient-scoped, so a wrong
+// value here would silently break tag-lookup assertions for a reason
+// unrelated to what a test is actually checking.
 func seedAntigens(t *testing.T, e *engine.Engine, b bead.Bead, tags ...string) {
 	t.Helper()
 	ref, err := e.Index().GetBead(b.ID)
@@ -125,13 +119,11 @@ func seedChildBead(t *testing.T, e *engine.Engine, parent bead.Bead, typ string,
 	return b
 }
 
-// padWithNoiseBeads mirrors internal/engine/apc/apc_test.go's helper of the
-// same name: n Beads under parent, each carrying a distinct antigen no other
-// Bead in the patient shares, so a genuinely-shared antigen elsewhere stays
-// comfortably under apc.Config's default 30% patient-local IDF frequency
-// threshold. Tests in this package that need a real APC sibling_link (e.g.
-// the get_sibling_links clearance regression) need this the same way
-// apc_test.go's own tests do.
+// padWithNoiseBeads seeds n Beads under parent, each carrying a distinct
+// antigen no other Bead in the patient shares — noise that keeps a
+// genuinely-shared antigen elsewhere from looking spuriously rare/common in
+// tests exercising bead_tags-driven matching (e.g. projector.Reproject's
+// cooccurrence rule).
 func padWithNoiseBeads(t *testing.T, e *engine.Engine, parent bead.Bead, n int) {
 	t.Helper()
 	for i := 0; i < n; i++ {
@@ -145,7 +137,7 @@ func padWithNoiseBeads(t *testing.T, e *engine.Engine, parent bead.Bead, n int) 
 // plumbing) for tests that call tool handler methods in-process.
 func newServerT(t testing.TB, e *engine.Engine, role string) *Server {
 	t.Helper()
-	s, err := New(Config{Engine: e, Role: role, APCConfig: apc.Default()})
+	s, err := New(Config{Engine: e, Role: role})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

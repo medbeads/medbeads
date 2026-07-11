@@ -58,7 +58,7 @@ func newBeadView(b bead.Bead) beadView {
 // beadRefView is the API-layer JSON shape for an index.BeadRef /
 // index.SearchResult-derived reference: enough to identify and rank a Bead
 // without paying for its full content (used by search_beads, list_patients,
-// get_timeline, get_siblings, search_antigens).
+// get_timeline, search_antigens).
 //
 // # Clearance and Summary
 //
@@ -148,10 +148,10 @@ func newContextItemViews(items []graph.ContextItem) []contextItemView {
 // must check accessible() per-element and drop (not just mask-and-forward)
 // any Bead it is false for — masking alone is not enough at this package's
 // boundary, because several call sites (search_beads/list_patients/
-// get_timeline/search_antigens's beadRefView, get_sibling_links) attach
-// additional index-derived fields (Summary, a sibling relationship's own
-// existence) alongside the Bead that FilterByAccess itself has no way to
-// mask, so "masked Content but a beadRefView/siblingLinkView still emitted"
+// get_timeline/search_antigens's beadRefView, get_links) attach
+// additional index-derived fields (Summary, a clinical-link relationship's
+// own existence) alongside the Bead that FilterByAccess itself has no way to
+// mask, so "masked Content but a beadRefView/clinicalLinkView still emitted"
 // would leak exactly the information FilterByAccess was trying to hide.
 // Dropping the element entirely is this package's uniform policy for every
 // tool (see doc.go).

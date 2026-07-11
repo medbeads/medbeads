@@ -4,7 +4,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/medbeads/medbeads/internal/engine/apc"
 	"github.com/medbeads/medbeads/internal/engine/bead"
 	"github.com/medbeads/medbeads/internal/engine/clearance"
 	"github.com/medbeads/medbeads/internal/engine/projector"
@@ -217,53 +216,34 @@ func TestRetrieve_ClearanceFilterDropsRestrictedItems(t *testing.T) {
 	}
 }
 
-// TestRetrieve_IncludeSiblingsFalse_DropsSiblingTierEndToEnd is the
-// mcpserver-level companion to
-// graph.TestBuildContext_WithSiblingsFalse_SkipsBothSiblingTiers: with a
-// real APC-generated sibling_link (via apc.Scanner.Scan, mirroring
-// TestIntegration_RetrieveOneRoundTrip's setup) on a shared risk:/organ:
-// antigen pair, retrieve(include_siblings=false) must not surface the
-// sibling observation at all (neither Items nor TruncatedRefs), while the
-// default (include_siblings omitted, i.e. true) call does — the
-// docs/requirements.md R8.2 dag_nosib vs. dag_full distinction bench/ needs.
-func TestRetrieve_IncludeSiblingsFalse_DropsSiblingTierEndToEnd(t *testing.T) {
+// TestRetrieve_IncludeSiblingsFalse_LeavesContextBundleUnaffected checks
+// U5a's context-bundle-shape change (specs/U5_api_retrieve.md): since
+// package apc and graph's sibling tiers were removed entirely,
+// include_siblings=false no longer changes Items/TruncatedRefs at all (there
+// is no sibling tier left to skip) — it only continues to gate
+// retrieveOut.ClinicalLinks (see TestRetrieve_SurfacesClinicalLinks for that
+// coverage). This test pins the "unaffected" half: with include_siblings
+// omitted vs. explicitly false, the anchor/ancestor/descendant context
+// bundle is identical.
+func TestRetrieve_IncludeSiblingsFalse_LeavesContextBundleUnaffected(t *testing.T) {
 	e := openT(t)
 
 	patient := seedPatient(t, e, "Sibling Toggle Patient")
 	encounter := seedChildBead(t, e, patient, "fhir_encounter", nil, map[string]any{
 		"reason": "acute kidney injury follow-up",
 	})
-	for i := 0; i < 10; i++ {
-		seedChildBead(t, e, encounter, "fhir_observation",
-			[]string{"loinc:noise-" + string(rune('a'+i))},
-			map[string]any{"noise": i})
-	}
 	medication := seedChildBead(t, e, encounter, "fhir_medicationrequest",
 		[]string{"risk:nephrotoxic", "organ:renal"},
 		map[string]any{"drug": "meropenem 1g IV every 8 hours"})
-	observation := seedChildBead(t, e, encounter, "fhir_observation",
+	observation := seedChildBead(t, e, medication, "fhir_observation",
 		[]string{"risk:nephrotoxic", "organ:renal"},
 		map[string]any{"test": "eGFR renal function panel"})
 
-	scanner := apc.New(e, e.Index(), apc.Default())
-	for i := 0; i < 10; i++ {
-		res, err := scanner.Scan()
-		if err != nil {
-			t.Fatalf("Scan: %v", err)
-		}
-		if res.BeadsScanned == 0 {
-			break
-		}
-	}
-	if !siblingLinkExists(t, e) {
-		t.Fatalf("APC scan produced no sibling_link Bead for the shared risk:/organ: antigens; test setup assumption violated")
-	}
-
 	s := newServerT(t, e, SystemRole)
+	medicationView := bead.FormatID(medication.ID)
+	encounterView := bead.FormatID(encounter.ID)
 	observationView := bead.FormatID(observation.ID)
 
-	// Default (include_siblings omitted -> true): the sibling observation is
-	// present, reached via the sibling_link's bead_edges row.
 	_, defaultOut, err := s.retrieve(context.Background(), nil, retrieveIn{
 		Query:       "meropenem",
 		PatientID:   patient.ID,
@@ -274,12 +254,9 @@ func TestRetrieve_IncludeSiblingsFalse_DropsSiblingTierEndToEnd(t *testing.T) {
 		t.Fatalf("retrieve (default): %v", err)
 	}
 	if !containsItemID(defaultOut.Items, observationView) {
-		t.Fatalf("retrieve default (include_siblings omitted): sibling observation %s missing from Items=%+v", observationView, defaultOut.Items)
+		t.Fatalf("retrieve default: descendant observation %s missing from Items=%+v", observationView, defaultOut.Items)
 	}
 
-	// include_siblings=false: the same sibling observation must be dropped
-	// entirely (not demoted to TruncatedRefs either — the sibling tiers are
-	// skipped before any candidate is claimed, per graph.WithSiblings).
 	includeFalse := false
 	_, noSibOut, err := s.retrieve(context.Background(), nil, retrieveIn{
 		Query:           "meropenem",
@@ -291,54 +268,22 @@ func TestRetrieve_IncludeSiblingsFalse_DropsSiblingTierEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("retrieve (include_siblings=false): %v", err)
 	}
-	if containsItemID(noSibOut.Items, observationView) {
-		t.Errorf("retrieve(include_siblings=false): sibling observation %s present in Items, want excluded", observationView)
-	}
-	if containsRefID(noSibOut.TruncatedRefs, observationView) {
-		t.Errorf("retrieve(include_siblings=false): sibling observation %s present in TruncatedRefs, want excluded entirely", observationView)
-	}
 
-	// The anchor (medicationrequest) and its ancestor (encounter) must be
-	// unaffected by include_siblings=false — only the sibling tiers are
-	// skipped.
-	medicationView := bead.FormatID(medication.ID)
-	encounterView := bead.FormatID(encounter.ID)
-	if !containsItemID(noSibOut.Items, medicationView) {
-		t.Errorf("retrieve(include_siblings=false): anchor medicationrequest %s missing from Items", medicationView)
+	// Every non-sibling-tier item (anchor, ancestor, descendant) must be
+	// unaffected by include_siblings=false post-U5a.
+	for _, id := range []string{medicationView, encounterView, observationView} {
+		if !containsItemID(noSibOut.Items, id) {
+			t.Errorf("retrieve(include_siblings=false): Bead %s missing from Items, want unaffected by this flag post-U5a", id)
+		}
 	}
-	if !containsItemID(noSibOut.Items, encounterView) {
-		t.Errorf("retrieve(include_siblings=false): ancestor encounter %s missing from Items", encounterView)
-	}
-
-	// include_siblings=true explicitly must behave identically to omitting
-	// the field (both resolve to true per retrieveIncludeSiblings' default).
-	includeTrue := true
-	_, explicitTrueOut, err := s.retrieve(context.Background(), nil, retrieveIn{
-		Query:           "meropenem",
-		PatientID:       patient.ID,
-		TokenBudget:     4000,
-		ChainDepth:      5,
-		IncludeSiblings: &includeTrue,
-	})
-	if err != nil {
-		t.Fatalf("retrieve (include_siblings=true): %v", err)
-	}
-	if !containsItemID(explicitTrueOut.Items, observationView) {
-		t.Errorf("retrieve(include_siblings=true): sibling observation %s missing from Items, want present (same as default)", observationView)
+	if len(noSibOut.Items) != len(defaultOut.Items) {
+		t.Errorf("retrieve(include_siblings=false) Items length = %d, want == default's %d (flag no longer shapes the context bundle)",
+			len(noSibOut.Items), len(defaultOut.Items))
 	}
 }
 
 func containsItemID(items []provenanceView, id string) bool {
 	for _, it := range items {
-		if it.ID == id {
-			return true
-		}
-	}
-	return false
-}
-
-func containsRefID(refs []contextItemView, id string) bool {
-	for _, it := range refs {
 		if it.ID == id {
 			return true
 		}

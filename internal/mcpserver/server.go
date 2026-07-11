@@ -7,7 +7,6 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/medbeads/medbeads/internal/engine"
-	"github.com/medbeads/medbeads/internal/engine/apc"
 	"github.com/medbeads/medbeads/internal/engine/clearance"
 	"github.com/medbeads/medbeads/internal/engine/pod"
 )
@@ -61,13 +60,12 @@ type QueryEmbedder interface {
 	Embed(ctx context.Context, texts []string) ([][]float32, error)
 }
 
-// Server bundles one MedBeads Engine (plus the graph/apc/clearance
+// Server bundles one MedBeads Engine (plus the graph/clearance
 // collaborators built on top of it) behind the official MCP SDK, per
 // specs/DESIGN_v3.md §2/§8 and docs/requirements.md R6.
 type Server struct {
 	eng      *engine.Engine
 	store    *pod.Store
-	scan     *apc.Scanner
 	role     string
 	mcp      *mcp.Server
 	embedder QueryEmbedder // nil if this process has no -embedder configured
@@ -84,13 +82,6 @@ type Config struct {
 	// SystemRole/DefaultRole doc comments above). Empty defaults to
 	// DefaultRole.
 	Role string
-
-	// APCConfig configures the apc_trigger tool's Scanner (system role only —
-	// see registerWriteTools). The zero value (apc.Config{}) would disable
-	// every match (MinScoreThreshold 0 still works, but every
-	// runaway-prevention cap would also be 0); callers should pass
-	// apc.Default() unless they have a specific reason not to.
-	APCConfig apc.Config
 
 	// Embedder, if non-nil, enables retrieve(semantic=true) and rag_search
 	// (R4.2/R6.3): query strings are embedded via this client before calling
@@ -110,8 +101,7 @@ func defaultImplementation() *mcp.Implementation {
 	return &mcp.Implementation{Name: "medbeadsd", Version: "v3.0.0-m1"}
 }
 
-// New builds a Server over cfg.Engine: an apc.Scanner wired to the same
-// Engine (for apc_status/apc_trigger), and every MCP tool registered per
+// New builds a Server over cfg.Engine: every MCP tool registered per
 // cfg.Role (see registerReadTools/registerWriteTools). The returned Server's
 // MCPServer() is ready to Run over any mcp.Transport (stdio or Streamable
 // HTTP — see cmd/medbeadsd's serve subcommand).
@@ -131,7 +121,6 @@ func New(cfg Config) (*Server, error) {
 	s := &Server{
 		eng:      cfg.Engine,
 		store:    pod.NewStore(cfg.Engine.DataDir()),
-		scan:     apc.New(cfg.Engine, cfg.Engine.Index(), cfg.APCConfig),
 		role:     role,
 		mcp:      mcp.NewServer(impl, &mcp.ServerOptions{Instructions: instructions(cfg.Embedder != nil)}),
 		embedder: cfg.Embedder,

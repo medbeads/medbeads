@@ -14,15 +14,13 @@ import (
 )
 
 // registerReadTools adds every read-only tool (list_patients, search_beads,
-// get_bead, get_context, get_timeline, get_siblings, get_sibling_links,
-// get_links, search_antigens, verify_integrity, apc_status, retrieve) to
-// s.mcp. This is
-// called unconditionally by New, regardless of role — clearance filtering
-// (not tool registration) is what limits what a non-system role actually
-// sees, per the task's "system はバイパス" / viewer-is-filtered design.
-// apc_trigger is deliberately NOT here: it durably ingests sibling_link
-// Beads (a write), so it is registered by registerWriteTools instead — see
-// that function's doc comment.
+// get_bead, get_context, get_timeline, get_links, search_antigens,
+// verify_integrity, retrieve) to s.mcp. This is called unconditionally by
+// New, regardless of role — clearance filtering (not tool registration) is
+// what limits what a non-system role actually sees, per the task's "system
+// はバイパス" / viewer-is-filtered design. create_bead is deliberately NOT
+// here: it durably ingests Beads (a write), so it is registered by
+// registerWriteTools instead — see that function's doc comment.
 func (s *Server) registerReadTools() {
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name:        "list_patients",
@@ -52,17 +50,6 @@ func (s *Server) registerReadTools() {
 	}, s.getTimeline)
 
 	mcp.AddTool(s.mcp, &mcp.Tool{
-		Name: "get_siblings",
-		Description: "A Bead's horizontal siblings: implicit (shares a parent) plus explicit " +
-			"(edge_type='sibling', from a sibling_link Bead).",
-	}, s.getSiblings)
-
-	mcp.AddTool(s.mcp, &mcp.Tool{
-		Name:        "get_sibling_links",
-		Description: "The sibling_pairs rows (matched_antigen + originating sibling_link Bead ID) for one Bead.",
-	}, s.getSiblingLinks)
-
-	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name:        "search_antigens",
 		Description: "Inverted-index lookup: every Bead tagged with the given antigen (bead_tags).",
 	}, s.searchAntigens)
@@ -70,8 +57,8 @@ func (s *Server) registerReadTools() {
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name: "get_links",
 		Description: "The clinical_links rows (relation/severity/evidence_basis/matched_tag/rule_version " +
-			"plus the other Bead's ID) for one Bead — the link-projector successor to get_sibling_links, " +
-			"reading the U3b-projected clinical_links table instead of sibling_pairs. Clearance is " +
+			"plus the other Bead's ID) for one Bead — the U3b-projected clinical_links table, the sole " +
+			"link mechanism since U5a removed the old sibling_link/sibling_pairs apparatus. Clearance is " +
 			"inherited: a link whose other endpoint is inaccessible to this session's role is dropped " +
 			"entirely, not masked.",
 	}, s.getLinks)
@@ -80,11 +67,6 @@ func (s *Server) registerReadTools() {
 		Name:        "verify_integrity",
 		Description: "Run pod.VerifyAll over every Pod file in the data directory: CRC + self-hash verification.",
 	}, s.verifyIntegrity)
-
-	mcp.AddTool(s.mcp, &mcp.Tool{
-		Name:        "apc_status",
-		Description: "APC scan watermark status: how many Beads are scanned vs total, per bead_apc_scan.",
-	}, s.apcStatus)
 
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name: "retrieve",
@@ -330,149 +312,6 @@ func (s *Server) getTimeline(_ context.Context, _ *mcp.CallToolRequest, in getTi
 	return nil, out, nil
 }
 
-// --- get_siblings -----------------------------------------------------
-
-type getSiblingsIn struct {
-	ID string `json:"id" jsonschema:"Bead ID (sha256: prefix optional)"`
-}
-
-type getSiblingsOut struct {
-	Siblings []beadView `json:"siblings"`
-}
-
-func (s *Server) getSiblings(_ context.Context, _ *mcp.CallToolRequest, in getSiblingsIn) (*mcp.CallToolResult, getSiblingsOut, error) {
-	id, err := bead.ParseID(in.ID)
-	if err != nil {
-		res, jerr := toolError("get_siblings: parse id", err)
-		return res, getSiblingsOut{}, jerr
-	}
-
-	bd, err := s.loadBundleForBead(id)
-	if err != nil {
-		res, jerr := toolError("get_siblings", err)
-		return res, getSiblingsOut{}, jerr
-	}
-
-	if err := loadExplicitSiblingEdges(s, bd); err != nil {
-		res, jerr := toolError("get_siblings: load sibling edges", err)
-		return res, getSiblingsOut{}, jerr
-	}
-
-	siblings := bd.Siblings(id)
-	filtered, err := clearance.FilterByAccess(s.eng.Index(), siblings, s.viewerRoles())
-	if err != nil {
-		res, jerr := toolError("get_siblings: filter", err)
-		return res, getSiblingsOut{}, jerr
-	}
-
-	out := getSiblingsOut{Siblings: make([]beadView, len(filtered))}
-	for i, b := range filtered {
-		out.Siblings[i] = newBeadView(b)
-	}
-	return nil, out, nil
-}
-
-// --- get_sibling_links --------------------------------------------------
-
-type getSiblingLinksIn struct {
-	ID string `json:"id" jsonschema:"Bead ID (sha256: prefix optional)"`
-}
-
-type siblingLinkView struct {
-	OtherBeadID    string `json:"other_bead_id"`
-	MatchedAntigen string `json:"matched_antigen"`
-	SiblingLinkID  string `json:"sibling_link_id"`
-	CreatedAt      string `json:"created_at"`
-}
-
-type getSiblingLinksOut struct {
-	Links []siblingLinkView `json:"links"`
-}
-
-// getSiblingLinks returns id's sibling_pairs rows (the matched antigen and
-// originating sibling_link Bead for each), one row per (other_bead,
-// matched_antigen) pair. Each row names another Bead (OtherBeadID) whose
-// mere existence-as-a-sibling — and, worse, whose MatchedAntigen (often a
-// risk:/organ: tag that itself strongly suggests a diagnosis) — is clinical
-// information about that other Bead, not just about id. A viewer who may not
-// access the other Bead therefore must not learn either fact: this method
-// resolves every candidate other Bead via engine.GetBead, runs the batch
-// through clearance.FilterByAccess exactly like every other read tool
-// (see accessible()'s doc comment on this package's uniform "drop, don't
-// mask" policy), and drops the whole row — not just the OtherBeadID field —
-// for any pair whose other Bead is not accessible to this session's role.
-func (s *Server) getSiblingLinks(_ context.Context, _ *mcp.CallToolRequest, in getSiblingLinksIn) (*mcp.CallToolResult, getSiblingLinksOut, error) {
-	id, err := bead.ParseID(in.ID)
-	if err != nil {
-		res, jerr := toolError("get_sibling_links: parse id", err)
-		return res, getSiblingLinksOut{}, jerr
-	}
-
-	rows, err := s.eng.Index().SQLDB().Query(`
-		SELECT bead_a, bead_b, matched_antigen, sibling_link_id, created_at
-		FROM sibling_pairs
-		WHERE bead_a = ? OR bead_b = ?
-		ORDER BY created_at, matched_antigen`, id, id)
-	if err != nil {
-		res, jerr := toolError("get_sibling_links", err)
-		return res, getSiblingLinksOut{}, jerr
-	}
-	defer rows.Close()
-
-	type pairRow struct {
-		other, antigen, linkID, createdAt string
-	}
-	var pairs []pairRow
-	for rows.Next() {
-		var a, b, antigen, linkID, createdAt string
-		if err := rows.Scan(&a, &b, &antigen, &linkID, &createdAt); err != nil {
-			res, jerr := toolError("get_sibling_links: scan", err)
-			return res, getSiblingLinksOut{}, jerr
-		}
-		other := a
-		if a == id {
-			other = b
-		}
-		pairs = append(pairs, pairRow{other: other, antigen: antigen, linkID: linkID, createdAt: createdAt})
-	}
-	if err := rows.Err(); err != nil {
-		res, jerr := toolError("get_sibling_links", err)
-		return res, getSiblingLinksOut{}, jerr
-	}
-	if len(pairs) == 0 {
-		return nil, getSiblingLinksOut{}, nil
-	}
-
-	otherBeads := make([]bead.Bead, len(pairs))
-	for i, p := range pairs {
-		b, err := s.eng.GetBead(p.other)
-		if err != nil {
-			res, jerr := toolError("get_sibling_links: get_bead "+p.other, err)
-			return res, getSiblingLinksOut{}, jerr
-		}
-		otherBeads[i] = b
-	}
-	filtered, err := clearance.FilterByAccess(s.eng.Index(), otherBeads, s.viewerRoles())
-	if err != nil {
-		res, jerr := toolError("get_sibling_links: filter", err)
-		return res, getSiblingLinksOut{}, jerr
-	}
-
-	var out getSiblingLinksOut
-	for i, p := range pairs {
-		if !accessible(filtered[i]) {
-			continue
-		}
-		out.Links = append(out.Links, siblingLinkView{
-			OtherBeadID:    bead.FormatID(p.other),
-			MatchedAntigen: p.antigen,
-			SiblingLinkID:  bead.FormatID(p.linkID),
-			CreatedAt:      p.createdAt,
-		})
-	}
-	return nil, out, nil
-}
-
 // --- get_links (clinical_links, U3c) --------------------------------------
 
 type getLinksIn struct {
@@ -485,8 +324,7 @@ type getLinksIn struct {
 // score_breakdown/patient_root field is surfaced here — those are internal
 // projector bookkeeping (score_breakdown) or already implied by the caller's
 // own patient context (patient_root), not something a link consumer needs to
-// re-derive its trust in the relation from (mirrors siblingLinkView's own
-// "just enough to act on" shape).
+// re-derive its trust in the relation from ("just enough to act on" shape).
 type clinicalLinkView struct {
 	LinkID          string   `json:"link_id"`
 	OtherBeadID     string   `json:"other_bead_id"`
@@ -504,12 +342,12 @@ type getLinksOut struct {
 	Links []clinicalLinkView `json:"links"`
 }
 
-// getLinks is U3c's new read path for clinical_links (specs/
-// U3_link_projector.md's U3c section): the link-projector successor to
-// get_sibling_links (which still reads the older sibling_pairs table — see
-// that function's own doc comment; U3c adds this tool alongside it rather
-// than replacing it, since the get_sibling_links/get_siblings rename/removal
-// is U5 scope, not U3c's).
+// getLinks is U3c's read path for clinical_links (specs/U3_link_projector.md
+// 's U3c section): the link-projector successor to the old get_sibling_links
+// tool, which read the now-inert sibling_pairs table and was removed in U5a
+// (specs/U5_api_retrieve.md) once package apc (the scanner that produced
+// sibling_link Beads) was deleted — clinical_links is now the sole link
+// mechanism.
 //
 // # Clearance inheritance
 //
@@ -517,9 +355,9 @@ type getLinksOut struct {
 // get_sibling_links の drop 原則を一般化"): a clinical_links row names another
 // Bead (OtherBeadID) whose mere existence-as-a-link — and its MatchedTag,
 // which is itself often clinically informative (e.g. a risk:/atc: tag) —
-// is information about that other Bead, not just about id. This mirrors
-// get_sibling_links' identical reasoning verbatim, so it resolves every
-// candidate other Bead via engine.GetBead, runs the batch through
+// is information about that other Bead, not just about id. This mirrors the
+// old get_sibling_links tool's identical reasoning verbatim, so it resolves
+// every candidate other Bead via engine.GetBead, runs the batch through
 // clearance.FilterByAccess exactly like every other read tool, and drops the
 // whole row (not just the OtherBeadID field) for any link whose other Bead
 // is not accessible to this session's role.
@@ -706,38 +544,11 @@ func (s *Server) verifyIntegrity(_ context.Context, _ *mcp.CallToolRequest, _ ve
 	return nil, out, nil
 }
 
-// --- apc_status ---------------------------------------------------------
-
-type apcStatusIn struct{}
-
-type apcStatusOut struct {
-	TotalBeads   int `json:"total_beads"`
-	ScannedBeads int `json:"scanned_beads"`
-	Unscanned    int `json:"unscanned_beads"`
-}
-
-func (s *Server) apcStatus(_ context.Context, _ *mcp.CallToolRequest, _ apcStatusIn) (*mcp.CallToolResult, apcStatusOut, error) {
-	db := s.eng.Index().SQLDB()
-
-	var total int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM beads`).Scan(&total); err != nil {
-		res, jerr := toolError("apc_status: count beads", err)
-		return res, apcStatusOut{}, jerr
-	}
-	var scanned int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM bead_apc_scan`).Scan(&scanned); err != nil {
-		res, jerr := toolError("apc_status: count bead_apc_scan", err)
-		return res, apcStatusOut{}, jerr
-	}
-
-	return nil, apcStatusOut{TotalBeads: total, ScannedBeads: scanned, Unscanned: total - scanned}, nil
-}
-
 // --- shared helpers ---------------------------------------------------
 
 // loadBundleForBead resolves id's patient_root via the index and loads its
-// graph.Bundle (graph.LoadBundle), for tools (get_context, get_siblings)
-// that need ancestor/sibling BFS over a single patient's sub-graph.
+// graph.Bundle (graph.LoadBundle), for tools (get_context) that need
+// ancestor/descendant BFS over a single patient's sub-graph.
 func (s *Server) loadBundleForBead(id string) (*graph.Bundle, error) {
 	ref, err := s.eng.Index().GetBead(id)
 	if err != nil {
@@ -751,32 +562,4 @@ func (s *Server) loadBundleForBead(id string) (*graph.Bundle, error) {
 		return nil, fmt.Errorf("load bundle for patient %s: %w", ref.PatientRoot, err)
 	}
 	return bd, nil
-}
-
-// loadExplicitSiblingEdges reads bd's patient's edge_type='sibling'
-// bead_edges rows from index.db and injects them into bd via
-// graph.Bundle.AddSiblingEdge, so bd.Siblings(id) reflects sibling_link
-// Beads the APC scanner has already created — graph.LoadBundle itself only
-// scans the Pod (parent edges), per its own doc comment ("LoadBundle-side
-// wiring is a later unit"); this is that wiring, scoped to this package's
-// read tools rather than graph itself (graph deliberately does not import
-// index — see graph/doc.go).
-func loadExplicitSiblingEdges(s *Server, bd *graph.Bundle) error {
-	rows, err := s.eng.Index().SQLDB().Query(
-		`SELECT child_id, parent_id FROM bead_edges WHERE edge_type = 'sibling'
-		 AND child_id IN (SELECT id FROM beads WHERE patient_root = ?)`,
-		bd.PatientRoot)
-	if err != nil {
-		return fmt.Errorf("query sibling edges: %w", err)
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var a, b string
-		if err := rows.Scan(&a, &b); err != nil {
-			return fmt.Errorf("scan sibling edge: %w", err)
-		}
-		bd.AddSiblingEdge(a, b)
-	}
-	return rows.Err()
 }

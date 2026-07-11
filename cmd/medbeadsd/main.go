@@ -27,7 +27,6 @@ Commands:
             [-embedder <url>] [-embed-model <name>])
   verify    Verify Pod/index integrity (flags: -data <dir>)
   reindex   Rebuild index.db from Pod files (source of truth)
-  apc       Run the APC batch scanner (flags: -data <dir> [-patient <root>])
   embed     Backfill L2 semantic embeddings by draining bead_embed_queue synchronously
             (flags: -data <dir> -embedder <url> [-embed-model <name>] [-batch <n>])
   reproject Rebuild clinical_links from bead_tags + the cooccurrence link_rule
@@ -56,8 +55,6 @@ func run(args []string, stdout, stderr *os.File) int {
 		return runVerify(args[1:], stdout, stderr)
 	case "reindex":
 		return runReindex(args[1:], stdout, stderr)
-	case "apc":
-		return runApc(args[1:], stdout, stderr)
 	case "embed":
 		return runEmbed(args[1:], stdout, stderr)
 	case "reproject":

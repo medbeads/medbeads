@@ -15,7 +15,6 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/medbeads/medbeads/internal/engine"
-	"github.com/medbeads/medbeads/internal/engine/apc"
 	"github.com/medbeads/medbeads/internal/engine/embedder"
 	"github.com/medbeads/medbeads/internal/mcpserver"
 	"github.com/medbeads/medbeads/internal/rest"
@@ -103,9 +102,8 @@ func runServe(args []string, stdout, stderr *os.File) int {
 	}
 
 	mcpCfg := mcpserver.Config{
-		Engine:    eng,
-		Role:      *role,
-		APCConfig: apc.Default(),
+		Engine: eng,
+		Role:   *role,
 	}
 	if queryClient != nil {
 		mcpCfg.Embedder = queryClient

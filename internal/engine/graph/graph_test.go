@@ -273,67 +273,13 @@ func TestDescendants_RespectsDepth(t *testing.T) {
 	}
 }
 
-// TestSiblings_Implicit checks the same-parent-children semantics
-// (specs/MEDBEADS_SIBLING_SPEC.md §2.6): siblings sharing a parent with id,
-// excluding id itself.
-func TestSiblings_Implicit(t *testing.T) {
-	e := openT(t)
-
-	a := seedPatient(t, e, "A")
-	b1 := seedChildBead(t, e, a, "fhir_encounter", map[string]any{"n": "B1"})
-	b2 := seedChildBead(t, e, a, "fhir_encounter", map[string]any{"n": "B2"})
-	b3 := seedChildBead(t, e, a, "fhir_encounter", map[string]any{"n": "B3"})
-
-	bd, err := graph.LoadBundle(storeFor(e), a.ID)
-	if err != nil {
-		t.Fatalf("LoadBundle: %v", err)
-	}
-
-	got := collectIDs(bd.Siblings(b1.ID))
-	if got[b1.ID] {
-		t.Errorf("Siblings(B1) should not include itself, got %v", got)
-	}
-	if !got[b2.ID] || !got[b3.ID] {
-		t.Errorf("Siblings(B1) missing implicit siblings, got %v", got)
-	}
-}
-
-// TestSiblings_Explicit checks that a manually-injected sibling edge
-// (AddSiblingEdge — since the APC daemon that would write edge_type='sibling'
-// bead_edges rows is not implemented yet, per docs/requirements.md R5) shows
-// up in Siblings even when the two Beads share no parent.
-func TestSiblings_Explicit(t *testing.T) {
-	e := openT(t)
-
-	a := seedPatient(t, e, "A")
-	rx := seedChildBead(t, e, a, "fhir_medicationrequest", map[string]any{"drug": "warfarin"})
-	lab := seedChildBead(t, e, a, "fhir_observation", map[string]any{"test": "eGFR"})
-	// rx and lab already share parent a, so they'd be implicit siblings too;
-	// use a deeper pair to isolate the explicit-edge path.
-	rx2 := seedChildBead(t, e, rx, "fhir_medicationrequest", map[string]any{"drug": "nsaid"})
-
-	bd, err := graph.LoadBundle(storeFor(e), a.ID)
-	if err != nil {
-		t.Fatalf("LoadBundle: %v", err)
-	}
-
-	got := collectIDs(bd.Siblings(rx2.ID))
-	if got[lab.ID] {
-		t.Fatal("test precondition failed: rx2 and lab should not already be siblings")
-	}
-
-	bd.AddSiblingEdge(rx2.ID, lab.ID)
-
-	got = collectIDs(bd.Siblings(rx2.ID))
-	if !got[lab.ID] {
-		t.Errorf("Siblings(rx2) missing explicit sibling %s after AddSiblingEdge, got %v", lab.ID, got)
-	}
-	// Bidirectional per specs/MEDBEADS_SIBLING_SPEC.md §5.2.
-	gotLab := collectIDs(bd.Siblings(lab.ID))
-	if !gotLab[rx2.ID] {
-		t.Errorf("Siblings(lab) missing explicit sibling %s (bidirectional), got %v", rx2.ID, gotLab)
-	}
-}
+// Siblings/AddSiblingEdge (v2.2.0's dynamic GetSiblings semantics,
+// specs/MEDBEADS_SIBLING_SPEC.md §2.6/§5) were removed from graph.Bundle in
+// U5a (specs/U5_api_retrieve.md) along with package apc, the scanner that
+// produced the sibling_link Beads the explicit-sibling half depended on —
+// clinical_links (package projector, U3) is now the sole link mechanism,
+// and it is surfaced as a sidecar (mcpserver.retrieve's ClinicalLinks field),
+// not as a graph.Bundle traversal tier.
 
 // GetPatients (v2.2.0's core/store/graph_test.go TestGetPatients) is
 // migrated as internal/engine/index/read_test.go's

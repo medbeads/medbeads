@@ -33,7 +33,6 @@ type Provenance string
 const (
 	ProvenanceAnchor     Provenance = "anchor"
 	ProvenanceAncestor   Provenance = "ancestor"
-	ProvenanceSibling    Provenance = "sibling"
 	ProvenanceDescendant Provenance = "descendant"
 )
 
@@ -81,66 +80,30 @@ type candidate struct {
 }
 
 // tierGranularity is the granularity BuildContext attempts first for each
-// priority tier, per specs/DESIGN_v3.md §8's "anchor L0 → 祖先 L1 →
-// explicit siblings L1 → implicit(エッジ)siblings L2 → 子孫 L2" ordering
-// (the sibling_link-description tier from DESIGN §8 is omitted: the APC
-// daemon that would produce sibling_link Beads is not implemented yet —
-// docs/requirements.md R5 — so there is no real data for it; explicit
-// siblings here means Beads linked via Bundle.AddSiblingEdge /
-// edge_type='sibling', not a description tier).
+// priority tier: anchor L0 -> ancestor L1 -> descendant L2 (specs/
+// DESIGN_v3.md §8's ordering, minus the sibling_link-description and
+// explicit/implicit sibling tiers, which U5a removed entirely along with
+// package apc — specs/U5_api_retrieve.md's deprecation list — since
+// clinical_links (U3) is now the sole link mechanism and carries no
+// context-bundle-expansion role, only a sidecar relation/severity/evidence
+// field surfaced separately by mcpserver.retrieve's ClinicalLinks).
 var tierGranularity = []Granularity{
 	GranularityL0, // tier 0: anchors
 	GranularityL1, // tier 1: ancestors
-	GranularityL1, // tier 2: explicit siblings
-	GranularityL2, // tier 3: implicit siblings
-	GranularityL2, // tier 4: descendants
+	GranularityL2, // tier 2: descendants
 }
 
 const (
 	tierAnchor = iota
 	tierAncestor
-	tierExplicitSibling
-	tierImplicitSibling
 	tierDescendant
 )
 
-// ContextOption customizes a single BuildContext call. Options are additive
-// (new callers opt in; existing positional callers that pass none keep
-// today's behavior unchanged) — see WithSiblings.
-type ContextOption func(*contextOptions)
-
-// contextOptions holds BuildContext's optional knobs, defaulted so the zero
-// value matches BuildContext's pre-existing (siblings-included) behavior.
-type contextOptions struct {
-	includeSiblings bool
-}
-
-func newContextOptions(opts []ContextOption) contextOptions {
-	o := contextOptions{includeSiblings: true}
-	for _, opt := range opts {
-		opt(&o)
-	}
-	return o
-}
-
-// WithSiblings controls whether BuildContext's explicit-sibling and
-// implicit-sibling tiers (tierExplicitSibling/tierImplicitSibling) are
-// populated at all. Defaults to true (existing behavior). Pass
-// WithSiblings(false) to skip both sibling tiers entirely — e.g. bench/'s
-// dag_nosib retrieval arm (docs/requirements.md R8.2), which needs a DAG
-// bundle that walks ancestors/descendants but never sibling_link edges, to
-// isolate sibling_link's contribution to retrieval quality from the rest of
-// DAG traversal.
-func WithSiblings(include bool) ContextOption {
-	return func(o *contextOptions) { o.includeSiblings = include }
-}
-
 // BuildContext assembles a token-budgeted ContextBundle for anchors within
 // bd, per specs/DESIGN_v3.md §8: starting from anchors (full content, L0),
-// then ancestors (L1 summary), explicit siblings (L1 summary), implicit
-// siblings (L2 reference), and descendants (L2 reference) — each tier's
-// Beads greedily packed in tier order until budget (a token count, see
-// EstimateTokens) is exhausted. A Bead reachable through more than one
+// then ancestors (L1 summary), then descendants (L2 reference) — each
+// tier's Beads greedily packed in tier order until budget (a token count,
+// see EstimateTokens) is exhausted. A Bead reachable through more than one
 // tier/anchor is only ever included once, at the highest-priority tier that
 // reaches it (deduplication by first-seen tier).
 //
@@ -153,12 +116,7 @@ func WithSiblings(include bool) ContextOption {
 // bd.Ancestors/bd.Descendants from each anchor before ranking candidates;
 // they are independent of the token budget itself (a large depth just means
 // more low-priority candidates competing for whatever budget remains).
-//
-// opts customizes this call; see ContextOption/WithSiblings. Omitting opts
-// keeps BuildContext's original (siblings-included) behavior, so every
-// pre-existing call site is unaffected by this parameter's addition.
-func BuildContext(bd *Bundle, anchors []string, budget int, ancestorDepth, descendantDepth int, opts ...ContextOption) ContextBundle {
-	o := newContextOptions(opts)
+func BuildContext(bd *Bundle, anchors []string, budget int, ancestorDepth, descendantDepth int) ContextBundle {
 	out := ContextBundle{
 		AnchorIDs:    append([]string(nil), anchors...),
 		BudgetTokens: budget,
@@ -210,14 +168,6 @@ func BuildContext(bd *Bundle, anchors []string, budget int, ancestorDepth, desce
 			}
 			resolve(a.ID, tierAncestor, ProvenanceAncestor)
 		}
-		if o.includeSiblings {
-			for _, sib := range bd.siblings[id] {
-				resolve(sib, tierExplicitSibling, ProvenanceSibling)
-			}
-			for _, sib := range implicitSiblingsOnly(bd, id) {
-				resolve(sib, tierImplicitSibling, ProvenanceSibling)
-			}
-		}
 		for _, d := range bd.Descendants(id, descendantDepth) {
 			if d.ID == id {
 				continue // Descendants includes the anchor itself at depth 0
@@ -228,7 +178,7 @@ func BuildContext(bd *Bundle, anchors []string, budget int, ancestorDepth, desce
 
 	// Pass 2: materialize tiers[] once, from each Bead's single resolved
 	// candidate — every Bead ID appears in exactly one tiers[] slice.
-	tiers := make([][]candidate, 5)
+	tiers := make([][]candidate, len(tierGranularity))
 	for _, c := range claims {
 		tiers[c.tier] = append(tiers[c.tier], c)
 	}
@@ -269,24 +219,6 @@ func BuildContext(bd *Bundle, anchors []string, budget int, ancestorDepth, desce
 	}
 
 	out.UsedTokens = budget - remaining
-	return out
-}
-
-// implicitSiblingsOnly returns id's implicit siblings (same-parent
-// children) without the explicit-sibling tier Bundle.Siblings also folds
-// in, so BuildContext can rank the two tiers separately per DESIGN §8.
-func implicitSiblingsOnly(bd *Bundle, id string) []string {
-	seen := map[string]bool{id: true}
-	var out []string
-	for _, parentID := range bd.parents[id] {
-		for _, childID := range bd.children[parentID] {
-			if seen[childID] {
-				continue
-			}
-			seen[childID] = true
-			out = append(out, childID)
-		}
-	}
 	return out
 }
 
