@@ -30,6 +30,9 @@ Commands:
   apc       Run the APC batch scanner (flags: -data <dir> [-patient <root>])
   embed     Backfill L2 semantic embeddings by draining bead_embed_queue synchronously
             (flags: -data <dir> -embedder <url> [-embed-model <name>] [-batch <n>])
+  reproject Rebuild clinical_links from bead_tags + the cooccurrence link_rule
+            Bead and flip projection_manifest's active run (flags: -data <dir>
+            [-code-version <v>]; does not re-scan Pods, see reindex for that)
 `
 
 func main() {
@@ -54,6 +57,8 @@ func run(args []string, stdout, stderr *os.File) int {
 		return runApc(args[1:], stdout, stderr)
 	case "embed":
 		return runEmbed(args[1:], stdout, stderr)
+	case "reproject":
+		return runReproject(args[1:], stdout, stderr)
 	case "serve":
 		return runServe(args[1:], stdout, stderr)
 	case "-h", "-help", "--help", "help":
