@@ -173,3 +173,22 @@
 - **failure catalog #13/#14 承認**: 複数フィルタ経路の取りこぼし / drop→ゼロ値置換の partial theater。
 - **既知 follow-up(U6 前後で対応)**: bench/ の Python(mcp_client.py 等)が旧語彙 antigens/search_antigens を
   参照 → Go/MCP 側は完全改名済みだが Python consumer の追随が必要。
+
+## 2026-07-11: U6 clinical_note 取り込み 設計 — Codex peer 統合(条件付き GO → 確定)
+
+- **peer**: data-reviewer[Claude] + codex に同一中立問題文を並列投入(2つの LLM 検証)。両者とも**条件付き GO**。
+  統合仕様 = specs/U6_clinical_note.md。
+- **合意点(採用)**: base64→raw_text デコード・生 base64 は content 不投入 / clinical_note 専用 flattener
+  (DefaultFlattener 内で分岐、raw_text 順序保存・summary は先頭)/ 本文 NLP tags は NO-GO(決定論違反)・
+  untagged 既定 / nested context.encounter[0] を親に(fallback は patient root、silent 禁止で count)/
+  sections[] SOAP 分割は後回し / U6a(Python+flattener+bench 小規模検証)/ U6b(実ストア再 ingest ~3.5h リード実行)分割。
+- **data-reviewer が実データで発見した2事項(codex 未指摘、実証済み)**:
+  ①**superseded 氾濫**: DocumentReference の 97%(953/983、私のサンプルでも 18/19)が status=superseded
+   (Synthea が受診ごとに累積ノート再発行)。無条件全件だと ~37K near-duplicate Bead が FTS/retrieve/judge を破壊。
+  ②type の LOINC coding を content に入れると antigen.Extract が文書種別を誤タグ化 → untagged 方針と矛盾。
+   coding[] 構造を content に残さない(文字列フィールドに留める)。
+- **実証で決着した crux(bench 軸)**: include_links は Items 不変(TestRetrieve_IncludeLinksFalse_
+  LeavesContextBundleUnaffected が保証)→ dag_full/dag_nosib を include_links で区別すると同一数字の重複計測。
+  → **2アームを単一 dag に統合**(sibling 概念は U5a で消滅)。apc_trigger 呼び出しは削除、reproject は CLI。
+- **ユーザー裁定**: **superseded ノートは取り込まず status=="current" のみ ingest**(過去ナラティブ破棄。
+  最新の累積ノートが実質全履歴を含む。過去時点の追跡[UC4]が要れば amends チェーン化を将来別ユニット)。
