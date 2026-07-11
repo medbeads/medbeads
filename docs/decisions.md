@@ -53,3 +53,15 @@
 - **決定**: arXiv 2602.01086 を本格改訂(新フォルダ 0710_manuscript_v3/、本文書き直し可)。
   投稿は U2〜U6 完了後(「実装済み・実測済み」として主張を強くする)。
   GitHub は Apache-2.0 ライセンスを付与して公開整備
+
+## 2026-07-11: Track B(GitHub 公開整備)完了
+
+- **実施**: Apache-2.0 `LICENSE`(正準全文)+ `NOTICE`(著作権 Takahito Nakajima + PHI/Synthea 声明)
+  + `CITATION.cff`(arXiv:2602.01086、cffconvert で schema 1.2.0 準拠を検証)+ README 3言語の
+  引用ブロックを arXiv 引用に差し替え・License 節追加。commit `a9877de` → push 済み。
+  GitHub は Apache-2.0 を認識(`gh api repos/.../license` → Apache-2.0)。
+- **公開衛生**: 秘密情報スキャン clean(ハードコード鍵なし、env 読み込みのみ)、
+  FHIR_sample は Synthea 合成データ(provenance マーカー確認、実 PHI なし)。data-reviewer GO。
+- **Dependabot triage メモ**: 65件(high 31 / mod 25 / low 9)は**すべて `ui/package-lock.json`
+  (React v2 ビジュアライザ)由来**。Go エンジン(本番面、go.sum)は対象外。UI は v3 で
+  deprecated 予定のため、本番リスクは低。対応は P2 以降(UI を扱う際にまとめて更新 or UI 廃止)。
