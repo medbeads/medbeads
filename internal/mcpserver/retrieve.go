@@ -253,7 +253,7 @@ type candidateInfo struct {
 // and/or a semantic (vector) query (if in.Semantic), intersected with
 // antigens/types/date_range filters, all scoped to patientRoot if non-empty.
 // If Query is empty but Antigens is set, anchors come from the antigen
-// inverted index alone (bead_antigens), matching DESIGN §8's expectation
+// inverted index alone (bead_tags), matching DESIGN §8's expectation
 // that antigens can drive anchor selection on their own. FTS and semantic
 // hits are unioned (deduplicated by ID, keeping the first-seen candidate's
 // provenance — see the merge loop below) rather than intersected: R4.2's
@@ -282,8 +282,8 @@ func (s *Server) retrieveAnchors(ctx context.Context, in retrieveIn, patientRoot
 		for _, ag := range in.Antigens {
 			rows, err := db.SQLDB().Query(`
 				SELECT b.id, COALESCE(b.patient_root, ''), b.type, b.timestamp
-				FROM bead_antigens ba JOIN beads b ON b.id = ba.bead_id
-				WHERE ba.antigen = ?`, ag)
+				FROM bead_tags ba JOIN beads b ON b.id = ba.bead_id
+				WHERE ba.tag = ?`, ag)
 			if err != nil {
 				return nil, nil, fmt.Errorf("antigen anchor search %s: %w", ag, err)
 			}
@@ -433,11 +433,12 @@ func (s *Server) retrieveSemanticCandidates(ctx context.Context, query, patientR
 }
 
 // matchingAntigens returns the subset of want that beadID actually carries
-// (bead_antigens), for retrieve's matched_antigen provenance.
+// (bead_tags — bead_antigens' successor, specs/U2_projection_schema.md /
+// U3a), for retrieve's matched_antigen provenance.
 func matchingAntigens(db interface {
-	GetAntigens(string) ([]string, error)
+	GetTags(string) ([]string, error)
 }, beadID string, want []string) ([]string, error) {
-	have, err := db.GetAntigens(beadID)
+	have, err := db.GetTags(beadID)
 	if err != nil {
 		return nil, fmt.Errorf("get antigens %s: %w", beadID, err)
 	}

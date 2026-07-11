@@ -1,7 +1,9 @@
 package engine
 
 import (
+	"database/sql"
 	"testing"
+	"time"
 
 	"github.com/medbeads/medbeads/internal/engine/bead"
 	"github.com/medbeads/medbeads/internal/engine/index"
@@ -408,5 +410,49 @@ func TestIngest_TamperedIDRejected(t *testing.T) {
 	_, err = e.Ingest(withID)
 	if err == nil {
 		t.Fatal("Ingest with a tampered ID succeeded, want error")
+	}
+}
+
+// --- recorded_at population (specs/U2_projection_schema.md crux 1 / U3a) ---
+
+// TestIngest_PopulatesRecordedAtFromWrittenAt checks that Ingest's Pod
+// meta.WrittenAt (the actual write instant — see pod.Meta's doc comment)
+// survives into beads.recorded_at via BeadLocation.WrittenAt, and specifically
+// that it survives the w.Append(normalized, pod.CodecZstd, meta) call: Ingest
+// captures meta := pod.NewMeta(patientRoot) *before* calling Append and reads
+// meta.WrittenAt afterward for loc.WrittenAt, rather than re-deriving it —
+// this pins that Append does not (and must not) mutate the caller's WrittenAt
+// out from under it (see Writer.Append's doc comment: Append takes meta by
+// value and only ever sets Clearance/Signature on its own local copy).
+// beads.recorded_at itself has no typed read API yet (BeadRef does not expose
+// it — U3a only populates the column; a getter is later units' job), so this
+// test reads the raw column via e.Index().SQLDB() directly.
+func TestIngest_PopulatesRecordedAtFromWrittenAt(t *testing.T) {
+	e := openT(t)
+
+	before := time.Now().UTC()
+	root, err := e.Ingest(unsavedBead("patient_registration", nil, map[string]any{"name": "recorded_at test"}))
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	after := time.Now().UTC()
+
+	var recordedAt sql.NullString
+	if err := e.Index().SQLDB().QueryRow(
+		`SELECT recorded_at FROM beads WHERE id = ?`, root.ID,
+	).Scan(&recordedAt); err != nil {
+		t.Fatalf("query recorded_at(%s): %v", root.ID, err)
+	}
+	if !recordedAt.Valid || recordedAt.String == "" {
+		t.Fatalf("recorded_at(%s) is NULL/empty, want populated from Pod meta WrittenAt", root.ID)
+	}
+
+	got, err := time.Parse(time.RFC3339Nano, recordedAt.String)
+	if err != nil {
+		t.Fatalf("recorded_at(%s) = %q is not RFC3339Nano: %v", root.ID, recordedAt.String, err)
+	}
+	if got.Before(before) || got.After(after) {
+		t.Errorf("recorded_at(%s) = %v, want between %v and %v (the Ingest call's own wall-clock window)",
+			root.ID, got, before, after)
 	}
 }

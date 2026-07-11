@@ -1,6 +1,7 @@
 package index
 
 import (
+	"database/sql"
 	"path/filepath"
 	"sort"
 	"testing"
@@ -148,6 +149,7 @@ func TestReindex_MatchesManualIndexBead(t *testing.T) {
 			PatientRoot: rec.Meta.PatientRoot,
 			Offset:      rec.Offset,
 			Length:      rec.Length,
+			WrittenAt:   rec.Meta.WrittenAt,
 		})
 	}
 
@@ -184,16 +186,31 @@ func TestReindex_MatchesManualIndexBead(t *testing.T) {
 			t.Errorf("GetEdges(%s) mismatch: ref=%v reindex=%v", b.ID, wantEdges, gotEdges)
 		}
 
-		wantAntigens, err := refDB.GetAntigens(b.ID)
+		wantAntigens, err := refDB.GetTags(b.ID)
 		if err != nil {
-			t.Fatalf("refDB.GetAntigens(%s): %v", b.ID, err)
+			t.Fatalf("refDB.GetTags(%s): %v", b.ID, err)
 		}
-		gotAntigens, err := reDB.GetAntigens(b.ID)
+		gotAntigens, err := reDB.GetTags(b.ID)
 		if err != nil {
-			t.Fatalf("reDB.GetAntigens(%s): %v", b.ID, err)
+			t.Fatalf("reDB.GetTags(%s): %v", b.ID, err)
 		}
 		if !equalStringSlices(wantAntigens, gotAntigens) {
-			t.Errorf("GetAntigens(%s) mismatch: ref=%v reindex=%v", b.ID, wantAntigens, gotAntigens)
+			t.Errorf("GetTags(%s) mismatch: ref=%v reindex=%v", b.ID, wantAntigens, gotAntigens)
+		}
+
+		wantRecordedAt, err := recordedAtT(t, refDB, b.ID)
+		if err != nil {
+			t.Fatalf("refDB recorded_at(%s): %v", b.ID, err)
+		}
+		gotRecordedAt, err := recordedAtT(t, reDB, b.ID)
+		if err != nil {
+			t.Fatalf("reDB recorded_at(%s): %v", b.ID, err)
+		}
+		if wantRecordedAt != gotRecordedAt {
+			t.Errorf("recorded_at(%s) mismatch: ref=%q reindex=%q", b.ID, wantRecordedAt, gotRecordedAt)
+		}
+		if wantRecordedAt == "" {
+			t.Errorf("recorded_at(%s) is empty/NULL, want populated from Pod meta WrittenAt", b.ID)
 		}
 	}
 
@@ -213,7 +230,7 @@ func TestReindex_MatchesManualIndexBead(t *testing.T) {
 
 	// Row counts across every table must match exactly (no extra/missing
 	// rows in either direction).
-	for _, table := range []string{"beads", "bead_edges", "bead_antigens", "beads_fts"} {
+	for _, table := range []string{"beads", "bead_edges", "bead_tags", "beads_fts"} {
 		wantN := countRows(t, refDB.sqlDB, "SELECT COUNT(*) FROM "+table)
 		gotN := countRows(t, reDB.sqlDB, "SELECT COUNT(*) FROM "+table)
 		if wantN != gotN {
@@ -284,4 +301,19 @@ func equalStringSlices(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// recordedAtT reads beads.recorded_at for beadID directly (index.DB's typed
+// read API — GetBead — does not expose it; see read.go), returning "" for a
+// SQL NULL. Used by TestReindex_MatchesManualIndexBead to assert recorded_at
+// (populated from Pod meta WrittenAt, U3a) survives Reindex identically to
+// the manually-built reference DB.
+func recordedAtT(t *testing.T, db *DB, beadID string) (string, error) {
+	t.Helper()
+	var recordedAt sql.NullString
+	err := db.sqlDB.QueryRow(`SELECT recorded_at FROM beads WHERE id = ?`, beadID).Scan(&recordedAt)
+	if err != nil {
+		return "", err
+	}
+	return recordedAt.String, nil
 }

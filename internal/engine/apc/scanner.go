@@ -64,7 +64,7 @@ type Scanner struct {
 }
 
 // New returns a Scanner over engine (for Ingest/GetBead) and idx (for the
-// direct SQL queries Scan needs: bead_apc_scan watermark, bead_antigens
+// direct SQL queries Scan needs: bead_apc_scan watermark, bead_tags
 // lookups, sibling_pairs de-duplication). Both should point at the same
 // data directory as the same *engine.Engine idx was obtained from
 // (engine.Engine.Index()) — Scan does not itself verify this.
@@ -325,13 +325,13 @@ type candidate struct {
 // Config.AntigenFrequencyThreshold's patient-local frequency (runaway
 // prevention d — the IDF filter: DESIGN §7 point 4, "患者内出現率が閾値超の
 // antigen はトリガーから除外"). Antigen frequency is computed over the
-// patient's distinct Beads that carry at least one antigen (bead_antigens
+// patient's distinct Beads that carry at least one antigen (bead_tags
 // rows), not over all of the patient's Beads regardless of whether they
 // carry antigens — a patient whose antigen-bearing Beads are mostly of one
 // kind should not have that kind's antigens under-counted by diluting the
 // denominator with untagged Beads.
 func (s *Scanner) candidatesFor(anchor scannedBeadRef) ([]candidate, error) {
-	anchorAntigens, err := s.idx.GetAntigens(anchor.ID)
+	anchorAntigens, err := s.idx.GetTags(anchor.ID)
 	if err != nil {
 		return nil, fmt.Errorf("get antigens for %s: %w", anchor.ID, err)
 	}
@@ -362,7 +362,7 @@ func (s *Scanner) candidatesFor(anchor scannedBeadRef) ([]candidate, error) {
 	return rows, nil
 }
 
-// candidateRows runs the actual bead_antigens x beads join: every Bead in
+// candidateRows runs the actual bead_tags x beads join: every Bead in
 // anchor.PatientRoot, other than anchor itself, that shares at least one of
 // triggerAntigens with it and has already been scanned (bead_apc_scan
 // exists) — "新Bead vs 患者内スキャン済み" (DESIGN §7). A candidate of
@@ -372,7 +372,7 @@ func (s *Scanner) candidatesFor(anchor scannedBeadRef) ([]candidate, error) {
 // Beads), but because letting it also appear on the *other* side, as a
 // same-batch candidate matched purely on the antigens it copied from its own
 // parents (index.IndexBead's extractTags derives a sibling_link Bead's own
-// bead_antigens rows from its content.matched_antigens, which is exactly
+// bead_tags rows from its content.matched_antigens, which is exactly
 // the matched-antigen set verbatim — see write.go and buildSiblingLinkBead),
 // would double-count that overlap: the
 // sibling_link Bead and (at least) one of its own parents would both surface
@@ -392,11 +392,11 @@ func (s *Scanner) candidateRows(anchor scannedBeadRef, triggerAntigens []string)
 	args = append(args, anchor.PatientRoot, anchor.ID)
 
 	query := fmt.Sprintf(`
-		SELECT ba.bead_id, ba.antigen, b.type, b.timestamp
-		FROM bead_antigens ba
+		SELECT ba.bead_id, ba.tag, b.type, b.timestamp
+		FROM bead_tags ba
 		JOIN beads b ON b.id = ba.bead_id
 		JOIN bead_apc_scan s ON s.bead_id = ba.bead_id
-		WHERE ba.antigen IN (%s) AND ba.patient_root = ? AND ba.bead_id != ?
+		WHERE ba.tag IN (%s) AND ba.patient_root = ? AND ba.bead_id != ?
 		  AND b.type != 'sibling_link'
 		ORDER BY ba.bead_id`,
 		strings.Join(placeholders, ", "))
@@ -463,8 +463,8 @@ func (s *Scanner) frequentAntigensCached(patientRoot string) (map[string]bool, e
 //
 // Both the numerator and denominator here exclude Beads of
 // type='sibling_link' entirely (a JOIN against beads, not a bare COUNT over
-// bead_antigens). This guards against IDF self-contamination: a
-// sibling_link Bead's own bead_antigens rows are derived from exactly its
+// bead_tags). This guards against IDF self-contamination: a
+// sibling_link Bead's own bead_tags rows are derived from exactly its
 // matched-antigen set (index.IndexBead's extractTags, reading
 // content.matched_antigens — see write.go and buildSiblingLinkBead), i.e. a
 // *copy* of antigens that already exist on its two parent Beads, not new
@@ -489,7 +489,7 @@ func (s *Scanner) frequentAntigens(patientRoot string) (map[string]bool, error) 
 	var totalBeads int
 	if err := s.idx.SQLDB().QueryRow(`
 		SELECT COUNT(DISTINCT ba.bead_id)
-		FROM bead_antigens ba
+		FROM bead_tags ba
 		JOIN beads b ON b.id = ba.bead_id
 		WHERE ba.patient_root = ? AND b.type != 'sibling_link'`,
 		patientRoot,
@@ -501,11 +501,11 @@ func (s *Scanner) frequentAntigens(patientRoot string) (map[string]bool, error) 
 	}
 
 	rows, err := s.idx.SQLDB().Query(`
-		SELECT ba.antigen, COUNT(DISTINCT ba.bead_id)
-		FROM bead_antigens ba
+		SELECT ba.tag, COUNT(DISTINCT ba.bead_id)
+		FROM bead_tags ba
 		JOIN beads b ON b.id = ba.bead_id
 		WHERE ba.patient_root = ? AND b.type != 'sibling_link'
-		GROUP BY ba.antigen`,
+		GROUP BY ba.tag`,
 		patientRoot,
 	)
 	if err != nil {
@@ -673,7 +673,7 @@ func (s *Scanner) unscannedBeads() ([]scannedBeadRef, error) {
 
 // scanState returns beadID's current (sibling_count, scan_generation) from
 // bead_apc_scan, or (0, 0) if it has no row yet (a candidate discovered via
-// bead_antigens that has somehow never been through Scan itself — should not
+// bead_tags that has somehow never been through Scan itself — should not
 // normally happen since candidateRows joins against bead_apc_scan, but
 // scanState is also called for the anchor, which by definition has no row
 // yet on its first visit).

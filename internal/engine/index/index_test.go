@@ -27,12 +27,12 @@ func openT(t *testing.T) *DB {
 // across packages is not warranted here).
 //
 // No antigens parameter: v3.1 removed Bead.Antigens entirely (see
-// bead.Bead's doc comment) — bead_antigens rows are now produced only by
+// bead.Bead's doc comment) — bead_tags rows are now produced only by
 // IndexBead running antigen.Extract(b.Type, b.Content) at index time.
-// Callers that need specific bead_antigens rows for a test either (a) build
+// Callers that need specific bead_tags rows for a test either (a) build
 // real FHIR-coding-shaped content antigen.Extract actually recognizes (see
 // TestIndexBead_RoundTrip), or (b) call seedAntigenRow below to inject a row
-// directly, for tests whose subject is bead_antigens plumbing itself
+// directly, for tests whose subject is bead_tags plumbing itself
 // (dedup/idempotency) rather than tag derivation.
 func testBead(t *testing.T, typ, note string, parents []string, content map[string]any) bead.Bead {
 	t.Helper()
@@ -54,9 +54,9 @@ func testBead(t *testing.T, typ, note string, parents []string, content map[stri
 	return withID
 }
 
-// seedAntigenRow inserts one bead_antigens row directly, bypassing
+// seedAntigenRow inserts one bead_tags row directly, bypassing
 // antigen.Extract entirely. It exists for tests whose subject is
-// bead_antigens' own storage/idempotency behavior (e.g. duplicate-insert
+// bead_tags' own storage/idempotency behavior (e.g. duplicate-insert
 // handling), not tag derivation — antigen.Extract's derivation rules are
 // covered by internal/engine/antigen's own fixture-based tests, and
 // TestIndexBead_RoundTrip below covers the real IndexBead-drives-Extract
@@ -68,7 +68,7 @@ func seedAntigenRow(t *testing.T, db *DB, tag, beadID, patientRoot string) {
 		root = patientRoot
 	}
 	if _, err := db.sqlDB.Exec(
-		`INSERT OR IGNORE INTO bead_antigens (antigen, bead_id, patient_root) VALUES (?, ?, ?)`,
+		`INSERT OR IGNORE INTO bead_tags (tag, bead_id, patient_root) VALUES (?, ?, ?)`,
 		tag, beadID, root,
 	); err != nil {
 		t.Fatalf("seedAntigenRow(%s, %s): %v", tag, beadID, err)

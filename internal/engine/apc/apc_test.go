@@ -54,13 +54,13 @@ func fmtTimestamp(h, m, s int) string {
 // from antigen.Extract(b.Type, b.Content), which is a fixed deterministic
 // function (real FHIR coding + a small static dictionary, no override hook,
 // no LLM). This package's own tests exercise Scanner behavior *given*
-// certain bead_antigens tags exist, not tag derivation itself (that is
+// certain bead_tags tags exist, not tag derivation itself (that is
 // package antigen's job, covered by its own fixture-based tests) — many of
 // the tag strings these tests need (loinc:noise-N uniqueness markers,
 // risk:nephrotoxic alone without organ:renal, etc.) do not correspond to any
 // real FHIR coding or dictionary.json entry antigen.Extract could ever
 // produce. See seedAntigens below for how a caller gets specific
-// bead_antigens rows onto a seeded Bead instead.
+// bead_tags rows onto a seeded Bead instead.
 func unsavedBead(typ string, parents []string, content map[string]any) bead.Bead {
 	if content == nil {
 		content = map[string]any{}
@@ -83,13 +83,13 @@ func ingestT(t *testing.T, e *engine.Engine, b bead.Bead) bead.Bead {
 	return out
 }
 
-// seedAntigens inserts bead_antigens rows for the already-ingested Bead b
+// seedAntigens inserts bead_tags rows for the already-ingested Bead b
 // directly (bypassing antigen.Extract entirely), for tests whose subject is
 // Scanner behavior given a Bead carries certain tags, not tag derivation
 // itself — see unsavedBead's doc comment. This mirrors exactly the row
 // shape/table IndexBead itself would have written had Extract produced
-// these tags (INSERT OR IGNORE INTO bead_antigens(antigen, bead_id,
-// patient_root)), so every downstream Scanner code path (GetAntigens,
+// these tags (INSERT OR IGNORE INTO bead_tags(tag, bead_id,
+// patient_root)), so every downstream Scanner code path (GetTags,
 // frequentAntigens, candidateRows) sees the identical shape of data it would
 // from a real projection run.
 //
@@ -114,7 +114,7 @@ func seedAntigens(t *testing.T, e *engine.Engine, b bead.Bead, tags ...string) {
 	}
 	for _, tag := range tags {
 		if _, err := e.Index().SQLDB().Exec(
-			`INSERT OR IGNORE INTO bead_antigens (antigen, bead_id, patient_root) VALUES (?, ?, ?)`,
+			`INSERT OR IGNORE INTO bead_tags (tag, bead_id, patient_root) VALUES (?, ?, ?)`,
 			tag, b.ID, root,
 		); err != nil {
 			t.Fatalf("seedAntigens(%s, %v): %v", b.ID, tags, err)
@@ -128,7 +128,7 @@ func seedPatient(t *testing.T, e *engine.Engine, name string) bead.Bead {
 }
 
 // seedChildBead ingests a Bead of the given type/content as a child of
-// parent, then (if antigens is non-empty) injects bead_antigens rows for it
+// parent, then (if antigens is non-empty) injects bead_tags rows for it
 // directly via seedAntigens — see unsavedBead's doc comment for why this
 // package's tests control tags this way rather than through a Bead field.
 func seedChildBead(t *testing.T, e *engine.Engine, parent bead.Bead, typ string, antigens []string, content map[string]any) bead.Bead {

@@ -52,7 +52,7 @@ func fmtTimestamp(h, m, s int) string {
 // antigens parameter: v3.1 removed Bead.Antigens entirely (see bead.Bead's
 // doc comment) — tag derivation now happens only at index-projection time
 // (antigen.Extract), a fixed deterministic function with no override hook.
-// See seedAntigens below for how a caller gets specific bead_antigens rows
+// See seedAntigens below for how a caller gets specific bead_tags rows
 // onto a seeded Bead for tests whose subject is Scanner/tag-filter behavior
 // rather than tag derivation itself (mirrors
 // internal/engine/apc/apc_test.go's identical helper and reasoning).
@@ -78,7 +78,7 @@ func ingestT(t *testing.T, e *engine.Engine, b bead.Bead) bead.Bead {
 	return out
 }
 
-// seedAntigens inserts bead_antigens rows for the already-ingested Bead b
+// seedAntigens inserts bead_tags rows for the already-ingested Bead b
 // directly (bypassing antigen.Extract entirely) — see unsavedBead's doc
 // comment. patient_root is resolved from the index (e.Index().GetBead) —
 // not trusted from a caller-supplied parameter — since b's own parent Bead
@@ -100,7 +100,7 @@ func seedAntigens(t *testing.T, e *engine.Engine, b bead.Bead, tags ...string) {
 	}
 	for _, tag := range tags {
 		if _, err := e.Index().SQLDB().Exec(
-			`INSERT OR IGNORE INTO bead_antigens (antigen, bead_id, patient_root) VALUES (?, ?, ?)`,
+			`INSERT OR IGNORE INTO bead_tags (tag, bead_id, patient_root) VALUES (?, ?, ?)`,
 			tag, b.ID, root,
 		); err != nil {
 			t.Fatalf("seedAntigens(%s, %v): %v", b.ID, tags, err)
@@ -114,7 +114,7 @@ func seedPatient(t *testing.T, e *engine.Engine, name string) bead.Bead {
 }
 
 // seedChildBead ingests a Bead of the given type/content as a child of
-// parent, then (if antigens is non-empty) injects bead_antigens rows for it
+// parent, then (if antigens is non-empty) injects bead_tags rows for it
 // directly via seedAntigens — see unsavedBead's doc comment.
 func seedChildBead(t *testing.T, e *engine.Engine, parent bead.Bead, typ string, antigens []string, content map[string]any) bead.Bead {
 	t.Helper()

@@ -251,7 +251,7 @@ func apcIngestT(t *testing.T, e *engine.Engine, b bead.Bead) bead.Bead {
 	return out
 }
 
-// apcSeedAntigens inserts bead_antigens rows for the already-ingested Bead b
+// apcSeedAntigens inserts bead_tags rows for the already-ingested Bead b
 // directly (bypassing antigen.Extract entirely) — mirrors
 // internal/engine/apc/apc_test.go's seedAntigens and identical reasoning: v3.1
 // removed Bead.Antigens entirely (tag derivation now happens only at
@@ -274,7 +274,7 @@ func apcSeedAntigens(t *testing.T, e *engine.Engine, b bead.Bead, tags ...string
 	}
 	for _, tag := range tags {
 		if _, err := e.Index().SQLDB().Exec(
-			`INSERT OR IGNORE INTO bead_antigens (antigen, bead_id, patient_root) VALUES (?, ?, ?)`,
+			`INSERT OR IGNORE INTO bead_tags (tag, bead_id, patient_root) VALUES (?, ?, ?)`,
 			tag, b.ID, root,
 		); err != nil {
 			t.Fatalf("apcSeedAntigens(%s, %v): %v", b.ID, tags, err)

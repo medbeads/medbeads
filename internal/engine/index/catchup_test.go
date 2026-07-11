@@ -84,7 +84,7 @@ func TestCatchUp_ResumesFromWatermark(t *testing.T) {
 		if _, err := db.sqlDB.Exec(`DELETE FROM bead_edges WHERE child_id = ?`, b.ID); err != nil {
 			t.Fatalf("delete edges for %s: %v", b.ID, err)
 		}
-		if _, err := db.sqlDB.Exec(`DELETE FROM bead_antigens WHERE bead_id = ?`, b.ID); err != nil {
+		if _, err := db.sqlDB.Exec(`DELETE FROM bead_tags WHERE bead_id = ?`, b.ID); err != nil {
 			t.Fatalf("delete antigens for %s: %v", b.ID, err)
 		}
 	}

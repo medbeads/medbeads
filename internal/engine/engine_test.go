@@ -28,7 +28,7 @@ func openT(t *testing.T) *Engine {
 // No antigens parameter: v3.1 removed Bead.Antigens entirely (tag
 // derivation now happens only at index-projection time, from Type+Content —
 // see antigen.Extract / index.IndexBead). No test in this package asserts on
-// bead_antigens content, so there is nothing for a caller here to need to
+// bead_tags content, so there is nothing for a caller here to need to
 // control.
 func unsavedBead(typ string, parents []string, content map[string]any) bead.Bead {
 	if content == nil {

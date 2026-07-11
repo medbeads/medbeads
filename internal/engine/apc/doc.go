@@ -10,7 +10,7 @@
 // Scanner depends on a narrow ingester interface (Ingest + GetBead) rather
 // than importing package engine directly, and on *index.DB for the
 // SQL queries its own read API does not expose (bead_apc_scan,
-// sibling_pairs, bead_antigens-by-(antigen,patient_root) lookups) — the same
+// sibling_pairs, bead_tags-by-(tag,patient_root) lookups) — the same
 // "apc does not import engine" convention package graph documents for
 // itself (see graph/doc.go): apc is a sibling of engine/pod, engine/index,
 // engine/graph under internal/engine/, and it is engine's/cmd's job to wire

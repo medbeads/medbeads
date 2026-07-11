@@ -196,25 +196,26 @@ func (d *DB) GetEdges(beadID string) ([]string, error) {
 	return out, nil
 }
 
-// GetAntigens returns every antigen tag attached to beadID.
-func (d *DB) GetAntigens(beadID string) ([]string, error) {
+// GetTags returns every tag attached to beadID (bead_tags — bead_antigens'
+// successor, specs/U2_projection_schema.md / U3a).
+func (d *DB) GetTags(beadID string) ([]string, error) {
 	rows, err := d.sqlDB.Query(
-		`SELECT antigen FROM bead_antigens WHERE bead_id = ? ORDER BY antigen`, beadID)
+		`SELECT tag FROM bead_tags WHERE bead_id = ? ORDER BY tag`, beadID)
 	if err != nil {
-		return nil, fmt.Errorf("index: get antigens %s: %w", beadID, err)
+		return nil, fmt.Errorf("index: get tags %s: %w", beadID, err)
 	}
 	defer rows.Close()
 
 	var out []string
 	for rows.Next() {
-		var antigen string
-		if err := rows.Scan(&antigen); err != nil {
-			return nil, fmt.Errorf("index: get antigens %s: scan: %w", beadID, err)
+		var tag string
+		if err := rows.Scan(&tag); err != nil {
+			return nil, fmt.Errorf("index: get tags %s: scan: %w", beadID, err)
 		}
-		out = append(out, antigen)
+		out = append(out, tag)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("index: get antigens %s: %w", beadID, err)
+		return nil, fmt.Errorf("index: get tags %s: %w", beadID, err)
 	}
 	return out, nil
 }

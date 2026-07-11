@@ -7,9 +7,9 @@ import (
 )
 
 // TestIndexBead_RoundTrip writes one Bead with parents and a real FHIR
-// Coding, then reads it back through GetBead / GetEdges / GetAntigens /
+// Coding, then reads it back through GetBead / GetEdges / GetTags /
 // Search, checking every piece IndexBead is responsible for landed correctly
-// (R3.1/R3.2/R3.3). The bead_antigens assertion below exercises the v3.1
+// (R3.1/R3.2/R3.3). The bead_tags assertion below exercises the v3.1
 // path end to end: IndexBead runs antigen.Extract(b.Type, b.Content) at
 // index time (Bead.Antigens no longer exists — see bead.Bead's doc
 // comment), so child's "loinc:718-7" tag must come from its own content's
@@ -72,17 +72,17 @@ func TestIndexBead_RoundTrip(t *testing.T) {
 		t.Errorf("GetEdges(child) = %v, want [%s]", edges, parent.ID)
 	}
 
-	antigens, err := db.GetAntigens(child.ID)
+	antigens, err := db.GetTags(child.ID)
 	if err != nil {
-		t.Fatalf("GetAntigens: %v", err)
+		t.Fatalf("GetTags: %v", err)
 	}
 	wantAntigens := []string{"loinc:718-7"}
 	if len(antigens) != len(wantAntigens) {
-		t.Fatalf("GetAntigens(child) = %v, want %v", antigens, wantAntigens)
+		t.Fatalf("GetTags(child) = %v, want %v", antigens, wantAntigens)
 	}
 	for i, a := range wantAntigens {
 		if antigens[i] != a {
-			t.Errorf("GetAntigens(child)[%d] = %q, want %q", i, antigens[i], a)
+			t.Errorf("GetTags(child)[%d] = %q, want %q", i, antigens[i], a)
 		}
 	}
 
@@ -155,13 +155,13 @@ func TestGetBead_NotFound(t *testing.T) {
 
 // TestIndexBead_TagProjection_SameContentSameTags is the v3.1 content-
 // invariance regression this unit's task explicitly calls for: "タグが投影時
-// 抽出でも従来と同じ bead_antigens 内容になること(同一 content → 同一タグ)".
+// 抽出でも従来と同じ bead_tags 内容になること(同一 content → 同一タグ)".
 // It indexes two independently-built Beads with byte-identical Content (and
 // therefore, since antigen.Extract's only inputs are Type and Content,
 // necessarily identical derived tags) into two separate index.DB instances
 // — mirroring how a real "same clinical fact ingested twice" or "Reindex on
 // two different machines" scenario would produce two independently-computed
-// projections — and asserts GetAntigens returns the exact same tag set from
+// projections — and asserts GetTags returns the exact same tag set from
 // both. It also re-indexes the very same Bead a second time into the first
 // DB (the CatchUp/Reindex duplicate-frame replay path — see IndexBead's own
 // "Duplicate-frame idempotency" doc comment) and asserts the tag set is
@@ -200,20 +200,20 @@ func TestIndexBead_TagProjection_SameContentSameTags(t *testing.T) {
 		t.Fatalf("child1.ID = %s, child2.ID = %s: want equal (identical content must hash identically)", child1.ID, child2.ID)
 	}
 
-	tags1, err := db1.GetAntigens(child1.ID)
+	tags1, err := db1.GetTags(child1.ID)
 	if err != nil {
-		t.Fatalf("db1.GetAntigens: %v", err)
+		t.Fatalf("db1.GetTags: %v", err)
 	}
-	tags2, err := db2.GetAntigens(child2.ID)
+	tags2, err := db2.GetTags(child2.ID)
 	if err != nil {
-		t.Fatalf("db2.GetAntigens: %v", err)
+		t.Fatalf("db2.GetTags: %v", err)
 	}
 	wantTags := []string{"loinc:2345-7"}
 	if !equalStringSlices(tags1, wantTags) {
-		t.Errorf("db1 GetAntigens(%s) = %v, want %v", child1.ID, tags1, wantTags)
+		t.Errorf("db1 GetTags(%s) = %v, want %v", child1.ID, tags1, wantTags)
 	}
 	if !equalStringSlices(tags2, wantTags) {
-		t.Errorf("db2 GetAntigens(%s) = %v, want %v", child2.ID, tags2, wantTags)
+		t.Errorf("db2 GetTags(%s) = %v, want %v", child2.ID, tags2, wantTags)
 	}
 	if !equalStringSlices(tags1, tags2) {
 		t.Errorf("tag sets differ across independently-built DBs for identical content: db1=%v db2=%v", tags1, tags2)
@@ -223,17 +223,17 @@ func TestIndexBead_TagProjection_SameContentSameTags(t *testing.T) {
 	// duplicate-frame replay / re-run of Reindex over the same Pod): the
 	// projected tag set must stay exactly the same, not double up.
 	indexBeadT(t, db1, child1, BeadLocation{PodPath: "p.pod", PatientRoot: child1.Parents[0], Offset: 10, Length: 10})
-	tagsAfterReplay, err := db1.GetAntigens(child1.ID)
+	tagsAfterReplay, err := db1.GetTags(child1.ID)
 	if err != nil {
-		t.Fatalf("db1.GetAntigens (after replay): %v", err)
+		t.Fatalf("db1.GetTags (after replay): %v", err)
 	}
 	if !equalStringSlices(tagsAfterReplay, wantTags) {
-		t.Errorf("db1 GetAntigens(%s) after replay = %v, want unchanged %v", child1.ID, tagsAfterReplay, wantTags)
+		t.Errorf("db1 GetTags(%s) after replay = %v, want unchanged %v", child1.ID, tagsAfterReplay, wantTags)
 	}
 }
 
-// equalStringSlices (order-sensitive; GetAntigens already returns its rows
-// sorted — see its own ORDER BY antigen) is defined in reindex_test.go and
+// equalStringSlices (order-sensitive; GetTags already returns its rows
+// sorted — see its own ORDER BY tag) is defined in reindex_test.go and
 // reused here.
 
 // TestIndexBead_DuplicateEdgeAntigen_IsIdempotent checks that indexing the
@@ -247,10 +247,10 @@ func TestIndexBead_DuplicateEdgeAntigen_IsIdempotent(t *testing.T) {
 	indexBeadT(t, db, parent, BeadLocation{PodPath: "p.pod", PatientRoot: parent.ID, Offset: 0, Length: 10})
 
 	// child carries no coding antigen.Extract recognizes (plain "note" text),
-	// so IndexBead's own antigen.Extract pass contributes zero bead_antigens
+	// so IndexBead's own antigen.Extract pass contributes zero bead_tags
 	// rows for it; the "organ:renal" row asserted on below comes entirely
 	// from this test's own duplicate-insert exercise, not from IndexBead —
-	// exactly what this test is checking (bead_antigens' INSERT OR IGNORE
+	// exactly what this test is checking (bead_tags' INSERT OR IGNORE
 	// contract, independent of tag derivation).
 	child := testBead(t, "fhir_observation", "note", []string{parent.ID}, nil)
 	loc := BeadLocation{PodPath: "p.pod", PatientRoot: parent.ID, Offset: 10, Length: 10}
@@ -279,7 +279,7 @@ func TestIndexBead_DuplicateEdgeAntigen_IsIdempotent(t *testing.T) {
 		t.Fatalf("duplicate edge insert: %v", err)
 	}
 	if _, err := tx2.Exec(
-		`INSERT OR IGNORE INTO bead_antigens (antigen, bead_id, patient_root) VALUES (?, ?, ?)`,
+		`INSERT OR IGNORE INTO bead_tags (tag, bead_id, patient_root) VALUES (?, ?, ?)`,
 		"organ:renal", child.ID, parent.ID,
 	); err != nil {
 		t.Fatalf("duplicate antigen insert: %v", err)
@@ -295,11 +295,11 @@ func TestIndexBead_DuplicateEdgeAntigen_IsIdempotent(t *testing.T) {
 	if len(edges) != 1 {
 		t.Errorf("GetEdges after duplicate insert = %v, want 1 row (no duplication)", edges)
 	}
-	antigens, err := db.GetAntigens(child.ID)
+	antigens, err := db.GetTags(child.ID)
 	if err != nil {
-		t.Fatalf("GetAntigens: %v", err)
+		t.Fatalf("GetTags: %v", err)
 	}
 	if len(antigens) != 1 {
-		t.Errorf("GetAntigens after duplicate insert = %v, want 1 row (no duplication)", antigens)
+		t.Errorf("GetTags after duplicate insert = %v, want 1 row (no duplication)", antigens)
 	}
 }

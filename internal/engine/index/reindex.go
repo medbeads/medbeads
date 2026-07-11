@@ -208,6 +208,7 @@ func indexBatch(db *DB, store *pod.Store, podPath string, records []pod.Record) 
 			PatientRoot: rec.Meta.PatientRoot,
 			Offset:      rec.Offset,
 			Length:      rec.Length,
+			WrittenAt:   rec.Meta.WrittenAt,
 		}
 		if err := IndexBead(tx, b, loc, f); err != nil {
 			return fmt.Errorf("index bead at offset %d: %w", rec.Offset, err)

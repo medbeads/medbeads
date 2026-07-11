@@ -147,8 +147,8 @@ func TestCreateBead_RegisteredForSystemRole(t *testing.T) {
 // (createBeadIn has no antigens field, and the returned/persisted Bead
 // itself carries no Antigens field either — see bead.Bead's doc comment);
 // tag derivation runs only when index.IndexBead projects the Bead, via
-// antigen.Extract(b.Type, b.Content), and its result lives in bead_antigens
-// (queried here via e.Index().GetAntigens), not on the Bead.
+// antigen.Extract(b.Type, b.Content), and its result lives in bead_tags
+// (queried here via e.Index().GetTags), not on the Bead.
 func TestCreateBead_AntigensAreDeterministicallyDerived(t *testing.T) {
 	e := openT(t)
 	p := seedPatient(t, e, "Antigen Patient")
@@ -188,12 +188,12 @@ func TestCreateBead_AntigensAreDeterministicallyDerived(t *testing.T) {
 		t.Fatalf("e.GetBead(%s) returned no Content", plainID)
 	}
 
-	// The projection (bead_antigens, populated by IndexBead's
+	// The projection (bead_tags, populated by IndexBead's
 	// antigen.Extract call) must carry the deterministically-derived tag.
 	wantAntigen := "snomed:44054006"
-	gotAntigens, err := e.Index().GetAntigens(plainID)
+	gotAntigens, err := e.Index().GetTags(plainID)
 	if err != nil {
-		t.Fatalf("e.Index().GetAntigens(%s): %v", plainID, err)
+		t.Fatalf("e.Index().GetTags(%s): %v", plainID, err)
 	}
 	found := false
 	for _, ag := range gotAntigens {
@@ -202,7 +202,7 @@ func TestCreateBead_AntigensAreDeterministicallyDerived(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Errorf("GetAntigens(%s) = %v, want to contain %q", plainID, gotAntigens, wantAntigen)
+		t.Errorf("GetTags(%s) = %v, want to contain %q", plainID, gotAntigens, wantAntigen)
 	}
 }
 

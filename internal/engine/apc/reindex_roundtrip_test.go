@@ -173,7 +173,7 @@ func TestReindex_RebuildsSiblingEdgesAndPairsFromPodAlone(t *testing.T) {
 	// default threshold and silently filtering out legitimate matches
 	// (including the assertions above already having exercised the exact
 	// scenario that regression required: a sibling_link Bead present in
-	// bead_antigens before any Scan of it has run).
+	// bead_tags before any Scan of it has run).
 	rescanEngine, err := engine.Open(dataDir)
 	if err != nil {
 		t.Fatalf("reopen engine.Open: %v", err)

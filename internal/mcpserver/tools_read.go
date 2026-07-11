@@ -62,7 +62,7 @@ func (s *Server) registerReadTools() {
 
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name:        "search_antigens",
-		Description: "Inverted-index lookup: every Bead tagged with the given antigen (bead_antigens).",
+		Description: "Inverted-index lookup: every Bead tagged with the given antigen (bead_tags).",
 	}, s.searchAntigens)
 
 	mcp.AddTool(s.mcp, &mcp.Tool{
@@ -462,7 +462,7 @@ func (s *Server) getSiblingLinks(_ context.Context, _ *mcp.CallToolRequest, in g
 	return nil, out, nil
 }
 
-// --- search_antigens (bead_antigens inverted index) ------------------------
+// --- search_antigens (bead_tags inverted index) -----------------------------
 
 type searchAntigensIn struct {
 	Antigen   string `json:"antigen" jsonschema:"antigen tag, e.g. snomed:44054006"`
@@ -491,9 +491,9 @@ func (s *Server) searchAntigens(_ context.Context, _ *mcp.CallToolRequest, in se
 
 	query := `
 		SELECT b.id, COALESCE(b.patient_root, ''), b.type, b.timestamp, COALESCE(b.summary, '')
-		FROM bead_antigens ba
+		FROM bead_tags ba
 		JOIN beads b ON b.id = ba.bead_id
-		WHERE ba.antigen = ?`
+		WHERE ba.tag = ?`
 	args := []any{in.Antigen}
 	if patientRoot != "" {
 		query += " AND ba.patient_root = ?"

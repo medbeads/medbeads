@@ -102,8 +102,8 @@ func (e *Engine) DataDir() string {
 
 // Index exposes this Engine's *index.DB for callers (e.g. package apc's
 // Scanner) that need direct SQL access to tables Ingest's own thin read API
-// does not expose (bead_apc_scan, sibling_pairs, bead_antigens lookups by
-// (antigen, patient_root)) — the same "narrow escape hatch" as index.DB's own
+// does not expose (bead_apc_scan, sibling_pairs, bead_tags lookups by
+// (tag, patient_root)) — the same "narrow escape hatch" as index.DB's own
 // SQLDB(). Routing through this accessor rather than having apc open its own
 // second *sql.DB against index.db keeps every SQLite connection to a given
 // data directory going through Engine's single capped connection pool (see

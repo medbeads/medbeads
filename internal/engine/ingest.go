@@ -106,7 +106,15 @@ func (e *Engine) Ingest(b bead.Bead) (bead.Bead, error) {
 		return bead.Bead{}, fmt.Errorf("engine: ingest %s: %w", b.ID, err)
 	}
 
-	res, err := w.Append(normalized, pod.CodecZstd, pod.NewMeta(patientRoot))
+	// meta is captured before Append so its WrittenAt (the actual write
+	// instant, per pod.Meta's doc comment) survives into loc below exactly as
+	// pod.NewMeta set it: Append takes meta by value and only ever sets its
+	// own local copy's Clearance/Signature fields (see Writer.Append's doc
+	// comment) — it cannot mutate this variable — but reading WrittenAt from
+	// the same variable we pass in, rather than re-deriving it after the
+	// call, keeps this call site correct even if that ever changed.
+	meta := pod.NewMeta(patientRoot)
+	res, err := w.Append(normalized, pod.CodecZstd, meta)
 	if err != nil {
 		return bead.Bead{}, fmt.Errorf("engine: ingest %s: pod append: %w", b.ID, err)
 	}
@@ -131,6 +139,7 @@ func (e *Engine) Ingest(b bead.Bead) (bead.Bead, error) {
 		PatientRoot: patientRoot,
 		Offset:      res.Offset,
 		Length:      res.Length,
+		WrittenAt:   meta.WrittenAt,
 	}
 	if err := index.IndexBead(tx, normalized, loc, e.flattener); err != nil {
 		return bead.Bead{}, fmt.Errorf("engine: ingest %s: index: %w", b.ID, err)
