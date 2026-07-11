@@ -65,3 +65,22 @@
 - **Dependabot triage メモ**: 65件(high 31 / mod 25 / low 9)は**すべて `ui/package-lock.json`
   (React v2 ビジュアライザ)由来**。Go エンジン(本番面、go.sum)は対象外。UI は v3 で
   deprecated 予定のため、本番リスクは低。対応は P2 以降(UI を扱う際にまとめて更新 or UI 廃止)。
+
+## 2026-07-11: U2 投影スキーマ設計 — Codex peer 統合(条件付き GO → 確定)
+
+- **peer**: data-reviewer(Task, opus)と codex exec(read-only)へ同一中立問題文を並列投入。
+  両者とも**条件付き GO**。統合仕様は specs/U2_projection_schema.md に確定。
+- **合意点(採用)**: 実データ表は現行世代のみ・置換方式(世代共存却下)/ 各行に projection_run_id /
+  bead_antigens→bead_tags は VIEW 却下・新設+U3 一斉切替+フル reindex・二重書き禁止 /
+  projection_manifest は追記専用 / bead_tags は 0005 の3索引を漏れなく引き継ぐ / matched_tag を
+  独立列に / 投影表に beads(id) FK を張らない。
+- **実証で決着した crux 2件**:
+  1. `beads.recorded_at` 追加は必須(実証: beads 表に該当列なし、Pod meta の WrittenAt が実体だが
+     未投影。訂正チェーン解決 `recorded_at → bead ID 辞書順`に不可欠)。0006 で ALTER 追加、
+     充填は U3 のフル reindex 時。
+  2. sibling_link Bead 廃止で clinical_links は「Pod のみ再構築」→「Pod + 知識 Bead + projector
+     コード版」へ。round-trip テストの不変条件を U3/U4 で**強化**(緩和ではない)。U2 では
+     clinical_links を埋めないので既存テストは無傷。
+- **スコープ確定**: U2 = スキーマの器 + recorded_at 追加まで(新表は空・旧経路無傷 → 中間半端状態が
+  構造的に発生しない)。書込切替・link projector は U3。active_conditions/medications の物理表化は
+  U4 で計測後判断(過剰設計回避)。
