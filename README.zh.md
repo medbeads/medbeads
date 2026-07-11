@@ -283,17 +283,26 @@ MedBeads 支持 **安全许可**，用于控制谁可以查看特定的医疗记
 
 ## 📚 Citation（引用）
 
-如果您在研究中使用 MedBeads，请引用我们的论文：
+如果您在研究中使用 MedBeads，请引用我们的论文
+（[arXiv:2602.01086](https://arxiv.org/abs/2602.01086)）：
 
 ```bibtex
-@article{medbeads2025,
-  title={MedBeads: Immutable Agent-Native Data Infrastructure for Medical AI},
+@article{nakajima2026medbeads,
+  title={MedBeads: An Agent-Native, Immutable Data Substrate for Trustworthy Medical AI},
   author={Nakajima, Takahito},
-  journal={medRxiv (审稿中)},
+  journal={arXiv preprint arXiv:2602.01086},
   year={2026},
-  note={DOI: TBD}
+  doi={10.48550/arXiv.2602.01086},
+  url={https://arxiv.org/abs/2602.01086}
 }
 ```
+
+我们随仓库提供 `CITATION.cff`，以便与 GitHub 的“Cite this repository”按钮保持同步。
+
+## 📄 许可证
+
+本项目基于 [Apache License 2.0](LICENSE) 发布。归属声明请参见 [`NOTICE`](NOTICE)。
+所有患者数据均为合成数据（由 Synthea 生成）；仓库、历史记录及测试中均不含真实 PHI。
 
 ## 🙏 Acknowledgement（致谢）
 

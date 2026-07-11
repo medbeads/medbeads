@@ -283,17 +283,27 @@ UIヘッダーの **Viewer Role セレクター** を使用してロールを切
 
 ## 📚 Citation（引用）
 
-本プロジェクトを研究で使用される場合は、以下の論文を引用してください:
+本プロジェクトを研究で使用される場合は、以下の論文を引用してください
+（[arXiv:2602.01086](https://arxiv.org/abs/2602.01086)）:
 
 ```bibtex
-@article{medbeads2025,
-  title={MedBeads: Immutable Agent-Native Data Infrastructure for Medical AI},
+@article{nakajima2026medbeads,
+  title={MedBeads: An Agent-Native, Immutable Data Substrate for Trustworthy Medical AI},
   author={Nakajima, Takahito},
-  journal={medRxiv (査読中)},
+  journal={arXiv preprint arXiv:2602.01086},
   year={2026},
-  note={DOI: TBD}
+  doi={10.48550/arXiv.2602.01086},
+  url={https://arxiv.org/abs/2602.01086}
 }
 ```
+
+`CITATION.cff` を同梱しているため、GitHub の「Cite this repository」ボタンとも同期します。
+
+## 📄 ライセンス
+
+[Apache License 2.0](LICENSE) の下で公開しています。帰属表示は [`NOTICE`](NOTICE) を参照してください。
+患者データはすべて合成データ（Synthea 生成）であり、実際の PHI はリポジトリ・履歴・テストの
+いずれにも含まれません。
 
 ## 🙏 Acknowledgement（謝辞）
 

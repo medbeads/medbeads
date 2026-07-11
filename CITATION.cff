@@ -1,0 +1,23 @@
+cff-version: 1.2.0
+message: "If you use MedBeads in your research, please cite the paper below."
+title: "MedBeads: An Agent-Native, Immutable Data Substrate for Trustworthy Medical AI"
+authors:
+  - family-names: Nakajima
+    given-names: Takahito
+repository-code: "https://github.com/medbeads/medbeads"
+license: Apache-2.0
+type: software
+preferred-citation:
+  type: article
+  title: "MedBeads: An Agent-Native, Immutable Data Substrate for Trustworthy Medical AI"
+  authors:
+    - family-names: Nakajima
+      given-names: Takahito
+  year: 2026
+  journal: "arXiv"
+  identifiers:
+    - type: other
+      value: "arXiv:2602.01086"
+      description: "arXiv preprint identifier"
+  doi: "10.48550/arXiv.2602.01086"
+  url: "https://arxiv.org/abs/2602.01086"
