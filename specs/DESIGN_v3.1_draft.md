@@ -77,8 +77,12 @@ ID = sha256( JCS({ type, timestamp, author, parents, amends, retracts, content, 
 
 - retrieve の provenance に **projection_run_id を必ず含める**(「時点 T に AI が見た解釈は
   どの世代か」を1値で特定)
-- reindex = 2パス(①正本走査で beads/tags 等 → ②link projector)。従来の「Pod のみから
-  完全再構築」不変条件を維持
+- reindex = 2パス(①正本走査で beads/tags 等 → ②link projector)。**再構築不変条件は二層で異なる
+  (U3 で明示強化)**: 「正本事実(beads/parent エッジ)は Pod のみから再構築可能」/「解釈投影
+  (bead_tags/clinical_links 等)は Pod + 参照した知識 Bead ID 集合(dictionary/link_rule)+ config_hash +
+  投影コード版(code_version)から決定論再構築可能」。後者は緩和ではなく、入力集合を明示した強化であり、
+  projection_manifest がその入力集合を改ざん不能に固定する。sibling_link Bead 廃止で「解釈も Pod のみ」は
+  成立しなくなるため、この区別を仕様・テストで強制する
 - **クリアランス継承(ユーザー裁定)**: bead_status / clinical_links / attestation /
   active_views を返す全経路で「参照先 Bead が不可視なら関係も不可視」(既存 get_sibling_links
   の drop 原則を一般化)
