@@ -103,3 +103,30 @@
 - **U3 前の仕様修正**: DESIGN_v3.1 の「Pod のみ再構築」文言を強化版に修正。link_rule Bead content スキーマ確定。
 - **failure catalog 起案2件**(要承認): ①知識更新の全再投影を Reindex で実装しない(Reproject と分離)
   ②大量投影入替を単一 tx にしない(原子性の単位を patient_root に落とす)。
+
+## 2026-07-11: U3 完成 + failure catalog 5件承認
+
+- **U3(link projector)完成・全 push 済み**: U3a(1acfe40 タグ経路)/ U3b(073be85 projector 新設)/
+  U3c(56d6fc6 read + clearance 継承 + 不変条件強化)。すべて reviewer GO。
+- **failure catalog 8〜12番をユーザー承認** → team-lessons 追記(計12件): FTS5 構文言語 / resume 集計は
+  成果物から再導出 / gofmt 日本語コメント / 知識更新は Reproject(Reindex と分離)/ 大量投影入替は
+  patient_root 単位 tx。
+
+## 2026-07-11: U4 状態導出 設計 — Codex peer 統合(条件付き GO → 確定)
+
+- **peer**: data-reviewer + codex に同一中立問題文を並列投入。両者とも**条件付き GO**。統合仕様 =
+  specs/U4_state_derivation.md。
+- **合意点(採用)**: チェーン解決は Go 実装(SQL は順序スパイン + patient tx のみ)/ status projector は
+  Pod デコード方式(amends/retracts edge を index に先行投影しない)/ bead_status に patient_root を 0007 で追加 /
+  active_conditions/medications は物理投影表(SQL VIEW 不可 = content が Pod のみ)/ 別 projection_name
+  "record_state_v31" で bead_status + active_* を同一 run / §2 は固定順序(retracted→attestation→amends)/
+  U3 follow-up(loadRule の knowledgeBeadIDs 配線)を同梱。
+- **data-reviewer が発見した correctness 穴2件(実証済み・GO ブロッカー)**:
+  ①retraction Bead が parents 空だと共有 Pod に落ち患者スコープから外れる(ingest.go:257 で実証)→
+   対策: retraction/attestation は対象を parents に含めることを要求 + クロス Pod fixture。
+  ②ListPatientBeads は timestamp(臨床時刻)順で、訂正解決に要る recorded_at(記録時刻)順と軸が違う
+   (read.go:62 で実証)→ 対策: デコード後 §2 キー `(recorded_at IS NULL) ASC, recorded_at DESC, id DESC`
+   で再ソート + NULL/遅延 amendment fixture。
+- **ユーザー裁定**: **retraction(取り消し)は attestation 承認不要・即時有効**(entered-in-error は誤データを
+  承認待ちの間臨床的に生かさない = 臨床安全優先。content.authorized_by が権限担保。「retracted 最強」と整合)。
+  amends(訂正)は承認必須のまま。
