@@ -1,17 +1,31 @@
-"""dag_nosib / dag_full arms: the unified `retrieve` MCP tool
-(internal/mcpserver/retrieve.go, R6.2/R4.2), semantic=True, with
-include_siblings toggled per R8.2:
-
-  - dag_nosib: retrieve(semantic=true, include_siblings=false)
-  - dag_full:  retrieve(semantic=true, include_siblings=true)
+"""dag arm: the unified `retrieve` MCP tool (internal/mcpserver/retrieve.go,
+R6.2/R4.2), semantic=True.
 
 Unlike rag/fts (this bench module's own pack_greedy over a single L0
 granularity), retrieve's own token-budgeted packing already happened
 server-side (graph.BuildContext's L0/L1/L2 tiered greedy packing) by the
 time this arm's retrieve() call returns — used_tokens/bead_ids/texts here
 come directly from retrieveOut's Items in the server's own priority order
-(anchor L0 -> ancestor L1 -> explicit sibling L1 -> implicit sibling L2 ->
-descendant L2), not re-packed a second time.
+(anchor L0 -> ancestor L1 -> descendant L2).
+
+U6 consolidation (specs/U6_clinical_note.md, docs/decisions.md 2026-07-11 U6
+entry): this module used to expose two arms, dag_nosib/dag_full, toggling
+retrieve's include_siblings flag. U5a (specs/U5_api_retrieve.md) removed
+package apc and graph's sibling tiers entirely — graph.BuildContext has had
+no sibling tier to toggle since then, so include_siblings (renamed
+include_links in U5b) has gated only the clinical_links sidecar in the
+response, never Items/TruncatedRefs' context-bundle shape, since U5a landed.
+Continuing to run dag_nosib and dag_full as two separate arms after that
+point would measure the exact same retrieval_score/token_usage twice under
+two different arm names — a real, VERIFIED redundancy (see
+internal/mcpserver/retrieve_test.go's
+TestRetrieve_IncludeLinksFalse_LeavesContextBundleUnaffected, which pins
+Items being identical regardless of include_links). This module therefore
+now exposes exactly one arm, `dag`, with include_links left at its
+server-side default (True) — the sidecar is still available (meta
+carries no clinical_links data at this layer, since this arm's own
+RetrievalResult.meta only tracks the context-bundle-shaping fields
+bench.metrics needs), but no longer creates a second, redundant arm.
 """
 
 from __future__ import annotations
@@ -24,24 +38,23 @@ from bench.retrieval.base import RetrievalResult
 
 DEFAULT_CHAIN_DEPTH = 3
 
+ARM_DAG = "dag"
+
 
 class DagRetriever:
     """Retriever protocol implementation over MedBeadsClient.retrieve
-    (semantic=True). include_siblings selects dag_nosib (False) vs.
-    dag_full (True) — see this module's docstring.
-    """
+    (semantic=True) — see this module's docstring for why include_siblings/
+    dag_nosib/dag_full are gone (U6 consolidation)."""
 
     def __init__(
         self,
         client: MedBeadsClient,
         *,
-        include_siblings: bool,
         chain_depth: int = DEFAULT_CHAIN_DEPTH,
     ) -> None:
         self._client = client
-        self._include_siblings = include_siblings
         self._chain_depth = chain_depth
-        self.arm = "dag_full" if include_siblings else "dag_nosib"
+        self.arm = ARM_DAG
 
     async def retrieve(self, *, question: str, patient_id: str, budget: int) -> RetrievalResult:
         start = time.perf_counter()
@@ -50,15 +63,14 @@ class DagRetriever:
             patient_id=patient_id,
             token_budget=budget,
             semantic=True,
-            include_siblings=self._include_siblings,
             chain_depth=self._chain_depth,
         )
         elapsed_ms = (time.perf_counter() - start) * 1000.0
 
         # Deduplicate by id, keeping the first occurrence (retrieveOut's own
         # Items order is already tier-priority order — anchor before
-        # ancestor before sibling before descendant — so "first occurrence"
-        # is "highest-priority occurrence"). Go side is fixed at the source
+        # ancestor before descendant — so "first occurrence" is
+        # "highest-priority occurrence"). Go side is fixed at the source
         # (internal/engine/graph/context.go's BuildContext now resolves each
         # Bead's final tier in a first pass, materializing tiers[] only once
         # afterward — see BuildContext's own doc comment and
@@ -104,6 +116,5 @@ class DagRetriever:
                 "granularity": [item.get("granularity", "") for item in items],
                 "provenance": [item.get("provenance", "") for item in items],
                 "truncated_ref_count": len(truncated),
-                "include_siblings": self._include_siblings,
             },
         )

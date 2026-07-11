@@ -3,13 +3,13 @@
 
 estimate_tokens mirrors internal/engine/graph/context.go's EstimateTokens
 (``len(s) / 3``, i.e. UTF-8 byte length / 3) byte-for-byte, so a token_budget
-value means the same thing across all four arms: rag/fts (this module's own
-greedy packer, see pack_greedy) and dag_nosib/dag_full (graph.BuildContext,
-already budgeted server-side) are otherwise using completely different
-packing code paths, and R8.2's "同一 token_budget" comparison is only fair if
-both sides count a token the same way — reusing a *different* Python
-tokenizer (e.g. tiktoken) here would silently reintroduce the very unfairness
-R8.2 exists to eliminate.
+value means the same thing across all three arms: rag/fts (this module's own
+greedy packer, see pack_greedy) and dag (graph.BuildContext, already
+budgeted server-side) are otherwise using completely different packing code
+paths, and R8.2's "同一 token_budget" comparison is only fair if both sides
+count a token the same way — reusing a *different* Python tokenizer (e.g.
+tiktoken) here would silently reintroduce the very unfairness R8.2 exists to
+eliminate.
 """
 
 from __future__ import annotations
@@ -30,8 +30,8 @@ class RetrievalResult:
 
     bead_ids is in retrieval order (R8.2's "取得順" — the order this arm
     actually surfaced/packed Beads in, which for rag/fts is rank order and
-    for dag_nosib/dag_full is graph.BuildContext's tier-then-timestamp
-    order); texts is the same length and order, one rendered text per
+    for dag is graph.BuildContext's tier-then-timestamp order); texts is
+    the same length and order, one rendered text per
     bead_id (empty string for an L2-only dag reference, matching
     graph.ContextItem's own "L2 carries no content text" contract). meta is
     arm-specific bookkeeping (e.g. rag's vector distances, dag's

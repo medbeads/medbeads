@@ -35,6 +35,7 @@ from typing import Any
 from bench.ingest.beads import INGEST_AUTHOR, plan_patient_root, plan_resource_bead, sort_key
 from bench.ingest.fhir import (
     clinical_resources,
+    count_dropped_superseded_document_references,
     find_patient_entry,
     index_medications_by_ref,
     load_bundle,
@@ -82,6 +83,12 @@ class PatientIngestResult:
     manifest_rows: list[ManifestRow] = field(default_factory=list)
     bead_count: int = 0
     warnings: list[str] = field(default_factory=list)
+    # U6 GO/NO-GO stat (docs/decisions.md 2026-07-11 U6 entry): count of
+    # DocumentReference resources in this bundle dropped for being
+    # status != "current" — surfaced here (never silently discarded) so
+    # bench.ingest.run's RunSummary can report the aggregate across the
+    # whole ingest run.
+    dropped_superseded_document_references: int = 0
 
 
 async def ingest_patient_bundle(client: MedBeadsClient, bundle_path: Path) -> PatientIngestResult:
@@ -141,6 +148,8 @@ async def ingest_patient_bundle(client: MedBeadsClient, bundle_path: Path) -> Pa
     ]
     warnings: list[str] = []
 
+    dropped_superseded = count_dropped_superseded_document_references(bundle)
+
     medications_by_ref = index_medications_by_ref(bundle)
 
     resources = clinical_resources(bundle)
@@ -174,6 +183,7 @@ async def ingest_patient_bundle(client: MedBeadsClient, bundle_path: Path) -> Pa
                 manifest_rows=manifest_rows,
                 bead_count=len(manifest_rows),
                 warnings=warnings,
+                dropped_superseded_document_references=dropped_superseded,
             )
 
         if planned.fhir_id:
@@ -219,6 +229,13 @@ async def ingest_patient_bundle(client: MedBeadsClient, bundle_path: Path) -> Pa
             parent_bead_id = root_bead_id
         parents = [parent_bead_id]
 
+        if planned.warning:
+            # Non-fatal per-Bead warning unrelated to parent-fallback (e.g.
+            # U6's "context.encounter[] had >1 entry" case) — surfaced the
+            # same way parent_fallback warnings already are, per "サイレント
+            # 禁止".
+            warnings.append(planned.warning)
+
         try:
             bead_id = await client.create_bead(
                 bead_type=planned.bead_type,
@@ -235,6 +252,7 @@ async def ingest_patient_bundle(client: MedBeadsClient, bundle_path: Path) -> Pa
                 manifest_rows=manifest_rows,
                 bead_count=len(manifest_rows),
                 warnings=warnings,
+                dropped_superseded_document_references=dropped_superseded,
             )
 
         if planned.fhir_id:
@@ -259,4 +277,5 @@ async def ingest_patient_bundle(client: MedBeadsClient, bundle_path: Path) -> Pa
         manifest_rows=manifest_rows,
         bead_count=len(manifest_rows),
         warnings=warnings,
+        dropped_superseded_document_references=dropped_superseded,
     )

@@ -34,6 +34,14 @@ const maxSummaryLen = 200
 
 // Flatten implements Flattener.
 func (DefaultFlattener) Flatten(b bead.Bead) (searchText, summary string) {
+	if b.Type == clinicalNoteType {
+		if searchText, summary, ok := flattenClinicalNote(b); ok {
+			return searchText, summary
+		}
+		// content.raw_text absent or not a string: fall through to the
+		// generic behavior below rather than producing an empty index entry.
+	}
+
 	var parts []string
 	collectStrings(b.Content, &parts)
 	// collectStrings walks a map, whose key iteration order Go randomizes;
@@ -53,6 +61,69 @@ func (DefaultFlattener) Flatten(b bead.Bead) (searchText, summary string) {
 		summary = fmt.Sprintf("%s: %s", b.Type, first)
 	}
 	return searchText, summary
+}
+
+// clinicalNoteType is the Bead.Type value for ingested Synthea
+// DocumentReference notes (specs/U6_clinical_note.md).
+const clinicalNoteType = "clinical_note"
+
+// flattenClinicalNote implements the clinical_note-specific flattening rule
+// (specs/U6_clinical_note.md 合意点2): search_text is content.raw_text
+// verbatim, order-preserved (no sort.Strings — unlike DefaultFlattener's
+// generic path, word order in a clinical note carries meaning), and summary
+// is the note's first heading line / first non-empty line, truncated to
+// maxSummaryLen. It reports ok=false if b.Content["raw_text"] is missing or
+// not a string, so the caller can fall back to the generic behavior instead
+// of indexing an empty note.
+func flattenClinicalNote(b bead.Bead) (searchText, summary string, ok bool) {
+	rawText, isString := b.Content["raw_text"].(string)
+	if !isString || rawText == "" {
+		return "", "", false
+	}
+
+	searchText = rawText
+	summary = fmt.Sprintf("%s: %s", b.Type, summaryLine(rawText))
+	return searchText, summary, true
+}
+
+// summaryLine picks the note-body prefix used in a clinical_note's summary:
+// the first Markdown heading line ("# ..." / "## ...", Synthea's own
+// DocumentReference narrative format — VERIFIED real sample: notes open
+// with a bare date line, e.g. "2025-11-05", before their first "# Chief
+// Complaint" heading) if one exists, else the first non-blank line
+// (leading/trailing whitespace trimmed). Preferring a heading over the
+// literal first line matters here specifically because that literal first
+// line is frequently just a date stamp, not human-meaningful text — a
+// heading is a much more useful few-dozen-char summary of what the note
+// actually is. Truncated to maxSummaryLen. Returns "" if s has no non-blank
+// line at all, so the caller's summary degrades to "clinical_note: " rather
+// than panicking or indexing whitespace.
+func summaryLine(s string) string {
+	lines := strings.Split(s, "\n")
+
+	firstNonEmpty := ""
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if firstNonEmpty == "" {
+			firstNonEmpty = trimmed
+		}
+		if strings.HasPrefix(trimmed, "#") {
+			return truncateSummary(trimmed)
+		}
+	}
+	return truncateSummary(firstNonEmpty)
+}
+
+// truncateSummary bounds s to maxSummaryLen bytes, matching DefaultFlattener's
+// own truncation rule for its generic summary field.
+func truncateSummary(s string) string {
+	if len(s) > maxSummaryLen {
+		return s[:maxSummaryLen]
+	}
+	return s
 }
 
 // collectStrings recursively appends every string value reachable from v

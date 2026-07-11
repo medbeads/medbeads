@@ -30,17 +30,28 @@ this task explicitly asks to keep. Excluded, and why:
     clinical content without adding a distinct timestamp semantic v2 mapped;
     kept out to match v2's mapped set exactly (docs/mapping.md lists
     MedicationRequest, not these two).
-  - DocumentReference: the task instructs treating it as non-clinical for
-    this M1 slice (ground-truth manifest, not full parity with v2's Timeline
-    display list) — despite docs/fhir_timeline_mapping.md showing it as
-    timeline-visible in v2, its content is a base64 narrative blob layered
-    on top of the discrete resources already captured elsewhere, which would
-    make ground-truth attribution ambiguous (the same clinical fact appears
-    twice: once structured, once as prose).
   - ImagingStudy: present in Synthea output and listed as a "clinically
     important, timeline-visible" type in docs/mapping.md ("今回追加"), so it
     IS included below despite carrying no evidence/BLOB handling in this M1
     slice (content is just study/series metadata JSON, no pixel data).
+
+DocumentReference is now INCLUDED (U6, specs/U6_clinical_note.md), reversing
+the earlier M1-slice decision to treat it as non-clinical: it is ingested as
+a dedicated `clinical_note` Bead (see bench.ingest.beads), not a generic
+`fhir_documentreference` Bead — its base64 narrative is decoded to
+raw_text, so the earlier "same fact appears twice, once structured once as
+prose" ambiguity concern is superseded by treating the note as its own
+distinct clinical artifact (the free-text/assessment narrative a discrete
+FHIR resource cannot carry), not a duplicate of the structured resources.
+Only `status == "current"` DocumentReferences are ingested (see
+clinical_resources below) — Synthea reissues a new cumulative
+DocumentReference at almost every encounter and marks the prior one
+`superseded` (VERIFIED: 97% of DocumentReference resources in a
+~/medbeads-synthea/output/fhir/ sample are `superseded`), so ingesting every
+status would produce ~37K near-duplicate notes across the corpus and defeat
+FTS/retrieve/judge ground-truth attribution. This is a user ruling
+(docs/decisions.md 2026-07-11 U6 entry): past-narrative history is
+discarded, not preserved as an amends chain, in this unit.
 
 Patient is handled separately (ingest.py's root-Bead special case), not
 through this filter.
@@ -53,8 +64,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-# Clinical resource types ingested as fhir_<type> Beads (Patient excluded:
-# handled separately as the root patient_registration Bead).
+# Clinical resource types ingested as Beads (Patient excluded: handled
+# separately as the root patient_registration Bead). DocumentReference is
+# ingested as a `clinical_note` Bead (bench.ingest.beads), not
+# `fhir_documentreference` like the rest of this set — see this module's
+# docstring for the U6 status=="current" filter that additionally applies to
+# it (clinical_resources below).
 INCLUDED_RESOURCE_TYPES: frozenset[str] = frozenset(
     {
         "Encounter",
@@ -66,6 +81,7 @@ INCLUDED_RESOURCE_TYPES: frozenset[str] = frozenset(
         "Immunization",
         "AllergyIntolerance",
         "ImagingStudy",
+        "DocumentReference",
     }
 )
 
@@ -82,7 +98,6 @@ EXCLUDED_RESOURCE_TYPES: frozenset[str] = frozenset(
         "Device",
         "SupplyDelivery",
         "Provenance",
-        "DocumentReference",
         "Medication",
         "MedicationAdministration",
     }
@@ -147,6 +162,17 @@ def find_patient_entry(bundle: dict[str, Any]) -> dict[str, Any] | None:
 def clinical_resources(bundle: dict[str, Any]) -> list[FhirResource]:
     """Every entry in bundle whose resourceType is in INCLUDED_RESOURCE_TYPES.
 
+    A DocumentReference entry with status != "current" is dropped here
+    (never appears in the returned list at all) — the U6 superseded-note
+    filter (see this module's docstring: Synthea reissues a cumulative
+    DocumentReference at nearly every encounter and marks the prior one
+    superseded, so an unconditional include would produce ~37K near-duplicate
+    notes across the corpus). Use count_dropped_superseded_document_references
+    on the same bundle for the "サイレント禁止" drop count ingest.py surfaces
+    in its per-patient stats — kept as a separate pass rather than a tuple
+    return here so every existing caller that only wants the resource list
+    (bench.scenarios.generate, tests) is unaffected by this filter's addition.
+
     Patient is deliberately excluded here too (ingest.py treats it as the
     root Bead via find_patient_entry, not via this generic list).
     """
@@ -155,6 +181,8 @@ def clinical_resources(bundle: dict[str, Any]) -> list[FhirResource]:
         resource = entry.get("resource", {})
         rtype = resource.get("resourceType")
         if rtype not in INCLUDED_RESOURCE_TYPES:
+            continue
+        if rtype == "DocumentReference" and resource.get("status") != "current":
             continue
         fhir_id = resource.get("id", "")
         out.append(
@@ -166,6 +194,23 @@ def clinical_resources(bundle: dict[str, Any]) -> list[FhirResource]:
             )
         )
     return out
+
+
+def count_dropped_superseded_document_references(bundle: dict[str, Any]) -> int:
+    """The number of DocumentReference entries in bundle that
+    clinical_resources drops for being status != "current" — the U6
+    GO/NO-GO stat (docs/decisions.md 2026-07-11 U6 entry: "サイレントに捨て
+    ない", must be counted in ingest stats, not silently dropped). A separate
+    pass over bundle rather than a clinical_resources side-channel, so
+    callers that don't need this count (the common case) pay no API-shape
+    cost for it.
+    """
+    dropped = 0
+    for entry in bundle.get("entry", []):
+        resource = entry.get("resource", {})
+        if resource.get("resourceType") == "DocumentReference" and resource.get("status") != "current":
+            dropped += 1
+    return dropped
 
 
 def index_medications_by_ref(bundle: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -246,6 +291,7 @@ _DATE_FIELD_PRIORITY: dict[str, tuple[str, ...]] = {
     "Immunization": ("occurrenceDateTime",),
     "AllergyIntolerance": ("recordedDate", "onsetDateTime"),
     "ImagingStudy": ("started",),
+    "DocumentReference": ("date",),
 }
 
 # Sentinel timestamp for a resource with no usable date field at all, so it
@@ -277,11 +323,59 @@ def resource_timestamp(resource: FhirResource) -> str:
     return _NO_DATE_SENTINEL
 
 
-def resource_encounter_reference(resource: FhirResource) -> str | None:
-    """The `encounter.reference` value on resource, if present."""
+def resource_encounter_reference(resource: FhirResource) -> tuple[str | None, bool]:
+    """The Encounter reference for resource, and whether it came from the
+    nested context.encounter[] path (True) rather than the top-level
+    `encounter` field (False/None case).
+
+    Most included resource types carry a top-level `encounter.reference`
+    (checked first, unchanged from the original single-field behavior).
+    DocumentReference instead nests it under `context.encounter[0].reference`
+    (U6, specs/U6_clinical_note.md: VERIFIED 983/983 real DocumentReferences
+    resolve their Encounter parent this way, always exactly one entry) — this
+    nested path is only consulted when the top-level field is absent, so a
+    resource carrying both would keep the top-level value (there is no
+    real-data case observed where both are present and disagree, but
+    top-level-wins keeps the original behavior's priority for every
+    non-DocumentReference caller unchanged).
+
+    Returns (None, False) if neither path yields a usable reference.
+    """
     encounter = resource.data.get("encounter")
     if isinstance(encounter, dict):
         ref = encounter.get("reference")
         if isinstance(ref, str) and ref:
-            return ref
+            return ref, False
+
+    context = resource.data.get("context")
+    if isinstance(context, dict):
+        nested = context.get("encounter")
+        if isinstance(nested, list) and nested:
+            first = nested[0]
+            if isinstance(first, dict):
+                ref = first.get("reference")
+                if isinstance(ref, str) and ref:
+                    return ref, True
+
+    return None, False
+
+
+def resource_encounter_reference_multiplicity_warning(resource: FhirResource) -> str | None:
+    """A warning string if resource's nested context.encounter[] carries more
+    than one entry (only the first is ever used as the parent — see
+    resource_encounter_reference), or None if there is nothing to warn about.
+    VERIFIED (real Synthea sample): every DocumentReference's context.encounter
+    has exactly one entry, so this should never fire in practice, but the
+    lead's "サイレント禁止" ruling requires it be counted/logged if it ever
+    does rather than silently taking [0] and moving on.
+    """
+    context = resource.data.get("context")
+    if not isinstance(context, dict):
+        return None
+    nested = context.get("encounter")
+    if isinstance(nested, list) and len(nested) > 1:
+        return (
+            f"{resource.resource_type} {resource.fhir_id}: context.encounter has "
+            f"{len(nested)} entries, using only the first as parent"
+        )
     return None

@@ -1,5 +1,5 @@
 """CLI: `uv run python -m bench.run --scenarios <yaml> --data-dir <dir> \
---medbeadsd <bin> --embedder <url> --arms rag,fts,dag_nosib,dag_full \
+--medbeadsd <bin> --embedder <url> --arms rag,fts,dag \
 --budget 2000 --out runs/<name>/`
 
 Runs every scenario x arm pair (resume-aware, skipping any (scenario_id,
@@ -64,7 +64,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         default=FTS_QUERY_MODE_SAFE_WORD,
         help=(
             f"'{FTS_QUERY_MODE_SAFE_WORD}' (default): rag gets the full free-text question, "
-            f"fts/dag_nosib/dag_full get an FTS5-safe single word. "
+            f"fts/dag get an FTS5-safe single word. "
             f"'{FTS_QUERY_MODE_SHARED_SAFE_WORD}': every arm, including rag, gets the same "
             "FTS5-safe single word (an input-matched control run — see bench/bench/run/pipeline.py's "
             "docstring above FTS_QUERY_MODE_SAFE_WORD). A full benchmark run should collect BOTH "

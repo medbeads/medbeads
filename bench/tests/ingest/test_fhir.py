@@ -11,6 +11,7 @@ from bench.ingest.fhir import (
     EXCLUDED_RESOURCE_TYPES,
     INCLUDED_RESOURCE_TYPES,
     clinical_resources,
+    count_dropped_superseded_document_references,
     find_patient_entry,
     is_patient_bundle_file,
     iter_patient_bundle_files,
@@ -32,6 +33,77 @@ def test_fixture_directory_exists() -> None:
 
 def test_included_and_excluded_types_are_disjoint() -> None:
     assert INCLUDED_RESOURCE_TYPES.isdisjoint(EXCLUDED_RESOURCE_TYPES)
+
+
+def test_document_reference_is_included_not_excluded() -> None:
+    # U6 (specs/U6_clinical_note.md) reverses the earlier M1-slice decision
+    # to exclude DocumentReference: it is now ingested (as a clinical_note
+    # Bead, per bench.ingest.beads), not skipped.
+    assert "DocumentReference" in INCLUDED_RESOURCE_TYPES
+    assert "DocumentReference" not in EXCLUDED_RESOURCE_TYPES
+
+
+def test_clinical_resources_drops_superseded_document_reference() -> None:
+    bundle = {
+        "resourceType": "Bundle",
+        "entry": [
+            {
+                "fullUrl": "urn:uuid:doc-current",
+                "resource": {
+                    "resourceType": "DocumentReference",
+                    "id": "doc-current",
+                    "status": "current",
+                    "date": "2024-01-01T00:00:00Z",
+                    "context": {"encounter": [{"reference": "urn:uuid:enc-1"}]},
+                    "content": [{"attachment": {"data": "aGVsbG8="}}],
+                },
+            },
+            {
+                "fullUrl": "urn:uuid:doc-superseded",
+                "resource": {
+                    "resourceType": "DocumentReference",
+                    "id": "doc-superseded",
+                    "status": "superseded",
+                    "date": "2023-01-01T00:00:00Z",
+                    "context": {"encounter": [{"reference": "urn:uuid:enc-0"}]},
+                    "content": [{"attachment": {"data": "b2xk"}}],
+                },
+            },
+        ],
+    }
+
+    resources = clinical_resources(bundle)
+    doc_refs = [r for r in resources if r.resource_type == "DocumentReference"]
+    assert [r.fhir_id for r in doc_refs] == ["doc-current"]
+
+    assert count_dropped_superseded_document_references(bundle) == 1
+
+
+def test_clinical_resources_drops_document_reference_without_status() -> None:
+    # A DocumentReference missing the `status` field must be dropped too (only
+    # status == "current" is ingested): `.get("status")` returns None and
+    # `None != "current"`, so an absent/null status is filtered out exactly
+    # like superseded. Pins the "absent status does not slip through" case
+    # (data-reviewer non-blocking coverage note, 2026-07-11).
+    bundle = {
+        "resourceType": "Bundle",
+        "entry": [
+            {
+                "fullUrl": "urn:uuid:doc-nostatus",
+                "resource": {
+                    "resourceType": "DocumentReference",
+                    "id": "doc-nostatus",
+                    "date": "2024-01-01T00:00:00Z",
+                    "context": {"encounter": [{"reference": "urn:uuid:enc-1"}]},
+                    "content": [{"attachment": {"data": "aGVsbG8="}}],
+                },
+            },
+        ],
+    }
+
+    resources = clinical_resources(bundle)
+    doc_refs = [r for r in resources if r.resource_type == "DocumentReference"]
+    assert doc_refs == []
 
 
 def test_is_patient_bundle_file_excludes_synthea_sidecars() -> None:
@@ -120,16 +192,65 @@ def test_resource_encounter_reference() -> None:
     bundle = load_bundle(FIXTURE_BUNDLE)
     resources = clinical_resources(bundle)
     immunizations = [r for r in resources if r.resource_type == "Immunization"]
-    ref = resource_encounter_reference(immunizations[0])
+    ref, from_nested = resource_encounter_reference(immunizations[0])
     assert ref == "urn:uuid:b4b30dae-6234-4b60-8ade-1ea65d783b80"
+    assert from_nested is False
 
     # This fixture's Condition/Procedure/Observation/MedicationRequest use
-    # an older `context` reference field, not `encounter` — per v2's
-    # import_fhir.py semantics (which this module preserves verbatim),
-    # resource_encounter_reference must return None here (not silently
-    # treat `context` as if it were `encounter`), so plan_resource_bead's
-    # generic "fall back to Patient root" branch is what handles them, not
-    # a fabricated Encounter edge.
+    # an older `context: {reference: ...}` field (DSTU2-flavored, a bare
+    # reference object, not R4 DocumentReference's `context: {encounter:
+    # [...]}` shape) — per v2's import_fhir.py semantics (which this module
+    # preserves verbatim), resource_encounter_reference must return
+    # (None, False) here (neither the top-level `encounter` field nor a
+    # `context.encounter[]` list is present — this fixture's `context` has
+    # no `encounter` key at all), so plan_resource_bead's generic "fall back
+    # to Patient root" branch is what handles them, not a fabricated
+    # Encounter edge.
     conditions = [r for r in resources if r.resource_type == "Condition"]
     assert conditions
-    assert resource_encounter_reference(conditions[0]) is None
+    assert resource_encounter_reference(conditions[0]) == (None, False)
+
+
+def test_resource_encounter_reference_nested_context_encounter_array() -> None:
+    """U6 (specs/U6_clinical_note.md): a resource with no top-level
+    `encounter` field but a nested `context.encounter[0].reference` (the
+    real DocumentReference shape) should resolve via the nested path, with
+    from_nested=True."""
+    from bench.ingest.fhir import FhirResource
+
+    resource = FhirResource(
+        resource_type="DocumentReference",
+        fhir_id="doc-1",
+        full_url="urn:uuid:doc-1",
+        data={
+            "resourceType": "DocumentReference",
+            "id": "doc-1",
+            "status": "current",
+            "context": {"encounter": [{"reference": "urn:uuid:encounter-1"}]},
+        },
+    )
+    ref, from_nested = resource_encounter_reference(resource)
+    assert ref == "urn:uuid:encounter-1"
+    assert from_nested is True
+
+
+def test_resource_encounter_reference_top_level_wins_over_nested() -> None:
+    """A resource carrying both a top-level `encounter` and a nested
+    `context.encounter[]` keeps the top-level value (resource_encounter_
+    reference's documented priority — see its own doc comment)."""
+    from bench.ingest.fhir import FhirResource
+
+    resource = FhirResource(
+        resource_type="Observation",
+        fhir_id="obs-1",
+        full_url=None,
+        data={
+            "resourceType": "Observation",
+            "id": "obs-1",
+            "encounter": {"reference": "urn:uuid:top-level-encounter"},
+            "context": {"encounter": [{"reference": "urn:uuid:nested-encounter"}]},
+        },
+    )
+    ref, from_nested = resource_encounter_reference(resource)
+    assert ref == "urn:uuid:top-level-encounter"
+    assert from_nested is False

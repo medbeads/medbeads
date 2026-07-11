@@ -46,7 +46,7 @@ def test_answer_never_contains_text_outside_context(tmp_path: Path) -> None:
     with TranscriptLogger(tmp_path / "t.jsonl") as transcript:
         client = FakeLlmClient(transcript=transcript)
         result = asyncio.run(
-            client.answer(question="q", context_texts=context, scenario_id="s1", arm="dag_full")
+            client.answer(question="q", context_texts=context, scenario_id="s1", arm="dag")
         )
     assert result.answer_text in context[0] or result.answer_text == "Not stated in the record."
 

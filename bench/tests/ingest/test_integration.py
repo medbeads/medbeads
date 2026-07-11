@@ -160,7 +160,7 @@ def test_medication_reference_bead_gets_rxnorm_antigen(
 ) -> None:
     """Reviewer-mandated fix verification: ingest one real Bundle known to
     contain a `medicationReference`-shaped MedicationRequest (no inline
-    `medicationCodeableConcept`), then confirm via search_antigens that its
+    `medicationCodeableConcept`), then confirm via search_tags that its
     server-computed tags (index.IndexBead's antigen.Extract, run at
     projection time — v3.1 moved this off create_bead entirely, see
     get_bead's doc comment) include an `rxnorm:` entry — i.e. this
@@ -208,11 +208,11 @@ async def _run_medication_reference(tmp_path: Path, medbeadsd_binary: Path, synt
 
             # Derive the exact rxnorm: tag antigen.Extract should have
             # produced from this Bead's own synthesized coding[], then
-            # confirm the projection (bead_antigens, via search_antigens)
-            # actually carries it for this bead_id — a precise round-trip
-            # check, not merely "get_bead returned something antigen-shaped"
-            # (which is no longer possible post-v3.1: get_bead's Bead never
-            # carries tags at all).
+            # confirm the projection (bead_tags, via search_tags) actually
+            # carries it for this bead_id — a precise round-trip check, not
+            # merely "get_bead returned something antigen-shaped" (which is
+            # no longer possible post-v3.1: get_bead's Bead never carries
+            # tags at all).
             codings = content["medicationCodeableConcept"].get("coding", [])
             rxnorm_codes = [
                 c["code"]
@@ -222,13 +222,13 @@ async def _run_medication_reference(tmp_path: Path, medbeadsd_binary: Path, synt
             if not rxnorm_codes:
                 continue
             for code in rxnorm_codes:
-                hits = await client.search_antigens(f"rxnorm:{code}")
+                hits = await client.search_tags(f"rxnorm:{code}")
                 if any(h["id"] == bead["id"] for h in hits):
                     found_rxnorm = True
 
         assert found_rxnorm, (
             "no medicationReference-shaped MedicationRequest Bead's rxnorm: tag was found via "
-            "search_antigens after inline medication-code synthesis"
+            "search_tags after inline medication-code synthesis"
         )
 
 

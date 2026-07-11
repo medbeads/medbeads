@@ -35,7 +35,7 @@ from bench.metrics.temporal import TEMPORAL_ANSWER_PROMPT_SUFFIX, TemporalOrderS
 from bench.metrics.token import TokenUsage, aggregate_token_usage, token_usage_from_answer
 from bench.perf.stats import compute_latency_stats
 from bench.retrieval.base import RetrievalResult, Retriever
-from bench.retrieval.dag import DagRetriever
+from bench.retrieval.dag import ARM_DAG, DagRetriever
 from bench.retrieval.fts import FtsRetriever
 from bench.retrieval.metrics import RetrievalScore, score_retrieval
 from bench.retrieval.rag import RagRetriever
@@ -47,9 +47,11 @@ logger = logging.getLogger(__name__)
 
 ARM_RAG = "rag"
 ARM_FTS = "fts"
-ARM_DAG_NOSIB = "dag_nosib"
-ARM_DAG_FULL = "dag_full"
-ALL_ARMS = (ARM_RAG, ARM_FTS, ARM_DAG_NOSIB, ARM_DAG_FULL)
+# U6 (specs/U6_clinical_note.md): dag_nosib/dag_full consolidated into a
+# single `dag` arm — see bench.retrieval.dag's module docstring for why
+# (U5a removed graph's sibling tiers entirely, so the two arms had measured
+# identical numbers since then).
+ALL_ARMS = (ARM_RAG, ARM_FTS, ARM_DAG)
 
 DEFAULT_BUDGET = 2000
 
@@ -61,8 +63,8 @@ DEFAULT_BUDGET = 2000
 # produces on scenario.question (a full, punctuated Japanese sentence) fed
 # unquoted. This module's scenario questions ALWAYS have this shape
 # (bench.scenarios.generate's four templates are all full sentences), so
-# run_bench cannot pass scenario.question to the fts/dag_nosib/dag_full
-# arms as-is without hitting the same real error every single call — this
+# run_bench cannot pass scenario.question to the fts/dag arms as-is without
+# hitting the same real error every single call — this
 # helper is promoted from that test-only workaround into production code
 # for exactly that reason. This is a known, reported limitation of R8.2's
 # arms, not a fix to index.Search's own MATCH-string escaping (out of this
@@ -76,7 +78,7 @@ DEFAULT_BUDGET = 2000
 #
 #   - "safe_word" (default): rag = full free-text question (it is pure
 #     vector search, rag_search, and does not go through FTS5 MATCH at
-#     all, so it never needed the reduction); fts/dag_nosib/dag_full =
+#     all, so it never needed the reduction); fts/dag =
 #     fts_safe_query(question). This is the original, higher-fidelity-for-
 #     rag behavior and the right default for a single-arm sanity run.
 #   - "shared_safe_word": every arm, including rag, gets
@@ -361,10 +363,8 @@ def _build_retriever(arm: str, client: MedBeadsClient) -> Retriever:
         return RagRetriever(client)
     if arm == ARM_FTS:
         return FtsRetriever(client)
-    if arm == ARM_DAG_NOSIB:
-        return DagRetriever(client, include_siblings=False)
-    if arm == ARM_DAG_FULL:
-        return DagRetriever(client, include_siblings=True)
+    if arm == ARM_DAG:
+        return DagRetriever(client)
     raise ValueError(f"_build_retriever: unknown arm {arm!r} (expected one of {ALL_ARMS})")
 
 
@@ -417,8 +417,8 @@ async def _run_one(
     fts_query_mode: str = FTS_QUERY_MODE_SAFE_WORD,
 ) -> ArmResult:
     retriever = _build_retriever(arm, client)
-    # fts/dag_nosib/dag_full always route through FTS5 MATCH underneath and
-    # need fts_safe_query's single-word form; rag's own query depends on
+    # fts/dag always route through FTS5 MATCH underneath and need
+    # fts_safe_query's single-word form; rag's own query depends on
     # fts_query_mode — see this module's docstring above
     # FTS_QUERY_MODE_SAFE_WORD / _retrieval_query_for_arm.
     retrieval_query = _retrieval_query_for_arm(scenario.question, arm, fts_query_mode)

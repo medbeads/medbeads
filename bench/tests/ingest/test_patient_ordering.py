@@ -6,11 +6,19 @@ deterministic unit tests independent of the real Synthea corpus.
 test_integration.py's real-medbeadsd test covers the end-to-end
 parents[0]-is-the-Encounter-Bead-ID assertion the reviewer specifically
 asked for, using real data.
+
+Also covers U6's DocumentReference -> clinical_note end-to-end ingest path
+(specs/U6_clinical_note.md): status=="current" -> ingested as clinical_note
+with decoded raw_text and an Encounter parent; status=="superseded" ->
+dropped entirely, counted in dropped_superseded_document_references. All
+fixtures here are hand-written synthetic text, never real-store note
+content (PHI rule).
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import json
 from pathlib import Path
@@ -199,3 +207,105 @@ def test_allergy_intolerance_patient_root_parent_is_not_flagged_as_fallback(tmp_
     allergy_row = next(r for r in result.manifest_rows if r.fhir_type == "AllergyIntolerance")
     assert allergy_row.parent_fallback is False
     assert result.warnings == []
+
+
+def _b64(text: str) -> str:
+    return base64.b64encode(text.encode("utf-8")).decode("ascii")
+
+
+def test_current_document_reference_ingested_as_clinical_note_with_encounter_parent(tmp_path: Path) -> None:
+    """U6: a status=="current" DocumentReference must be ingested as a
+    clinical_note Bead with base64-decoded raw_text and no base64/coding[]
+    in content, parented to its nested context.encounter[0]."""
+    note_text = "Assessment\nSynthetic note: patient stable, no acute findings."
+    bundle = {
+        "resourceType": "Bundle",
+        "entry": [
+            _patient_entry(),
+            {
+                "fullUrl": "urn:uuid:enc-1",
+                "resource": {
+                    "resourceType": "Encounter",
+                    "id": "enc-1",
+                    "period": {"start": "2024-06-01T09:00:00+00:00"},
+                },
+            },
+            {
+                "fullUrl": "urn:uuid:doc-current",
+                "resource": {
+                    "resourceType": "DocumentReference",
+                    "id": "doc-current",
+                    "status": "current",
+                    "date": "2024-06-01T10:00:00+00:00",
+                    "type": {
+                        "coding": [
+                            {"system": "http://loinc.org", "code": "34117-2", "display": "History and physical note"}
+                        ]
+                    },
+                    "context": {"encounter": [{"reference": "urn:uuid:enc-1"}]},
+                    "content": [{"attachment": {"contentType": "text/plain", "data": _b64(note_text)}}],
+                },
+            },
+        ],
+    }
+    bundle_path = _write_bundle(tmp_path, bundle)
+    client = FakeMedBeadsClient()
+
+    result = asyncio.run(ingest_patient_bundle(client, bundle_path))
+
+    assert result.ok, result.error
+    assert result.dropped_superseded_document_references == 0
+
+    note_calls = [c for c in client.calls if c["bead_type"] == "clinical_note"]
+    assert len(note_calls) == 1
+    note_call = note_calls[0]
+
+    assert note_call["content"]["raw_text"] == note_text
+    assert note_call["content"]["status"] == "current"
+    assert note_call["content"]["source_system"] == "synthea"
+    assert note_call["content"]["note_type_code"] == "34117-2"
+
+    # Never carries the raw base64 or a coding[] structure.
+    raw_b64 = _b64(note_text)
+    for value in note_call["content"].values():
+        assert value != raw_b64
+    assert "coding" not in note_call["content"]
+    assert "type" not in note_call["content"]
+
+    # Parent is the Encounter Bead, not the Patient root.
+    encounter_bead_id = next(c["bead_id"] for c in client.calls if c["bead_type"] == "fhir_encounter")
+    assert note_call["parents"] == [encounter_bead_id]
+
+    note_row = next(r for r in result.manifest_rows if r.fhir_type == "DocumentReference")
+    assert note_row.parent_fallback is False
+
+
+def test_superseded_document_reference_is_dropped_entirely(tmp_path: Path) -> None:
+    """U6 user ruling (docs/decisions.md 2026-07-11 U6 entry): a
+    status=="superseded" DocumentReference must never become a Bead at all,
+    and must be counted in dropped_superseded_document_references."""
+    bundle = {
+        "resourceType": "Bundle",
+        "entry": [
+            _patient_entry(),
+            {
+                "fullUrl": "urn:uuid:doc-old",
+                "resource": {
+                    "resourceType": "DocumentReference",
+                    "id": "doc-old",
+                    "status": "superseded",
+                    "date": "2023-01-01T00:00:00+00:00",
+                    "content": [{"attachment": {"contentType": "text/plain", "data": _b64("stale synthetic note")}}],
+                },
+            },
+        ],
+    }
+    bundle_path = _write_bundle(tmp_path, bundle)
+    client = FakeMedBeadsClient()
+
+    result = asyncio.run(ingest_patient_bundle(client, bundle_path))
+
+    assert result.ok, result.error
+    assert result.dropped_superseded_document_references == 1
+    assert not any(c["bead_type"] == "clinical_note" for c in client.calls)
+    assert not any(r.fhir_type == "DocumentReference" for r in result.manifest_rows)

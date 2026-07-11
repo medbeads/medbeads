@@ -72,6 +72,17 @@ def main(argv: list[str] | None = None) -> int:
         f"{summary.total_beads} beads, {summary.failed_patients} failed",
         file=sys.stderr,
     )
+    if summary.dropped_superseded_document_references:
+        # U6 GO/NO-GO stat (docs/decisions.md 2026-07-11 U6 entry): never
+        # silent — Synthea reissues a superseded DocumentReference at nearly
+        # every encounter, so this count is normally large and expected, not
+        # a sign of a bug; see run_manifest.json's own field of the same
+        # name for the persisted record.
+        print(
+            f"  {summary.dropped_superseded_document_references} superseded DocumentReference(s) "
+            "dropped (status != 'current' — see specs/U6_clinical_note.md)",
+            file=sys.stderr,
+        )
     for failure in summary.failures:
         print(f"  FAILED {failure['bundle']}: {failure['error']}", file=sys.stderr)
     if summary.parent_fallback_warnings:

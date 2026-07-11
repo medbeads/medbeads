@@ -36,10 +36,13 @@ Four pilot categories (lead spec, each a distinct reasoning_type):
      は?" evidence = every MedicationRequest Bead sharing a risk: antigen
      (via antigen_dict.risk_antigens_for_rxnorm on each MedicationRequest's
      resolved rxnorm code) with at least one other MedicationRequest in the
-     same patient — this is the category sibling_link's effect should show
-     up most clearly in (dag_full vs. dag_nosib), since APC's own scoring
-     is exactly "共通 antigen で sibling_link" (R5) over this same
-     risk:/organ: antigen family.
+     same patient. (Historical note: this category was originally designed
+     to show up most clearly in a dag_full-vs-dag_nosib arm comparison, via
+     APC's sibling_link mechanism over this same risk:/organ: antigen
+     family. U5a removed sibling_link/APC entirely and U6 consolidated
+     dag_full/dag_nosib into a single `dag` arm — see bench.retrieval.dag's
+     docstring — so this category's evidence set is now scored the same as
+     any other category's, not via a since-removed sibling-link path.)
 
 Every template is a pure function of (bundle dict, PatientManifest) — same
 bytes in, same Scenario list out (this module's own determinism contract;

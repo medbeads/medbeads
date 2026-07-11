@@ -1,9 +1,9 @@
 """render_l0: Python port of internal/engine/graph/context.go's renderL0, so
 rag/fts's own greedily-packed L0 text is byte-for-byte comparable (same
-rendering rule, hence the same estimate_tokens cost) to what dag_nosib/
-dag_full's L0 anchor tier actually sends an agent — R8.2's "チャンク = Bead
-に統一" is only a fair comparison if every arm renders the same Bead content
-into text the same way.
+rendering rule, hence the same estimate_tokens cost) to what dag's L0
+anchor tier actually sends an agent — R8.2's "チャンク = Bead に統一" is only
+a fair comparison if every arm renders the same Bead content into text the
+same way.
 
 Mirrors renderL0/collectContentStrings exactly: walk every string value
 reachable from Content (recursively through dicts/lists), sort them

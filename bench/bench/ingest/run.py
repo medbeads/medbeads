@@ -36,6 +36,11 @@ class RunSummary:
     # "サイレント禁止": these must be visible here and in run_manifest.json,
     # not just as a per-row parent_fallback flag in manifest.jsonl).
     parent_fallback_warnings: list[str] = field(default_factory=list)
+    # U6 GO/NO-GO stat, summed across every patient in this run: total
+    # DocumentReference resources dropped for status != "current" (see
+    # bench.ingest.fhir.clinical_resources / count_dropped_superseded_
+    # document_references and docs/decisions.md's 2026-07-11 U6 entry).
+    dropped_superseded_document_references: int = 0
 
 
 def _git_commit(repo_dir: Path) -> str:
@@ -85,6 +90,7 @@ async def run_ingest(
     failed: list[PatientIngestResult] = []
     total_beads = 0
     parent_fallback_warnings: list[str] = []
+    dropped_superseded_document_references = 0
 
     data_dir.mkdir(parents=True, exist_ok=True)
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
@@ -98,6 +104,7 @@ async def run_ingest(
                     manifest_file.write("\n")
                 manifest_file.flush()
                 total_beads += result.bead_count
+                dropped_superseded_document_references += result.dropped_superseded_document_references
                 if result.ok:
                     ok_count += 1
                 else:
@@ -118,6 +125,7 @@ async def run_ingest(
         finished_at=finished_at,
         failures=[{"bundle": str(r.bundle_path), "error": r.error or ""} for r in failed],
         parent_fallback_warnings=parent_fallback_warnings,
+        dropped_superseded_document_references=dropped_superseded_document_references,
     )
 
     run_manifest = {
@@ -133,6 +141,7 @@ async def run_ingest(
         "finished_at": summary.finished_at,
         "failures": summary.failures,
         "parent_fallback_warnings": summary.parent_fallback_warnings,
+        "dropped_superseded_document_references": summary.dropped_superseded_document_references,
     }
     run_manifest_path.parent.mkdir(parents=True, exist_ok=True)
     with run_manifest_path.open("w", encoding="utf-8") as f:

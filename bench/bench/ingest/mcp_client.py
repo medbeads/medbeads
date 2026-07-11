@@ -44,10 +44,12 @@ class MedBeadsClient:
         # embedder_url is additive/opt-in (bench/README.md's "Embedding
         # sidecar" invocation): omitting it reproduces the exact args this
         # client has always passed, so every existing caller (bench.ingest,
-        # bench.perf) is unaffected. Needed by bench.retrieval's rag/dag_full/
-        # dag_nosib arms (R8.2), which require retrieve(semantic=true)/
-        # rag_search — both tool-level errors without -embedder configured
-        # server-side (see internal/mcpserver/retrieve.go's own check).
+        # bench.perf) is unaffected. Needed by bench.retrieval's rag/dag arms
+        # (R8.2, dag consolidated from dag_full/dag_nosib in U6 — see
+        # bench.retrieval.dag's docstring), which require
+        # retrieve(semantic=true)/rag_search — both tool-level errors
+        # without -embedder configured server-side (see
+        # internal/mcpserver/retrieve.go's own check).
         if embedder_url:
             args += ["-embedder", embedder_url]
             if embed_model:
@@ -143,24 +145,25 @@ class MedBeadsClient:
         carries antigens/tags — those are index-projection-only now (Bead
         itself has no Antigens field at all; see internal/engine/bead's
         Bead.Antigens removal). To check what tags a Bead was
-        server-side-derived to carry, use search_antigens instead (it
-        queries bead_antigens, which IndexBead populates via
-        antigen.Extract at index time, not at create_bead time).
+        server-side-derived to carry, use search_tags instead (it queries
+        bead_tags, which IndexBead populates via antigen.Extract at index
+        time, not at create_bead time).
         """
         out = await self.call_tool("get_bead", {"id": bead_id})
         return out["bead"]
 
-    async def search_antigens(self, antigen: str, *, patient_id: str | None = None) -> list[dict[str, Any]]:
-        """Every Bead carrying `antigen` in the bead_antigens projection
-        (internal/mcpserver/tools_read.go's search_antigens tool), i.e. the
-        server-side antigen.Extract(b.Type, b.Content) result at index time
-        — the only place a Bead's derived tags are queryable after v3.1
-        removed Bead.Antigens (see get_bead's doc comment).
+    async def search_tags(self, tag: str, *, patient_id: str | None = None) -> list[dict[str, Any]]:
+        """Every Bead carrying `tag` in the bead_tags projection
+        (internal/mcpserver/tools_read.go's search_tags tool, U5b renamed
+        from search_antigens/antigen), i.e. the server-side
+        antigen.Extract(b.Type, b.Content) result at index time — the only
+        place a Bead's derived tags are queryable after v3.1 removed
+        Bead.Antigens (see get_bead's doc comment).
         """
-        args: dict[str, Any] = {"antigen": antigen}
+        args: dict[str, Any] = {"tag": tag}
         if patient_id is not None:
             args["patient_id"] = patient_id
-        out = await self.call_tool("search_antigens", args)
+        out = await self.call_tool("search_tags", args)
         return out.get("beads", [])
 
     async def retrieve(
@@ -170,25 +173,30 @@ class MedBeadsClient:
         patient_id: str = "",
         token_budget: int | None = None,
         semantic: bool | None = None,
-        include_siblings: bool | None = None,
+        include_links: bool | None = None,
         chain_depth: int | None = None,
-        antigens: list[str] | None = None,
+        tags: list[str] | None = None,
         types: list[str] | None = None,
     ) -> dict[str, Any]:
         """Call the unified `retrieve` tool (R6.2, internal/mcpserver/retrieve.go),
         returning its full structuredContent (anchor_ids/items/truncated_refs/
         budget_tokens/used_tokens — see retrieveOut). Used by bench.perf to
         measure the "context bundle p95 <500ms" target
-        (docs/requirements.md §7), and by bench.retrieval's dag_nosib/dag_full
-        arms (R8.2), which set semantic=True and toggle include_siblings.
+        (docs/requirements.md §7), and by bench.retrieval's dag arm (R8.2),
+        which sets semantic=True.
 
-        semantic/include_siblings/chain_depth/antigens/types are additive,
-        opt-in parameters (omitting them reproduces exactly the args this
-        method has always sent) — include_siblings maps to retrieveIn's
-        `include_siblings` *bool field
-        (internal/mcpserver/retrieve.go), whose Go-side default (True) is
-        used whenever this Python method's own default (None) is passed
-        through unset.
+        semantic/include_links/chain_depth/tags/types are additive, opt-in
+        parameters (omitting them reproduces exactly the args this method
+        has always sent). U5b (specs/U5_api_retrieve.md) renamed
+        include_siblings -> include_links and antigens -> tags as a clean
+        cut (no deprecated alias — the old json keys are gone server-side,
+        not merely accepted-and-ignored). include_links maps to retrieveIn's
+        `include_links` *bool field (internal/mcpserver/retrieve.go), whose
+        Go-side default (True) is used whenever this Python method's own
+        default (None) is passed through unset; since U5a it only gates the
+        clinical_links sidecar in the response, not Items/TruncatedRefs'
+        context-bundle shape (sibling tiers were removed entirely — see
+        bench.retrieval.dag's docstring).
         """
         args: dict[str, Any] = {}
         if query:
@@ -199,12 +207,12 @@ class MedBeadsClient:
             args["token_budget"] = token_budget
         if semantic is not None:
             args["semantic"] = semantic
-        if include_siblings is not None:
-            args["include_siblings"] = include_siblings
+        if include_links is not None:
+            args["include_links"] = include_links
         if chain_depth is not None:
             args["chain_depth"] = chain_depth
-        if antigens:
-            args["antigens"] = antigens
+        if tags:
+            args["tags"] = tags
         if types:
             args["types"] = types
         return await self.call_tool("retrieve", args)
@@ -251,12 +259,12 @@ class MedBeadsClient:
         out = await self.call_tool("rag_search", args)
         return out.get("results", [])
 
-    async def apc_trigger(self) -> dict[str, Any]:
-        """Call `apc_trigger` (system role only, internal/mcpserver/
-        tools_write.go): runs one apc.Scanner.Scan pass, durably ingesting any
-        new sibling_link Beads it finds. Used by bench's scratch-data test
-        setup (and bench.ingest's future `bench run` orchestration, R8.4) to
-        produce real sibling_link data via MCP only, per R8.5 — never by
-        importing internal/engine/apc directly.
-        """
-        return await self.call_tool("apc_trigger", {})
+    # apc_trigger was removed here in U6 (specs/U6_clinical_note.md): U5a
+    # removed package apc and the apc_trigger MCP tool from the Go server
+    # entirely (internal/mcpserver/tools_read_test.go's U5a regression test
+    # asserts apc_trigger is no longer registered), so calling it now errors.
+    # Reprojection (clinical_links / bead_status) is a CLI subcommand instead
+    # — `medbeadsd reproject -data <dir>` (cmd/medbeadsd/reproject.go) — not
+    # an MCP tool, per the runbook in specs/U6_clinical_note.md's U6b
+    # section. This client deliberately does not grow an MCP reproject
+    # method (out of scope — the CLI is the documented, intended path).

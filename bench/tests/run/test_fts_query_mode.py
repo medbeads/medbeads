@@ -7,8 +7,7 @@ import pytest
 
 from bench.run.pipeline import (
     ALL_ARMS,
-    ARM_DAG_FULL,
-    ARM_DAG_NOSIB,
+    ARM_DAG,
     ARM_FTS,
     ARM_RAG,
     FTS_QUERY_MODE_SAFE_WORD,
@@ -25,7 +24,7 @@ def test_safe_word_mode_gives_rag_the_full_question() -> None:
     assert _retrieval_query_for_arm(_QUESTION, ARM_RAG, FTS_QUERY_MODE_SAFE_WORD) == _QUESTION
 
 
-@pytest.mark.parametrize("arm", [ARM_FTS, ARM_DAG_NOSIB, ARM_DAG_FULL])
+@pytest.mark.parametrize("arm", [ARM_FTS, ARM_DAG])
 def test_safe_word_mode_gives_fts_arms_the_reduced_word(arm: str) -> None:
     assert _retrieval_query_for_arm(_QUESTION, arm, FTS_QUERY_MODE_SAFE_WORD) == fts_safe_query(_QUESTION)
 
