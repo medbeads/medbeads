@@ -32,7 +32,10 @@ Commands:
             (flags: -data <dir> -embedder <url> [-embed-model <name>] [-batch <n>])
   reproject Rebuild clinical_links from bead_tags + the cooccurrence link_rule
             Bead and flip projection_manifest's active run (flags: -data <dir>
-            [-code-version <v>]; does not re-scan Pods, see reindex for that)
+            [-code-version <v>] [-record-state]; does not re-scan Pods, see
+            reindex for that). -record-state additionally runs U4b's
+            record_state projector (bead_status/active_conditions/
+            active_medications, its own separate manifest lineage)
 `
 
 func main() {

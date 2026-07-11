@@ -132,12 +132,12 @@ func Reproject(idx *index.DB, reader beadReader, knowledgeBeadIDs []string, code
 	if err != nil {
 		return Result{}, fmt.Errorf("projector: reproject: %w", err)
 	}
-	runID, err := computeRunID(knowledgeBeadIDs, configHash, codeVersion, builtAt)
+	runID, err := computeRunID(ProjectionName, knowledgeBeadIDs, configHash, codeVersion, builtAt)
 	if err != nil {
 		return Result{}, fmt.Errorf("projector: reproject: %w", err)
 	}
 
-	if err := insertBuildingManifest(idx.SQLDB(), runID, codeVersion, knowledgeBeadIDs, configHash, watermarks, builtAt); err != nil {
+	if err := insertBuildingManifest(idx.SQLDB(), ProjectionName, runID, codeVersion, knowledgeBeadIDs, configHash, watermarks, builtAt); err != nil {
 		return Result{}, fmt.Errorf("projector: reproject: %w", err)
 	}
 
@@ -157,7 +157,7 @@ func Reproject(idx *index.DB, reader beadReader, knowledgeBeadIDs []string, code
 		res.LinksWritten += written
 	}
 
-	if err := flipManifestActive(idx.SQLDB(), runID); err != nil {
+	if err := flipManifestActive(idx.SQLDB(), ProjectionName, runID); err != nil {
 		return res, fmt.Errorf("projector: reproject: %w", err)
 	}
 
@@ -320,20 +320,25 @@ func computeConfigHash(knowledgeBeadIDs []string, codeVersion string) (string, e
 }
 
 // computeRunID derives projection_manifest.run_id deterministically from
-// (projection_name, sorted knowledgeBeadIDs, configHash, codeVersion,
-// builtAt) — content-derived, not time.Now()/uuid, so that two Reproject
-// calls given the identical inputs (including the identical builtAt string
-// a caller supplies) are trivially detectable as "the same run" and so
-// run_id generation needs no separate random source. builtAt is included in
-// the hash specifically so that two *distinct* Reproject invocations against
-// the same knowledge/config (e.g. a legitimate re-run after a transient
-// failure) still get distinct run_ids, since a caller is expected to supply
-// a fresh builtAt for each real invocation.
-func computeRunID(knowledgeBeadIDs []string, configHash, codeVersion, builtAt string) (string, error) {
+// (projectionName, sorted knowledgeBeadIDs, configHash, codeVersion,
+// builtAt) — content-derived, not time.Now()/uuid, so that two runs of the
+// same projection given identical inputs (including the identical builtAt
+// string a caller supplies) are trivially detectable as "the same run" and
+// so run_id generation needs no separate random source. builtAt is included
+// in the hash specifically so that two *distinct* invocations against the
+// same knowledge/config (e.g. a legitimate re-run after a transient failure)
+// still get distinct run_ids, since a caller is expected to supply a fresh
+// builtAt for each real invocation. projectionName is a parameter (not the
+// package-level ProjectionName constant) for the same reuse reason as
+// insertBuildingManifest/flipManifestActive above — it also guarantees two
+// different projectors (Reproject's clinical_links_v31 vs record_state's
+// record_state_v31) never collide on run_id even if every other input
+// happened to match.
+func computeRunID(projectionName string, knowledgeBeadIDs []string, configHash, codeVersion, builtAt string) (string, error) {
 	sorted := append([]string(nil), knowledgeBeadIDs...)
 	sort.Strings(sorted)
 	payload := map[string]any{
-		"projection_name":    ProjectionName,
+		"projection_name":    projectionName,
 		"knowledge_bead_ids": sorted,
 		"config_hash":        configHash,
 		"code_version":       codeVersion,
@@ -352,10 +357,18 @@ func computeRunID(knowledgeBeadIDs []string, configHash, codeVersion, builtAt st
 }
 
 // insertBuildingManifest inserts runID's projection_manifest row with
-// status='building', the first step of Reproject's manifest lifecycle
+// status='building', the first step of a projector's manifest lifecycle
 // (building -> [rows written] -> active, with the prior active row flipped
 // to superseded in the same final transaction — see flipManifestActive).
-func insertBuildingManifest(sqlDB *sql.DB, runID, codeVersion string, knowledgeBeadIDs []string, configHash, inputWatermarks, builtAt string) error {
+//
+// projectionName is the projection_manifest.projection_name this run belongs
+// to (e.g. Reproject's ProjectionName, or record_state's own
+// StatusProjectionName — see record_state.go): parameterized rather than
+// hardcoded so both projectors in this package share one manifest-lifecycle
+// implementation instead of duplicating it (specs/U4_state_derivation.md's
+// projector-structure section: "insertBuildingManifest/flipManifestActive
+// … を projection_name パラメタ化して再利用").
+func insertBuildingManifest(sqlDB *sql.DB, projectionName, runID, codeVersion string, knowledgeBeadIDs []string, configHash, inputWatermarks, builtAt string) error {
 	knowledgeJSON, err := canonicalJSON(nonNilStrings(knowledgeBeadIDs))
 	if err != nil {
 		return fmt.Errorf("encode knowledge_bead_ids: %w", err)
@@ -365,19 +378,21 @@ func insertBuildingManifest(sqlDB *sql.DB, runID, codeVersion string, knowledgeB
 			(run_id, projection_name, code_version, knowledge_bead_ids, config_hash,
 			 input_watermarks, built_at, status)
 		VALUES (?, ?, ?, ?, ?, ?, ?, 'building')`,
-		runID, ProjectionName, codeVersion, knowledgeJSON, configHash, inputWatermarks, builtAt,
+		runID, projectionName, codeVersion, knowledgeJSON, configHash, inputWatermarks, builtAt,
 	); err != nil {
 		return fmt.Errorf("insert building manifest %s: %w", runID, err)
 	}
 	return nil
 }
 
-// flipManifestActive is Reproject's final step: in one small transaction,
-// supersede the projection_name's current active run (if any) and activate
-// runID — the atomic flip migrations/0006's partial-unique-active index
-// exists to make safe (the database itself refuses to let two runs of
-// ProjectionName be 'active' simultaneously).
-func flipManifestActive(sqlDB *sql.DB, runID string) error {
+// flipManifestActive is a projector run's final step: in one small
+// transaction, supersede projectionName's current active run (if any) and
+// activate runID — the atomic flip migrations/0006's partial-unique-active
+// index exists to make safe (the database itself refuses to let two runs of
+// the same projection_name be 'active' simultaneously). See
+// insertBuildingManifest's doc comment for why projectionName is a parameter
+// rather than the package-level ProjectionName constant.
+func flipManifestActive(sqlDB *sql.DB, projectionName, runID string) error {
 	tx, err := sqlDB.Begin()
 	if err != nil {
 		return fmt.Errorf("flip manifest: begin: %w", err)
@@ -389,7 +404,7 @@ func flipManifestActive(sqlDB *sql.DB, runID string) error {
 		UPDATE projection_manifest
 		SET status = 'superseded', superseded_at = ?
 		WHERE projection_name = ? AND status = 'active'`,
-		now, ProjectionName,
+		now, projectionName,
 	); err != nil {
 		return fmt.Errorf("flip manifest: supersede prior active: %w", err)
 	}
