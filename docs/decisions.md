@@ -158,3 +158,18 @@
   不整合)は制御エラー or 除外(異常を黙って通さない)。臨床安全 vs 開発実用性を両立。
 - **分割**: U5a(旧 sibling/APC 除去、先行)→ U5b(API 改名 + retrieve 既定挙動)。
 - **include_links の意味**: sidecar に留める(リンク情報を返すが context item に展開しない)。近傍展開は将来別設計。
+
+## 2026-07-11: U5 完成(API 語彙 + retrieve 既定挙動)
+
+- **U5a(ba79c41)+ U5b(178ae7a)push 済み・reviewer GO×2**。U5 完成。
+- **U5a**: 旧 sibling/APC 全除去(apc パッケージ + graph sibling tier + write.go 特例 + MCP ツール4つ)。
+  clinical_links が唯一のリンク機構に。不変条件は既存+新テストで継続 pin。
+- **U5b**: retrieve が bead_status を4経路で消費(retracted 除外 / amended→current 置換[patient scope 後・
+  current=NULL は drop]/ unattested 除外[明示フラグで not_for_clinical_action、clearance は必ず通す])+
+  BeadStatusFor バッチ(N+1 回避)+ API 改名(antigens→tags / include_siblings→include_links /
+  search_antigens→search_tags、clean cut)+ 空 bead_status フォールバック(absent=active)。
+  reviewer が mutation テストで must-fix 弁別性を実証。留保(amended-null drop の theater)はリードが
+  resolveStatus 単体テストで境界を直接 pin して解消(空置換 mutation で FAIL を実測確認)。
+- **failure catalog #13/#14 承認**: 複数フィルタ経路の取りこぼし / drop→ゼロ値置換の partial theater。
+- **既知 follow-up(U6 前後で対応)**: bench/ の Python(mcp_client.py 等)が旧語彙 antigens/search_antigens を
+  参照 → Go/MCP 側は完全改名済みだが Python consumer の追随が必要。
