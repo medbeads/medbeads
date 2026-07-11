@@ -7,6 +7,7 @@ import (
 	"github.com/medbeads/medbeads/internal/engine/apc"
 	"github.com/medbeads/medbeads/internal/engine/bead"
 	"github.com/medbeads/medbeads/internal/engine/clearance"
+	"github.com/medbeads/medbeads/internal/engine/projector"
 )
 
 // TestRetrieve_SemanticWithoutEmbedder_IsAToolError checks R4.2's "embedder
@@ -388,5 +389,167 @@ func TestRetrieve_AnchorIDsDropRestrictedAnchorAmongMultiple(t *testing.T) {
 	}
 	if !foundAccessible {
 		t.Fatalf("viewer retrieve AnchorIDs = %v, want to include the accessible anchor %s", out.AnchorIDs, accessibleView)
+	}
+}
+
+// --- U3c: retrieve surfaces clinical_links --------------------------------
+
+// TestRetrieve_SurfacesClinicalLinks checks U3c's retrieve-wiring judgment
+// call: a risk:/atc: cooccurrence pair projected by projector.Reproject
+// (U3b) is surfaced in retrieveOut.ClinicalLinks once both endpoints are in
+// Items, gated by the same IncludeSiblings flag Items' own sibling tiers
+// use (retrieveIn's doc comment: this becomes include_links in U5).
+func TestRetrieve_SurfacesClinicalLinks(t *testing.T) {
+	e := openT(t)
+	patient := seedPatient(t, e, "Clinical Links Patient")
+	encounter := seedChildBead(t, e, patient, "fhir_encounter", nil, map[string]any{
+		"reason": "acute kidney injury follow-up",
+	})
+	for i := 0; i < 10; i++ {
+		seedChildBead(t, e, encounter, "fhir_observation",
+			[]string{"loinc:noise-" + string(rune('a'+i))},
+			map[string]any{"noise": i})
+	}
+	medication := seedChildBead(t, e, encounter, "fhir_medicationrequest",
+		[]string{"risk:nephrotoxic", "atc:c09aa03"},
+		map[string]any{"drug": "meropenem 1g IV every 8 hours"})
+	observation := seedChildBead(t, e, encounter, "fhir_observation",
+		[]string{"risk:nephrotoxic"},
+		map[string]any{"test": "eGFR renal function panel"})
+
+	rule := ingestT(t, e, projector.BuildCooccurrenceRuleBead("2026-01-01T00:00:00Z"))
+	if _, err := projector.Reproject(e.Index(), engineReaderT{e}, []string{rule.ID}, "test-code-v1", "2026-07-11T00:00:00Z"); err != nil {
+		t.Fatalf("Reproject: %v", err)
+	}
+
+	s := newServerT(t, e, SystemRole)
+	_, out, err := s.retrieve(context.Background(), nil, retrieveIn{
+		Query:       "meropenem",
+		PatientID:   patient.ID,
+		TokenBudget: 4000,
+		ChainDepth:  5,
+	})
+	if err != nil {
+		t.Fatalf("retrieve: %v", err)
+	}
+
+	medicationView := bead.FormatID(medication.ID)
+	observationView := bead.FormatID(observation.ID)
+	if !containsItemID(out.Items, medicationView) {
+		t.Fatalf("retrieve Items missing anchor medicationrequest %s: %+v", medicationView, out.Items)
+	}
+
+	found := false
+	for _, link := range out.ClinicalLinks {
+		if link.BeadID == medicationView && link.OtherBeadID == observationView {
+			found = true
+			if link.Relation != "clinical_correlation" {
+				t.Errorf("ClinicalLinks relation = %q, want clinical_correlation", link.Relation)
+			}
+			if link.Severity != "info" {
+				t.Errorf("ClinicalLinks severity = %q, want info", link.Severity)
+			}
+			if link.MatchedTag != "risk:nephrotoxic" {
+				t.Errorf("ClinicalLinks matched_tag = %q, want risk:nephrotoxic", link.MatchedTag)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("retrieve ClinicalLinks missing medication<->observation link: %+v", out.ClinicalLinks)
+	}
+
+	// include_siblings=false must also suppress ClinicalLinks (same flag as
+	// the sibling tiers — see retrieveOut.ClinicalLinks' doc comment).
+	includeFalse := false
+	_, noLinksOut, err := s.retrieve(context.Background(), nil, retrieveIn{
+		Query:           "meropenem",
+		PatientID:       patient.ID,
+		TokenBudget:     4000,
+		ChainDepth:      5,
+		IncludeSiblings: &includeFalse,
+	})
+	if err != nil {
+		t.Fatalf("retrieve (include_siblings=false): %v", err)
+	}
+	if len(noLinksOut.ClinicalLinks) != 0 {
+		t.Errorf("retrieve(include_siblings=false).ClinicalLinks = %+v, want empty", noLinksOut.ClinicalLinks)
+	}
+}
+
+// TestRetrieve_ClinicalLinksDropRestrictedEndpoint checks clearance
+// inheritance on retrieve's clinical_links surfacing: a link whose other
+// endpoint is access-denied for the viewer role must not appear in
+// ClinicalLinks (mirrors TestGetLinks_DropsRestrictedLink's identical
+// discipline, applied to retrieve's own surfacing rather than get_links).
+func TestRetrieve_ClinicalLinksDropRestrictedEndpoint(t *testing.T) {
+	e := openT(t)
+	patient := seedPatient(t, e, "Clinical Links Clearance Patient")
+	encounter := seedChildBead(t, e, patient, "fhir_encounter", nil, map[string]any{
+		"reason": "acute kidney injury follow-up",
+	})
+	for i := 0; i < 10; i++ {
+		seedChildBead(t, e, encounter, "fhir_observation",
+			[]string{"loinc:noise-" + string(rune('a'+i))},
+			map[string]any{"noise": i})
+	}
+	medication := seedChildBead(t, e, encounter, "fhir_medicationrequest",
+		[]string{"risk:nephrotoxic", "atc:c09aa03"},
+		map[string]any{"drug": "meropenem 1g IV every 8 hours"})
+	observation := seedChildBead(t, e, encounter, "fhir_observation",
+		[]string{"risk:nephrotoxic"},
+		map[string]any{"test": "eGFR renal function panel"})
+
+	rule := ingestT(t, e, projector.BuildCooccurrenceRuleBead("2026-01-01T00:00:00Z"))
+	if _, err := projector.Reproject(e.Index(), engineReaderT{e}, []string{rule.ID}, "test-code-v1", "2026-07-11T00:00:00Z"); err != nil {
+		t.Fatalf("Reproject: %v", err)
+	}
+
+	if err := clearance.SaveRule(e.Index(), clearance.Rule{
+		ID:          "rule-" + observation.ID,
+		BeadID:      observation.ID,
+		DeniedRoles: []string{"viewer"},
+		CreatedBy:   "test",
+		CreatedAt:   "2026-01-01T00:00:00Z",
+	}); err != nil {
+		t.Fatalf("SaveRule: %v", err)
+	}
+
+	medicationView := bead.FormatID(medication.ID)
+	observationView := bead.FormatID(observation.ID)
+
+	viewer := newServerT(t, e, DefaultRole)
+	_, viewerOut, err := viewer.retrieve(context.Background(), nil, retrieveIn{
+		Query:       "meropenem",
+		PatientID:   patient.ID,
+		TokenBudget: 4000,
+		ChainDepth:  5,
+	})
+	if err != nil {
+		t.Fatalf("viewer retrieve: %v", err)
+	}
+	for _, link := range viewerOut.ClinicalLinks {
+		if link.OtherBeadID == observationView {
+			t.Fatalf("viewer retrieve ClinicalLinks leaked restricted endpoint: %+v", link)
+		}
+	}
+
+	system := newServerT(t, e, SystemRole)
+	_, systemOut, err := system.retrieve(context.Background(), nil, retrieveIn{
+		Query:       "meropenem",
+		PatientID:   patient.ID,
+		TokenBudget: 4000,
+		ChainDepth:  5,
+	})
+	if err != nil {
+		t.Fatalf("system retrieve: %v", err)
+	}
+	found := false
+	for _, link := range systemOut.ClinicalLinks {
+		if link.BeadID == medicationView && link.OtherBeadID == observationView {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("system retrieve ClinicalLinks missing the link; want it present (system bypasses clearance): %+v", systemOut.ClinicalLinks)
 	}
 }

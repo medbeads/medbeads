@@ -268,6 +268,72 @@ func (d *DB) PatientRootsFor(ids []string) (map[string]string, error) {
 	return out, nil
 }
 
+// ClinicalLinkRow is one clinical_links row (specs/U2_projection_schema.md /
+// migrations/0006_projection_v31.sql), as read back for a single Bead:
+// OtherBeadID is whichever of bead_a/bead_b is not the Bead the caller
+// queried by (mirroring GetClinicalLinks' own doc comment on how the query
+// resolves it), so callers do not need to re-derive it from BeadA/BeadB
+// themselves.
+type ClinicalLinkRow struct {
+	LinkID          string
+	OtherBeadID     string
+	PatientRoot     string
+	Relation        string
+	MatchedTag      string
+	Severity        string
+	EvidenceBasis   string
+	EvidenceBeadIDs string // canonical JSON array, stored/returned verbatim (see migrations/0006's comment on this column)
+	RuleID          string
+	RuleVersion     string
+	ProjectionRunID string
+	CreatedAt       string
+}
+
+// GetClinicalLinks returns every clinical_links row naming beadID as either
+// bead_a or bead_b (specs/U3_link_projector.md's U3c read-side: "get_links
+// … clinical_links 読取"), ordered deterministically by created_at then
+// matched_tag. This is a plain index-layer read: it does not itself apply
+// clearance inheritance (dropping a row whose other Bead is inaccessible) —
+// that is the caller's job (mcpserver's get_links tool), exactly as
+// GetTags/GetEdges are unfiltered building blocks and mcpserver applies
+// clearance.FilterByAccess on top, per this package's existing division of
+// responsibility between "resolve rows" (here) and "decide visibility"
+// (mcpserver + package clearance).
+func (d *DB) GetClinicalLinks(beadID string) ([]ClinicalLinkRow, error) {
+	rows, err := d.sqlDB.Query(`
+		SELECT link_id, bead_a, bead_b, patient_root, relation, matched_tag,
+		       severity, evidence_basis, evidence_bead_ids,
+		       COALESCE(rule_id, ''), COALESCE(rule_version, ''),
+		       COALESCE(projection_run_id, ''), created_at
+		FROM clinical_links
+		WHERE bead_a = ? OR bead_b = ?
+		ORDER BY created_at, matched_tag`, beadID, beadID)
+	if err != nil {
+		return nil, fmt.Errorf("index: get clinical links %s: %w", beadID, err)
+	}
+	defer rows.Close()
+
+	var out []ClinicalLinkRow
+	for rows.Next() {
+		var r ClinicalLinkRow
+		var beadA, beadB string
+		if err := rows.Scan(&r.LinkID, &beadA, &beadB, &r.PatientRoot, &r.Relation, &r.MatchedTag,
+			&r.Severity, &r.EvidenceBasis, &r.EvidenceBeadIDs,
+			&r.RuleID, &r.RuleVersion, &r.ProjectionRunID, &r.CreatedAt); err != nil {
+			return nil, fmt.Errorf("index: get clinical links %s: scan: %w", beadID, err)
+		}
+		r.OtherBeadID = beadA
+		if beadA == beadID {
+			r.OtherBeadID = beadB
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("index: get clinical links %s: %w", beadID, err)
+	}
+	return out, nil
+}
+
 // PodWatermark reports a Pod's current indexed_upto watermark (R1.3), or
 // ErrNotFound if podPath has no pods row yet.
 func (d *DB) PodWatermark(podPath string) (int64, error) {

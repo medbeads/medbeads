@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 
@@ -110,6 +111,37 @@ type retrieveOut struct {
 	TruncatedRefs []contextItemView `json:"truncated_refs"`
 	BudgetTokens  int               `json:"budget_tokens"`
 	UsedTokens    int               `json:"used_tokens"`
+	// ClinicalLinks surfaces the U3b-projected clinical_links rows for every
+	// Bead that made it into Items (U3c's "retrieve を clinical_links 読取に対応
+	// させる" scope) — the interpretation-layer link projector's successor to
+	// the older bead_edges('sibling') tier BuildContext's own sibling
+	// options already expand into Items itself. This is deliberately an
+	// additive, separate field rather than a rewiring of graph.Bundle's
+	// sibling tiers: doing so keeps this unit's blast radius to "add a new
+	// read surface" rather than "change what Items already contains" (the
+	// full graph.Bundle rewire — replacing loadExplicitSiblingEdges'
+	// bead_edges('sibling') source with clinical_links inside package graph
+	// itself — is left to U5, which is also when include_siblings/
+	// get_siblings/get_sibling_links are renamed/removed; see this package's
+	// U3c delegation prompt for the explicit judgment call). Gated by the
+	// same IncludeSiblings flag Items' own sibling tiers use (retrieveIn's
+	// doc comment: this flag becomes include_links in U5), and clearance-
+	// filtered exactly like get_links (a link whose other endpoint is
+	// inaccessible is dropped, never masked).
+	ClinicalLinks []retrievedLinkView `json:"clinical_links,omitempty"`
+}
+
+// retrievedLinkView is retrieve's own clinical_links provenance entry: which
+// Bead in Items the link is attached to (BeadID), plus get_links' own
+// clinicalLinkView shape for the link itself. Kept as its own named type
+// (rather than reusing clinicalLinkView bare) so retrieve's response makes
+// explicit which of the two linked Beads is "the one already in this
+// context bundle" versus OtherBeadID ("the one the link points at" — which
+// may or may not itself be in Items, exactly as get_sibling_links/get_links
+// never guaranteed the sibling itself is in the caller's already-loaded set).
+type retrievedLinkView struct {
+	BeadID string `json:"bead_id"`
+	clinicalLinkView
 }
 
 // retrieve implements R6.2 / DESIGN §8: one round trip from a query (plus
@@ -219,13 +251,104 @@ func (s *Server) retrieve(ctx context.Context, _ *mcp.CallToolRequest, in retrie
 		return res, retrieveOut{}, jerr
 	}
 
+	var clinicalLinks []retrievedLinkView
+	if retrieveIncludeSiblings(in) {
+		clinicalLinks, err = s.retrieveClinicalLinks(items)
+		if err != nil {
+			res, jerr := toolError("retrieve: clinical links", err)
+			return res, retrieveOut{}, jerr
+		}
+	}
+
 	return nil, retrieveOut{
 		AnchorIDs:     anchorViews,
 		Items:         items,
 		TruncatedRefs: truncated,
 		BudgetTokens:  bundle.BudgetTokens,
 		UsedTokens:    bundle.UsedTokens,
+		ClinicalLinks: clinicalLinks,
 	}, nil
+}
+
+// retrieveClinicalLinks resolves the clinical_links rows for every Bead in
+// items (retrieve's already-clearance-filtered context items), applying the
+// identical clearance-inheritance drop discipline as get_links (getLinks in
+// tools_read.go): a link whose other endpoint is inaccessible to this
+// session's role is dropped entirely, never masked. Links are deduplicated
+// by LinkID across items (the same clinical_links row can be reached from
+// either endpoint if both endpoints are in Items), keeping the first-seen
+// BeadID attribution.
+func (s *Server) retrieveClinicalLinks(items []provenanceView) ([]retrievedLinkView, error) {
+	if len(items) == 0 {
+		return nil, nil
+	}
+
+	seen := make(map[string]bool)
+	var out []retrievedLinkView
+	for _, item := range items {
+		id, err := bead.ParseID(item.ID)
+		if err != nil {
+			return nil, fmt.Errorf("parse item id %s: %w", item.ID, err)
+		}
+		rows, err := s.eng.Index().GetClinicalLinks(id)
+		if err != nil {
+			return nil, fmt.Errorf("get clinical links %s: %w", id, err)
+		}
+		if len(rows) == 0 {
+			continue
+		}
+
+		otherBeads := make([]bead.Bead, len(rows))
+		for i, r := range rows {
+			b, err := s.eng.GetBead(r.OtherBeadID)
+			if err != nil {
+				return nil, fmt.Errorf("get bead %s: %w", r.OtherBeadID, err)
+			}
+			otherBeads[i] = b
+		}
+		filtered, err := clearance.FilterByAccess(s.eng.Index(), otherBeads, s.viewerRoles())
+		if err != nil {
+			return nil, fmt.Errorf("filter clinical links for %s: %w", id, err)
+		}
+
+		for i, r := range rows {
+			if !accessible(filtered[i]) {
+				continue
+			}
+			if seen[r.LinkID] {
+				continue
+			}
+			seen[r.LinkID] = true
+
+			var evidenceIDs []string
+			if r.EvidenceBeadIDs != "" && r.EvidenceBeadIDs != "[]" {
+				if err := json.Unmarshal([]byte(r.EvidenceBeadIDs), &evidenceIDs); err != nil {
+					return nil, fmt.Errorf("decode evidence_bead_ids for %s: %w", r.LinkID, err)
+				}
+			}
+			formattedEvidence := make([]string, len(evidenceIDs))
+			for j, eid := range evidenceIDs {
+				formattedEvidence[j] = bead.FormatID(eid)
+			}
+
+			out = append(out, retrievedLinkView{
+				BeadID: item.ID,
+				clinicalLinkView: clinicalLinkView{
+					LinkID:          bead.FormatID(r.LinkID),
+					OtherBeadID:     bead.FormatID(r.OtherBeadID),
+					Relation:        r.Relation,
+					MatchedTag:      r.MatchedTag,
+					Severity:        r.Severity,
+					EvidenceBasis:   r.EvidenceBasis,
+					EvidenceBeadIDs: formattedEvidence,
+					RuleID:          r.RuleID,
+					RuleVersion:     r.RuleVersion,
+					CreatedAt:       r.CreatedAt,
+				},
+			})
+		}
+	}
+	return out, nil
 }
 
 // anchorRef is one candidate anchor Bead surfaced by retrieveAnchors, tagged

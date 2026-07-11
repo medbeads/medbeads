@@ -9,6 +9,7 @@ import (
 	"github.com/medbeads/medbeads/internal/engine/apc"
 	"github.com/medbeads/medbeads/internal/engine/bead"
 	"github.com/medbeads/medbeads/internal/engine/clearance"
+	"github.com/medbeads/medbeads/internal/engine/projector"
 )
 
 // TestGetBead_SHA256PrefixRoundTrip checks the task's headline get_bead
@@ -450,6 +451,149 @@ func TestGetSiblingLinks_DropsRestrictedPair(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("system get_sibling_links did not include the sibling pair; want it present (system bypasses clearance). Links=%+v", systemOut.Links)
+	}
+}
+
+// --- U3c: get_links (clinical_links read path) ---------------------------
+
+// seedCooccurrenceLinkT ingests the built-in cooccurrence link_rule Bead and
+// runs projector.Reproject over e's already-indexed bead_tags, returning the
+// projector.Result. Mirrors internal/engine/projector/reproject_test.go's
+// seedCooccurrenceRule + Reproject call sequence — this package's tests need
+// real clinical_links rows (not hand-inserted ones) so get_links exercises
+// the real GetClinicalLinks -> clearance pipeline against actual U3b output.
+func seedCooccurrenceLinkT(t *testing.T, e *engine.Engine) projector.Result {
+	t.Helper()
+	rule := ingestT(t, e, projector.BuildCooccurrenceRuleBead("2026-01-01T00:00:00Z"))
+	res, err := projector.Reproject(e.Index(), engineReaderT{e}, []string{rule.ID}, "test-code-v1", "2026-07-11T00:00:00Z")
+	if err != nil {
+		t.Fatalf("Reproject: %v", err)
+	}
+	return res
+}
+
+// engineReaderT adapts *engine.Engine to projector's unexported beadReader
+// interface (Go structural typing), mirroring internal/engine/projector/
+// reproject_test.go's identically-purposed engineReader.
+type engineReaderT struct{ e *engine.Engine }
+
+func (r engineReaderT) GetBead(id string) (projector.BeadContent, error) {
+	b, err := r.e.GetBead(id)
+	if err != nil {
+		return projector.BeadContent{}, err
+	}
+	return projector.BeadContent{Content: b.Content}, nil
+}
+
+// TestGetLinks_ReturnsClinicalLinksForBead checks get_links' headline case:
+// a risk:/atc: cooccurrence pair projected by projector.Reproject is
+// returned by get_links for either endpoint Bead, with relation/severity/
+// evidence_basis/matched_tag/rule_version populated from the real
+// clinical_links row (not hand-asserted).
+func TestGetLinks_ReturnsClinicalLinksForBead(t *testing.T) {
+	e := openT(t)
+	root := seedPatient(t, e, "Get Links Patient")
+	padWithNoiseBeads(t, e, root, 10)
+
+	rx := seedChildBead(t, e, root, "fhir_medicationrequest",
+		[]string{"risk:nephrotoxic", "atc:c09aa03"}, map[string]any{"drug": "meropenem"})
+	lab := seedChildBead(t, e, root, "fhir_observation",
+		[]string{"risk:nephrotoxic"}, map[string]any{"test": "eGFR"})
+
+	seedCooccurrenceLinkT(t, e)
+
+	s := newServerT(t, e, SystemRole)
+	_, out, err := s.getLinks(context.Background(), nil, getLinksIn{ID: rx.ID})
+	if err != nil {
+		t.Fatalf("getLinks: %v", err)
+	}
+	if len(out.Links) != 1 {
+		t.Fatalf("getLinks(rx).Links = %d, want 1: %+v", len(out.Links), out.Links)
+	}
+	link := out.Links[0]
+	if link.OtherBeadID != bead.FormatID(lab.ID) {
+		t.Errorf("OtherBeadID = %q, want %q", link.OtherBeadID, bead.FormatID(lab.ID))
+	}
+	if link.Relation != "clinical_correlation" {
+		t.Errorf("Relation = %q, want clinical_correlation", link.Relation)
+	}
+	if link.Severity != "info" {
+		t.Errorf("Severity = %q, want info", link.Severity)
+	}
+	if link.EvidenceBasis != "cooccurrence" {
+		t.Errorf("EvidenceBasis = %q, want cooccurrence", link.EvidenceBasis)
+	}
+	if link.MatchedTag != "risk:nephrotoxic" {
+		t.Errorf("MatchedTag = %q, want risk:nephrotoxic", link.MatchedTag)
+	}
+	if link.RuleVersion == "" {
+		t.Errorf("RuleVersion is empty, want the link_rule Bead ID")
+	}
+
+	// Same link queried from the other endpoint (lab) must resolve back to rx.
+	_, labOut, err := s.getLinks(context.Background(), nil, getLinksIn{ID: lab.ID})
+	if err != nil {
+		t.Fatalf("getLinks(lab): %v", err)
+	}
+	if len(labOut.Links) != 1 || labOut.Links[0].OtherBeadID != bead.FormatID(rx.ID) {
+		t.Fatalf("getLinks(lab).Links = %+v, want one link back to rx (%s)", labOut.Links, bead.FormatID(rx.ID))
+	}
+}
+
+// TestGetLinks_DropsRestrictedLink checks clearance inheritance: a
+// clinical_links row whose other endpoint is access-denied for the viewer
+// role is dropped entirely (mirrors TestGetSiblingLinks_DropsRestrictedPair's
+// identical discipline, applied to the new clinical_links read path instead
+// of sibling_pairs).
+func TestGetLinks_DropsRestrictedLink(t *testing.T) {
+	e := openT(t)
+	root := seedPatient(t, e, "Get Links Clearance Patient")
+	padWithNoiseBeads(t, e, root, 10)
+
+	rx := seedChildBead(t, e, root, "fhir_medicationrequest",
+		[]string{"risk:nephrotoxic", "atc:c09aa03"}, map[string]any{"drug": "meropenem"})
+	lab := seedChildBead(t, e, root, "fhir_observation",
+		[]string{"risk:nephrotoxic"}, map[string]any{"test": "eGFR"})
+
+	seedCooccurrenceLinkT(t, e)
+
+	if err := clearance.SaveRule(e.Index(), clearance.Rule{
+		ID:          "rule-" + lab.ID,
+		BeadID:      lab.ID,
+		DeniedRoles: []string{"viewer"},
+		CreatedBy:   "test",
+		CreatedAt:   "2026-01-01T00:00:00Z",
+	}); err != nil {
+		t.Fatalf("SaveRule: %v", err)
+	}
+
+	viewer := newServerT(t, e, DefaultRole)
+	_, viewerOut, err := viewer.getLinks(context.Background(), nil, getLinksIn{ID: rx.ID})
+	if err != nil {
+		t.Fatalf("viewer getLinks: %v", err)
+	}
+	for _, link := range viewerOut.Links {
+		if link.OtherBeadID == bead.FormatID(lab.ID) {
+			t.Fatalf("viewer get_links exposed the restricted link: %+v", link)
+		}
+	}
+	if len(viewerOut.Links) != 0 {
+		t.Fatalf("viewer getLinks(rx).Links = %+v, want empty (the only link's other endpoint is restricted)", viewerOut.Links)
+	}
+
+	system := newServerT(t, e, SystemRole)
+	_, systemOut, err := system.getLinks(context.Background(), nil, getLinksIn{ID: rx.ID})
+	if err != nil {
+		t.Fatalf("system getLinks: %v", err)
+	}
+	found := false
+	for _, link := range systemOut.Links {
+		if link.OtherBeadID == bead.FormatID(lab.ID) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("system get_links did not include the link; want it present (system bypasses clearance). Links=%+v", systemOut.Links)
 	}
 }
 

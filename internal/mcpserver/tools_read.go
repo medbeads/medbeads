@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -14,7 +15,8 @@ import (
 
 // registerReadTools adds every read-only tool (list_patients, search_beads,
 // get_bead, get_context, get_timeline, get_siblings, get_sibling_links,
-// search_antigens, verify_integrity, apc_status, retrieve) to s.mcp. This is
+// get_links, search_antigens, verify_integrity, apc_status, retrieve) to
+// s.mcp. This is
 // called unconditionally by New, regardless of role — clearance filtering
 // (not tool registration) is what limits what a non-system role actually
 // sees, per the task's "system はバイパス" / viewer-is-filtered design.
@@ -64,6 +66,15 @@ func (s *Server) registerReadTools() {
 		Name:        "search_antigens",
 		Description: "Inverted-index lookup: every Bead tagged with the given antigen (bead_tags).",
 	}, s.searchAntigens)
+
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name: "get_links",
+		Description: "The clinical_links rows (relation/severity/evidence_basis/matched_tag/rule_version " +
+			"plus the other Bead's ID) for one Bead — the link-projector successor to get_sibling_links, " +
+			"reading the U3b-projected clinical_links table instead of sibling_pairs. Clearance is " +
+			"inherited: a link whose other endpoint is inaccessible to this session's role is dropped " +
+			"entirely, not masked.",
+	}, s.getLinks)
 
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name:        "verify_integrity",
@@ -457,6 +468,119 @@ func (s *Server) getSiblingLinks(_ context.Context, _ *mcp.CallToolRequest, in g
 			MatchedAntigen: p.antigen,
 			SiblingLinkID:  bead.FormatID(p.linkID),
 			CreatedAt:      p.createdAt,
+		})
+	}
+	return nil, out, nil
+}
+
+// --- get_links (clinical_links, U3c) --------------------------------------
+
+type getLinksIn struct {
+	ID string `json:"id" jsonschema:"Bead ID (sha256: prefix optional)"`
+}
+
+// clinicalLinkView is get_links' JSON shape for one clinical_links row: the
+// interpretation-layer relation/severity/evidence fields the link projector
+// (package projector, U3b) computed, plus the other Bead's ID. No
+// score_breakdown/patient_root field is surfaced here — those are internal
+// projector bookkeeping (score_breakdown) or already implied by the caller's
+// own patient context (patient_root), not something a link consumer needs to
+// re-derive its trust in the relation from (mirrors siblingLinkView's own
+// "just enough to act on" shape).
+type clinicalLinkView struct {
+	LinkID          string   `json:"link_id"`
+	OtherBeadID     string   `json:"other_bead_id"`
+	Relation        string   `json:"relation"`
+	MatchedTag      string   `json:"matched_tag"`
+	Severity        string   `json:"severity"`
+	EvidenceBasis   string   `json:"evidence_basis"`
+	EvidenceBeadIDs []string `json:"evidence_bead_ids,omitempty"`
+	RuleID          string   `json:"rule_id,omitempty"`
+	RuleVersion     string   `json:"rule_version,omitempty"`
+	CreatedAt       string   `json:"created_at"`
+}
+
+type getLinksOut struct {
+	Links []clinicalLinkView `json:"links"`
+}
+
+// getLinks is U3c's new read path for clinical_links (specs/
+// U3_link_projector.md's U3c section): the link-projector successor to
+// get_sibling_links (which still reads the older sibling_pairs table — see
+// that function's own doc comment; U3c adds this tool alongside it rather
+// than replacing it, since the get_sibling_links/get_siblings rename/removal
+// is U5 scope, not U3c's).
+//
+// # Clearance inheritance
+//
+// Per specs/DESIGN_v3.1_draft.md §0 point 6 / §3 ("クリアランス継承…既存の
+// get_sibling_links の drop 原則を一般化"): a clinical_links row names another
+// Bead (OtherBeadID) whose mere existence-as-a-link — and its MatchedTag,
+// which is itself often clinically informative (e.g. a risk:/atc: tag) —
+// is information about that other Bead, not just about id. This mirrors
+// get_sibling_links' identical reasoning verbatim, so it resolves every
+// candidate other Bead via engine.GetBead, runs the batch through
+// clearance.FilterByAccess exactly like every other read tool, and drops the
+// whole row (not just the OtherBeadID field) for any link whose other Bead
+// is not accessible to this session's role.
+func (s *Server) getLinks(_ context.Context, _ *mcp.CallToolRequest, in getLinksIn) (*mcp.CallToolResult, getLinksOut, error) {
+	id, err := bead.ParseID(in.ID)
+	if err != nil {
+		res, jerr := toolError("get_links: parse id", err)
+		return res, getLinksOut{}, jerr
+	}
+
+	rows, err := s.eng.Index().GetClinicalLinks(id)
+	if err != nil {
+		res, jerr := toolError("get_links", err)
+		return res, getLinksOut{}, jerr
+	}
+	if len(rows) == 0 {
+		return nil, getLinksOut{}, nil
+	}
+
+	otherBeads := make([]bead.Bead, len(rows))
+	for i, r := range rows {
+		b, err := s.eng.GetBead(r.OtherBeadID)
+		if err != nil {
+			res, jerr := toolError("get_links: get_bead "+r.OtherBeadID, err)
+			return res, getLinksOut{}, jerr
+		}
+		otherBeads[i] = b
+	}
+	filtered, err := clearance.FilterByAccess(s.eng.Index(), otherBeads, s.viewerRoles())
+	if err != nil {
+		res, jerr := toolError("get_links: filter", err)
+		return res, getLinksOut{}, jerr
+	}
+
+	var out getLinksOut
+	for i, r := range rows {
+		if !accessible(filtered[i]) {
+			continue
+		}
+		var evidenceIDs []string
+		if r.EvidenceBeadIDs != "" && r.EvidenceBeadIDs != "[]" {
+			if err := json.Unmarshal([]byte(r.EvidenceBeadIDs), &evidenceIDs); err != nil {
+				res, jerr := toolError("get_links: decode evidence_bead_ids for "+r.LinkID, err)
+				return res, getLinksOut{}, jerr
+			}
+		}
+		formattedEvidence := make([]string, len(evidenceIDs))
+		for j, eid := range evidenceIDs {
+			formattedEvidence[j] = bead.FormatID(eid)
+		}
+		out.Links = append(out.Links, clinicalLinkView{
+			LinkID:          bead.FormatID(r.LinkID),
+			OtherBeadID:     bead.FormatID(r.OtherBeadID),
+			Relation:        r.Relation,
+			MatchedTag:      r.MatchedTag,
+			Severity:        r.Severity,
+			EvidenceBasis:   r.EvidenceBasis,
+			EvidenceBeadIDs: formattedEvidence,
+			RuleID:          r.RuleID,
+			RuleVersion:     r.RuleVersion,
+			CreatedAt:       r.CreatedAt,
 		})
 	}
 	return nil, out, nil
