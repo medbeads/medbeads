@@ -48,7 +48,7 @@ Current Electronic Medical Records (EMRs) and FHIR standards are designed for hu
 
 ---
 
-[English](README.md) | [日本語](README.ja.md) | [中文](README.zh.md)
+[English](README.md) | [日本語](README.ja.md)
 
 ## System Architecture
 

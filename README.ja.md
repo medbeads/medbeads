@@ -47,7 +47,7 @@ MedBeads は、医療AIにおける「コンテキストの不整合（Context M
 
 ---
 
-[English](README.md) | [日本語](README.ja.md) | [中文](README.zh.md)
+[English](README.md) | [日本語](README.ja.md)
 
 ## システムアーキテクチャ
 
