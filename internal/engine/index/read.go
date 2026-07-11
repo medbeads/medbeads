@@ -268,6 +268,102 @@ func (d *DB) PatientRootsFor(ids []string) (map[string]string, error) {
 	return out, nil
 }
 
+// BeadStatusRow is one bead_status row's read-relevant fields (specs/
+// U4_state_derivation.md's §2 resolution outcome, migrations/0006+0007), as
+// consulted by retrieve/get_links' status-normalization pass (specs/
+// U5_api_retrieve.md's U5b section): whether a Bead is still current
+// (Status), and if it was amended, which Bead ID replaces it (CurrentBeadID —
+// "" when NULL, i.e. either the retracted case or an amended chain that
+// terminates at a retracted leaf; see resolve.go's beadState doc comment).
+type BeadStatusRow struct {
+	Status        string // "active" | "amended" | "retracted" | "unattested"
+	CurrentBeadID string // "" means NULL
+}
+
+// BeadStatusFor resolves bead_status.status/current_bead_id for every one of
+// the given Bead IDs as a single `WHERE bead_id IN (?,...)` query (mirroring
+// PatientRootsFor's placeholder-generation above verbatim — no string
+// concatenation of the IDs themselves, only of the fixed "?" placeholder
+// count), so a caller checking status for a whole anchor or item batch never
+// pays one query per Bead (the same N+1-avoidance discipline as
+// PatientRootsFor).
+//
+// The returned map has one entry per id actually found in bead_status; an id
+// absent from the map is not an error — retrieve's own caller treats an
+// absent id as "active" (see specs/U5_api_retrieve.md's crux 2 ruling): this
+// makes both "the record_state projector never ran on this store at all"
+// (bead_status is entirely empty) and "this one id's row is individually
+// missing" collapse to the same simple, testable default, deferring the
+// spec's stricter "controlled error on partial gap" hardening to a later
+// unit — see retrieve.go's own doc comment on where that judgment call is
+// applied.
+//
+// # Why this does not join projection_manifest
+//
+// Unlike a query that wants only "the currently active projection run"'s
+// rows, BeadStatusFor intentionally does NOT filter or join by
+// projection_manifest.status='active': writePatientState (record_state.go)
+// DELETEs a patient's stale bead_status rows (any row not stamped with the
+// run that is currently being written) inside the same per-patient
+// transaction it INSERTs the new rows in, so at most one run's rows for a
+// given patient_root ever physically exist in this table at once — a plain
+// bead_id lookup already returns the current generation without needing to
+// cross-check projection_manifest at all (peer-confirmed invariant, specs/
+// U5_api_retrieve.md's "合意点" #5).
+func (d *DB) BeadStatusFor(ids []string) (map[string]BeadStatusRow, error) {
+	out := make(map[string]BeadStatusRow, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+
+	placeholders := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	query := fmt.Sprintf(
+		`SELECT bead_id, status, COALESCE(current_bead_id, '') FROM bead_status WHERE bead_id IN (%s)`,
+		strings.Join(placeholders, ","),
+	)
+
+	rows, err := d.sqlDB.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("index: bead status for %d ids: %w", len(ids), err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id string
+		var r BeadStatusRow
+		if err := rows.Scan(&id, &r.Status, &r.CurrentBeadID); err != nil {
+			return nil, fmt.Errorf("index: bead status for %d ids: scan: %w", len(ids), err)
+		}
+		out[id] = r
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("index: bead status for %d ids: %w", len(ids), err)
+	}
+	return out, nil
+}
+
+// BeadStatusTableEmpty reports whether bead_status has zero rows in total —
+// the signal specs/U5_api_retrieve.md's crux 2 ruling uses to distinguish "the
+// record_state projector has simply never run on this store" (a dev/fresh
+// store, where retrieve should still behave normally rather than exhibiting
+// every read as status-filtered-to-nothing) from an individual absent id
+// within an otherwise-populated table (see BeadStatusFor's own doc comment on
+// why both cases share the same "absent = active" per-id fallback for U5b).
+// This is a single COUNT(*) query, called at most once per retrieve/get_links
+// call (not per id), so it adds no N+1 risk of its own.
+func (d *DB) BeadStatusTableEmpty() (bool, error) {
+	var n int
+	if err := d.sqlDB.QueryRow(`SELECT COUNT(*) FROM bead_status`).Scan(&n); err != nil {
+		return false, fmt.Errorf("index: bead status table empty check: %w", err)
+	}
+	return n == 0, nil
+}
+
 // ClinicalLinkRow is one clinical_links row (specs/U2_projection_schema.md /
 // migrations/0006_projection_v31.sql), as read back for a single Bead:
 // OtherBeadID is whichever of bead_a/bead_b is not the Bead the caller

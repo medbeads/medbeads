@@ -90,15 +90,15 @@ func TestRetrieve_Semantic_WithoutEmbedder_IsToolError(t *testing.T) {
 
 // TestRetrieve_Semantic_EmptyQuery_IsToolError checks that semantic=true
 // with an empty query (nothing to embed) is rejected explicitly rather than
-// silently embedding an empty string or falling back to antigens-only
-// anchor selection.
+// silently embedding an empty string or falling back to tags-only anchor
+// selection.
 func TestRetrieve_Semantic_EmptyQuery_IsToolError(t *testing.T) {
 	e := openT(t)
 	root := seedPatient(t, e, "Empty Query Patient")
 	seedChildBead(t, e, root, "fhir_observation", []string{"loinc:1"}, map[string]any{"note": "anything"})
 
 	s := newServerWithEmbedderT(t, e, SystemRole)
-	res, _, err := s.retrieve(context.Background(), nil, retrieveIn{Semantic: true, Antigens: []string{"loinc:1"}})
+	res, _, err := s.retrieve(context.Background(), nil, retrieveIn{Semantic: true, Tags: []string{"loinc:1"}})
 	if err != nil {
 		t.Fatalf("retrieve: unexpected Go error: %v", err)
 	}

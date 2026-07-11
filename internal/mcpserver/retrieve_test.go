@@ -104,11 +104,11 @@ func TestRetrieve_BudgetControlAndTruncatedRefs(t *testing.T) {
 	}
 }
 
-// TestRetrieve_ProvenanceMatchedAntigens checks retrieve's own antigen
-// provenance (beyond graph.ContextItem's built-in anchor/ancestor/sibling/
-// descendant tags): an anchor selected via the antigens filter reports which
-// of the requested antigens it actually matched.
-func TestRetrieve_ProvenanceMatchedAntigens(t *testing.T) {
+// TestRetrieve_ProvenanceMatchedTags checks retrieve's own tag provenance
+// (beyond graph.ContextItem's built-in anchor/ancestor/sibling/descendant
+// tags): an anchor selected via the tags filter reports which of the
+// requested tags it actually matched.
+func TestRetrieve_ProvenanceMatchedTags(t *testing.T) {
 	e := openT(t)
 	root := seedPatient(t, e, "Provenance Patient")
 	anchor := seedChildBead(t, e, root, "fhir_medicationrequest",
@@ -118,7 +118,7 @@ func TestRetrieve_ProvenanceMatchedAntigens(t *testing.T) {
 	s := newServerT(t, e, SystemRole)
 
 	_, out, err := s.retrieve(context.Background(), nil, retrieveIn{
-		Antigens: []string{"risk:nephrotoxic", "atc:unrelated"},
+		Tags: []string{"risk:nephrotoxic", "atc:unrelated"},
 	})
 	if err != nil {
 		t.Fatalf("retrieve: %v", err)
@@ -131,12 +131,12 @@ func TestRetrieve_ProvenanceMatchedAntigens(t *testing.T) {
 			continue
 		}
 		found = true
-		if len(item.MatchedAntigens) != 1 || item.MatchedAntigens[0] != "risk:nephrotoxic" {
-			t.Errorf("MatchedAntigens = %v, want [risk:nephrotoxic]", item.MatchedAntigens)
+		if len(item.MatchedTags) != 1 || item.MatchedTags[0] != "risk:nephrotoxic" {
+			t.Errorf("MatchedTags = %v, want [risk:nephrotoxic]", item.MatchedTags)
 		}
 	}
 	if !found {
-		t.Fatalf("retrieve(antigens=[risk:nephrotoxic, atc:unrelated]) did not surface anchor %s; Items=%+v", anchorView, out.Items)
+		t.Fatalf("retrieve(tags=[risk:nephrotoxic, atc:unrelated]) did not surface anchor %s; Items=%+v", anchorView, out.Items)
 	}
 }
 
@@ -216,16 +216,15 @@ func TestRetrieve_ClearanceFilterDropsRestrictedItems(t *testing.T) {
 	}
 }
 
-// TestRetrieve_IncludeSiblingsFalse_LeavesContextBundleUnaffected checks
-// U5a's context-bundle-shape change (specs/U5_api_retrieve.md): since
-// package apc and graph's sibling tiers were removed entirely,
-// include_siblings=false no longer changes Items/TruncatedRefs at all (there
-// is no sibling tier left to skip) — it only continues to gate
-// retrieveOut.ClinicalLinks (see TestRetrieve_SurfacesClinicalLinks for that
-// coverage). This test pins the "unaffected" half: with include_siblings
-// omitted vs. explicitly false, the anchor/ancestor/descendant context
-// bundle is identical.
-func TestRetrieve_IncludeSiblingsFalse_LeavesContextBundleUnaffected(t *testing.T) {
+// TestRetrieve_IncludeLinksFalse_LeavesContextBundleUnaffected checks U5a's
+// context-bundle-shape change (specs/U5_api_retrieve.md): since package apc
+// and graph's sibling tiers were removed entirely, include_links=false no
+// longer changes Items/TruncatedRefs at all (there is no sibling tier left
+// to skip) — it only continues to gate retrieveOut.ClinicalLinks (see
+// TestRetrieve_SurfacesClinicalLinks for that coverage). This test pins the
+// "unaffected" half: with include_links omitted vs. explicitly false, the
+// anchor/ancestor/descendant context bundle is identical.
+func TestRetrieve_IncludeLinksFalse_LeavesContextBundleUnaffected(t *testing.T) {
 	e := openT(t)
 
 	patient := seedPatient(t, e, "Sibling Toggle Patient")
@@ -259,25 +258,25 @@ func TestRetrieve_IncludeSiblingsFalse_LeavesContextBundleUnaffected(t *testing.
 
 	includeFalse := false
 	_, noSibOut, err := s.retrieve(context.Background(), nil, retrieveIn{
-		Query:           "meropenem",
-		PatientID:       patient.ID,
-		TokenBudget:     4000,
-		ChainDepth:      5,
-		IncludeSiblings: &includeFalse,
+		Query:        "meropenem",
+		PatientID:    patient.ID,
+		TokenBudget:  4000,
+		ChainDepth:   5,
+		IncludeLinks: &includeFalse,
 	})
 	if err != nil {
-		t.Fatalf("retrieve (include_siblings=false): %v", err)
+		t.Fatalf("retrieve (include_links=false): %v", err)
 	}
 
 	// Every non-sibling-tier item (anchor, ancestor, descendant) must be
-	// unaffected by include_siblings=false post-U5a.
+	// unaffected by include_links=false post-U5a.
 	for _, id := range []string{medicationView, encounterView, observationView} {
 		if !containsItemID(noSibOut.Items, id) {
-			t.Errorf("retrieve(include_siblings=false): Bead %s missing from Items, want unaffected by this flag post-U5a", id)
+			t.Errorf("retrieve(include_links=false): Bead %s missing from Items, want unaffected by this flag post-U5a", id)
 		}
 	}
 	if len(noSibOut.Items) != len(defaultOut.Items) {
-		t.Errorf("retrieve(include_siblings=false) Items length = %d, want == default's %d (flag no longer shapes the context bundle)",
+		t.Errorf("retrieve(include_links=false) Items length = %d, want == default's %d (flag no longer shapes the context bundle)",
 			len(noSibOut.Items), len(defaultOut.Items))
 	}
 }
@@ -342,8 +341,8 @@ func TestRetrieve_AnchorIDsDropRestrictedAnchorAmongMultiple(t *testing.T) {
 // TestRetrieve_SurfacesClinicalLinks checks U3c's retrieve-wiring judgment
 // call: a risk:/atc: cooccurrence pair projected by projector.Reproject
 // (U3b) is surfaced in retrieveOut.ClinicalLinks once both endpoints are in
-// Items, gated by the same IncludeSiblings flag Items' own sibling tiers
-// use (retrieveIn's doc comment: this becomes include_links in U5).
+// Items, gated by IncludeLinks (retrieveIn's doc comment: U5b's rename of
+// include_siblings).
 func TestRetrieve_SurfacesClinicalLinks(t *testing.T) {
 	e := openT(t)
 	patient := seedPatient(t, e, "Clinical Links Patient")
@@ -403,21 +402,21 @@ func TestRetrieve_SurfacesClinicalLinks(t *testing.T) {
 		t.Fatalf("retrieve ClinicalLinks missing medication<->observation link: %+v", out.ClinicalLinks)
 	}
 
-	// include_siblings=false must also suppress ClinicalLinks (same flag as
+	// include_links=false must also suppress ClinicalLinks (same flag as
 	// the sibling tiers — see retrieveOut.ClinicalLinks' doc comment).
 	includeFalse := false
 	_, noLinksOut, err := s.retrieve(context.Background(), nil, retrieveIn{
-		Query:           "meropenem",
-		PatientID:       patient.ID,
-		TokenBudget:     4000,
-		ChainDepth:      5,
-		IncludeSiblings: &includeFalse,
+		Query:        "meropenem",
+		PatientID:    patient.ID,
+		TokenBudget:  4000,
+		ChainDepth:   5,
+		IncludeLinks: &includeFalse,
 	})
 	if err != nil {
-		t.Fatalf("retrieve (include_siblings=false): %v", err)
+		t.Fatalf("retrieve (include_links=false): %v", err)
 	}
 	if len(noLinksOut.ClinicalLinks) != 0 {
-		t.Errorf("retrieve(include_siblings=false).ClinicalLinks = %+v, want empty", noLinksOut.ClinicalLinks)
+		t.Errorf("retrieve(include_links=false).ClinicalLinks = %+v, want empty", noLinksOut.ClinicalLinks)
 	}
 }
 

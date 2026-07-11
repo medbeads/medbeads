@@ -212,7 +212,7 @@ func TestCreateBead_AntigensAreDeterministicallyDerived(t *testing.T) {
 // does not shrink the slice it returns, and it has no way to know about
 // separately-fetched index metadata (beads.summary) a caller might attach
 // alongside the (now-masked) Bead. list_patients/search_beads/get_timeline/
-// search_antigens all populate beadRefView.Summary from an index-derived
+// search_tags all populate beadRefView.Summary from an index-derived
 // string fetched *before* filtering — these tests pin the fix: a restricted
 // Bead's ref must be dropped entirely (Summary must never leak), not merely
 // have its Content masked while its ref (with the pre-filter Summary) is
@@ -341,7 +341,7 @@ func TestGetTimeline_DropsRestrictedSummary(t *testing.T) {
 	}
 }
 
-func TestSearchAntigens_DropsRestrictedSummary(t *testing.T) {
+func TestSearchTags_DropsRestrictedSummary(t *testing.T) {
 	e := openT(t)
 	patient := seedPatient(t, e, "Antigen Search Patient")
 	restricted := seedChildBead(t, e, patient, "fhir_observation",
@@ -358,23 +358,23 @@ func TestSearchAntigens_DropsRestrictedSummary(t *testing.T) {
 	}
 
 	viewer := newServerT(t, e, DefaultRole)
-	_, out, err := viewer.searchAntigens(context.Background(), nil, searchAntigensIn{Antigen: "snomed:restricted-marker"})
+	_, out, err := viewer.searchTags(context.Background(), nil, searchTagsIn{Tag: "snomed:restricted-marker"})
 	if err != nil {
-		t.Fatalf("searchAntigens: %v", err)
+		t.Fatalf("searchTags: %v", err)
 	}
 	for _, ref := range out.Beads {
 		if ref.ID == bead.FormatID(restricted.ID) {
-			t.Fatalf("viewer search_antigens included the restricted Bead at all (want dropped): %+v", ref)
+			t.Fatalf("viewer search_tags included the restricted Bead at all (want dropped): %+v", ref)
 		}
 		if strings.Contains(ref.Summary, restrictedSummaryMarker) {
-			t.Fatalf("viewer search_antigens leaked restricted marker via Summary: %+v", ref)
+			t.Fatalf("viewer search_tags leaked restricted marker via Summary: %+v", ref)
 		}
 	}
 
 	system := newServerT(t, e, SystemRole)
-	_, systemOut, err := system.searchAntigens(context.Background(), nil, searchAntigensIn{Antigen: "snomed:restricted-marker"})
+	_, systemOut, err := system.searchTags(context.Background(), nil, searchTagsIn{Tag: "snomed:restricted-marker"})
 	if err != nil {
-		t.Fatalf("system searchAntigens: %v", err)
+		t.Fatalf("system searchTags: %v", err)
 	}
 	found := false
 	for _, ref := range systemOut.Beads {
@@ -383,7 +383,7 @@ func TestSearchAntigens_DropsRestrictedSummary(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatalf("system search_antigens did not include the restricted Bead; want it present (system bypasses clearance)")
+		t.Fatalf("system search_tags did not include the restricted Bead; want it present (system bypasses clearance)")
 	}
 }
 

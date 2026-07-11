@@ -7,7 +7,7 @@
 //
 // New builds one *Server per Engine + role: every read tool (list_patients,
 // search_beads, get_bead, get_context, get_timeline, get_links,
-// search_antigens, verify_integrity, retrieve) is always registered;
+// search_tags, verify_integrity, retrieve) is always registered;
 // create_bead is registered only when Config.Role == SystemRole
 // (docs/requirements.md R6.3's "書き込みは system ロール限定"). U5a
 // (specs/U5_api_retrieve.md) removed the old get_siblings/get_sibling_links/
@@ -28,7 +28,7 @@
 // that is to treat a masked Bead as accessible() == false and drop it
 // entirely from the response, never to forward the masked placeholder. This
 // matters beyond get_bead/retrieve's own Content masking: several tools
-// (search_beads, list_patients, get_timeline, search_antigens) attach
+// (search_beads, list_patients, get_timeline, search_tags) attach
 // index-derived metadata (a Summary fragment of the Bead's own Content)
 // alongside the Bead, and get_links exposes another Bead's mere
 // existence-as-a-link plus its matched_tag (itself often a
