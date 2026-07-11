@@ -130,3 +130,31 @@
 - **ユーザー裁定**: **retraction(取り消し)は attestation 承認不要・即時有効**(entered-in-error は誤データを
   承認待ちの間臨床的に生かさない = 臨床安全優先。content.authorized_by が権限担保。「retracted 最強」と整合)。
   amends(訂正)は承認必須のまま。
+
+## 2026-07-11: U4b 完成 + notes 事実修正
+
+- **U4 完成・全 push 済み(reviewer GO×2)**: U4a(e5b1cd1)/ U4b(b8ddc0a record_state projector)。
+  builder agent が stream-watchdog timeout で死んだが成果物は健全(全テスト green)→ reviewer が白紙から
+  mutation テストで must-fix の弁別性を実証。実測: bead_status 全 active、active_conditions 47・medications 17。
+- **論文 notes(0710_manuscript_v3/notes/)の事実修正**: 実装照合(Explore)で判明した誤りを是正 —
+  Bead 総数を 960,443(v3.1 基底、sibling 込み 1,042,456 と区別)/ reindex 5m40s(基底)vs 7m31s(sibling 込み)/
+  clinical_note は型名のみ・取り込みは U6 未実装 / attestation-assessment の処理は U4(器は U1 でない)/
+  retrieve provenance は U5 未実装。demo_data を現行実装で reproject し直して 706/47/17 を再実測確認。
+
+## 2026-07-11: U5 API 語彙 + retrieve 既定挙動 設計 — Codex peer 統合(条件付き GO → 確定)
+
+- **peer**: data-reviewer[Claude] + codex に同一中立問題文を並列投入(ユーザー指示「2つの LLM で検証」)。
+  両者とも**条件付き GO**。統合仕様 = specs/U5_api_retrieve.md。
+- **合意点(採用)**: 2ユニット分割 / status 正規化を全 read 経路(anchor/items/truncated_refs/anchor_ids の4経路)/
+  順序 status→GetBead→clearance / BeadStatusFor(ids) バッチ(N+1 回避)/ retrieve は active manifest で絞らない
+  (patient 単位 DELETE で最新 run のみ物理存在)/ current=NULL の amended は drop・置換は patient scope 後 /
+  graph sibling tier 除去で文脈は痩せる(clinical_links は sidecar 代替、近傍展開は非代替)を仕様として受容 /
+  MCP は clean cut(alias 不要、TS 契約影響ゼロ)/ 0008 DROP せず inert 化 / get_links も status を見る。
+- **実証で決着した crux(分割順序)**: **②除去先行 → ①API/status**。retrieve.go:223/229 が sibling tier に
+  依存し BuildContext が非 anchor Bead を item に展開(実証)→ ①先行だと除去対象コードパスに status 配線を
+  通す二重工事。②先行なら痩せた bundle に status を足す単純問題に。
+- **ユーザー裁定(空 bead_status フォールバック)**: 状況で分ける統合案を採用 — テーブル完全空(未 reproject・
+  開発初期)は absent=active でフォールバック(retrieve が壊れない)/ 行はあるのに特定 ID 欠落(reproject 済み
+  不整合)は制御エラー or 除外(異常を黙って通さない)。臨床安全 vs 開発実用性を両立。
+- **分割**: U5a(旧 sibling/APC 除去、先行)→ U5b(API 改名 + retrieve 既定挙動)。
+- **include_links の意味**: sidecar に留める(リンク情報を返すが context item に展開しない)。近傍展開は将来別設計。
