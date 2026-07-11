@@ -6,9 +6,14 @@ import (
 )
 
 // TestOpen_0006_SchemaVersionAndTablesExist checks that a freshly opened
-// index.db applies migration 0006 (specs/U2_projection_schema.md) and ends
-// up at SchemaVersion 6, with every new projection table present and
-// queryable, and the beads.recorded_at column added.
+// index.db applies migration 0006 (specs/U2_projection_schema.md), with
+// every new projection table present and queryable, and the
+// beads.recorded_at column added. SchemaVersion itself is asserted as ">= 6"
+// rather than "== 6" — migration 0007 (specs/U4_state_derivation.md) now
+// exists on top of 0006, and a fresh Open applies every embedded migration,
+// so SchemaVersion is expected to keep advancing as later migrations land;
+// this test's job is only to confirm 0006's own effects are present, not
+// that 0006 is the newest migration.
 func TestOpen_0006_SchemaVersionAndTablesExist(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "index.db")
@@ -23,8 +28,8 @@ func TestOpen_0006_SchemaVersionAndTablesExist(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SchemaVersion: %v", err)
 	}
-	if got != 6 {
-		t.Errorf("SchemaVersion = %d, want 6", got)
+	if got < 6 {
+		t.Errorf("SchemaVersion = %d, want >= 6 (migration 0006 applied)", got)
 	}
 
 	// Every new table must exist and be queryable (empty is fine — U2 is
@@ -97,8 +102,10 @@ func TestOpen_0006_SchemaVersionAndTablesExist(t *testing.T) {
 }
 
 // TestOpen_0006_ReOpenIsIdempotent verifies re-opening an already-migrated
-// (version 6) index.db a second time does not error and keeps
-// SchemaVersion at 6, per applyMigrations' idempotency contract.
+// index.db a second time does not error and keeps SchemaVersion stable
+// (per applyMigrations' idempotency contract), at whatever version the
+// newest embedded migration (0007 as of specs/U4_state_derivation.md, and
+// beyond) leaves it at.
 func TestOpen_0006_ReOpenIsIdempotent(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "index.db")
@@ -125,8 +132,11 @@ func TestOpen_0006_ReOpenIsIdempotent(t *testing.T) {
 		t.Fatalf("SchemaVersion (second): %v", err)
 	}
 
-	if v1 != 6 || v2 != 6 {
-		t.Errorf("schema version across re-Open: first=%d second=%d, want both 6", v1, v2)
+	if v1 < 6 || v2 < 6 {
+		t.Errorf("schema version across re-Open: first=%d second=%d, want both >= 6", v1, v2)
+	}
+	if v1 != v2 {
+		t.Errorf("schema version changed across re-Open: first=%d second=%d", v1, v2)
 	}
 }
 

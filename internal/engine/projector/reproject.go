@@ -165,17 +165,26 @@ func Reproject(idx *index.DB, reader beadReader, knowledgeBeadIDs []string, code
 }
 
 // loadRule resolves the cooccurrence LinkRule from idx's shared Beads,
-// decoding each candidate's content via reader.GetBead (LoadActiveCooccurrenceRule's
-// getContent callback).
+// decoding each candidate's content via reader.GetBead
+// (LoadActiveCooccurrenceRule's getContent callback), restricted to the
+// caller-supplied knowledgeBeadIDs set (specs/U4_state_derivation.md's U3
+// follow-up): when knowledgeBeadIDs names a specific rule Bead, that Bead —
+// not whichever same-rule_id revision happens to have the lexicographically
+// greatest ID — wins. An empty knowledgeBeadIDs preserves
+// LoadActiveCooccurrenceRule's original "greatest ID among every matching
+// Bead wins" behavior, which is what every current caller of Reproject
+// relies on (they all pass a single-element slice naming the one rule they
+// just resolved/seeded, so this filter is a no-op for them today; it only
+// changes behavior once a caller passes a set containing more than one
+// same-rule_id Bead ID).
 func loadRule(idx *index.DB, reader beadReader, knowledgeBeadIDs []string) (LinkRule, error) {
-	_ = knowledgeBeadIDs // reserved: a future multi-rule Reproject would filter LoadActiveCooccurrenceRule's candidates to these IDs; U3b has exactly one rule, so no filtering is needed yet.
 	rule, err := LoadActiveCooccurrenceRule(idx, func(id string) (map[string]any, error) {
 		b, err := reader.GetBead(id)
 		if err != nil {
 			return nil, err
 		}
 		return b.Content, nil
-	})
+	}, knowledgeBeadIDs...)
 	if err != nil {
 		return LinkRule{}, err
 	}

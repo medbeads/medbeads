@@ -15,6 +15,7 @@ import (
 //  1. Verify/assign the Bead's ID: if b.ID is already set it must match its
 //     recomputed content hash (bead.Verify); if unset, it is computed and
 //     assigned (bead.WithID).
+//
 //  2. Reject unknown parents: every parent listed in b.Parents must already
 //     be indexed. This is what makes the DAG structurally acyclic — a Bead
 //     can only name parents that were durably written (and hence indexed)
@@ -28,10 +29,28 @@ import (
 //     existence check (requireBeadsIndexed), for the identical structural
 //     reason — see bead.Bead's doc comment on why an amends/retracts cycle
 //     is impossible by construction, not merely rejected here.
+//
+//     Before the parent-existence check, a "retraction"/"attestation" typed
+//     Bead is additionally required to name its subject in Parents (see
+//     requireSubjectInParents, specs/U4_state_derivation.md's "穴1" fix):
+//     resolvePatientRoot below falls back to the shared Pod ("") when
+//     Parents is empty, so a retraction/attestation Bead that pointed at its
+//     subject only via Retracts/(a future attestation target field) — never
+//     via Parents — would silently land in the shared Pod, escaping its
+//     subject's per-patient Pod entirely. That would make it invisible to
+//     ListPatientBeads(patientRoot) and therefore invisible to the U4
+//     record_state projector, which walks a patient's Beads to resolve
+//     corrections: a retraction the projector never sees is a retraction
+//     that never takes effect, which is a clinical safety hole (an
+//     entered-in-error record staying "active"). Requiring Parents to name
+//     the subject keeps patient_root resolution uniform: subject-in-parents
+//     always resolves to the subject's own patient Pod.
+//
 //  3. Pre-resolve patient_root (see resolvePatientRoot): patient_registration
 //     Beads are their own root; other Beads inherit their parents'
 //     patient_root (single IN query, no N+1), falling back to the shared
 //     Pod ("") when there are no parents or the parents disagree.
+//
 //  4. Reject cross-patient amends/retracts (specs/DESIGN_v3.1_draft.md §2:
 //     "cross-patient の amends/retracts は禁止(ingest 時拒否)"): every Bead
 //     named in b.Amends/b.Retracts must resolve to the same patient_root as
@@ -42,10 +61,12 @@ import (
 //     reference crossing patients is always a caller error, never a
 //     legitimate shared-Bead reference (those go through Evidence instead,
 //     per DESIGN §2).
+//
 //  5. Append to the resolved Pod (fsync included) via this Engine's per-path
 //     Writer, then IndexBead in one transaction — "正本が常に先、インデックス
 //     は追いつける": if the process crashes between these two steps, the next
 //     Open's CatchUp recovers it (see open.go).
+//
 //  6. Idempotent replay: if b.ID is already indexed, Ingest returns success
 //     without writing anything a second time. A caller retrying a network
 //     call or a batch importer resuming after a partial failure cannot tell,
@@ -74,6 +95,9 @@ func (e *Engine) Ingest(b bead.Bead) (bead.Bead, error) {
 
 	normalized := bead.Normalize(b)
 
+	if err := requireSubjectInParents(normalized); err != nil {
+		return bead.Bead{}, fmt.Errorf("engine: ingest %s: %w", b.ID, err)
+	}
 	if err := e.requireParentsIndexed(normalized.Parents); err != nil {
 		return bead.Bead{}, fmt.Errorf("engine: ingest %s: %w", b.ID, err)
 	}
@@ -166,6 +190,28 @@ func verifyOrAssignID(b bead.Bead) (bead.Bead, error) {
 		return bead.Bead{}, fmt.Errorf("verify: %w", err)
 	}
 	return b, nil
+}
+
+// requireSubjectInParents rejects a "retraction" or "attestation" typed Bead
+// whose Parents is empty (specs/U4_state_derivation.md's "穴1" fix — see
+// Ingest's doc comment on step 2 for why): both types name their subject
+// (the Bead being retracted/attested) so a caller can always supply it in
+// Parents too, and doing so is what keeps resolvePatientRoot from falling
+// back to the shared Pod for a Bead that structurally belongs to one
+// patient. This is a shape check only (Parents non-empty); it does not by
+// itself confirm the named parent is the same Bead as Retracts[0] or an
+// attestation's target — Ingest's existing requireSamePatientRoot check
+// (already run on Retracts, mirrored for a future attestation-target field)
+// is what confirms the parent and the target share a patient_root, which is
+// the property that actually matters for correct patient-scoping.
+func requireSubjectInParents(b bead.Bead) error {
+	if b.Type != "retraction" && b.Type != "attestation" {
+		return nil
+	}
+	if len(b.Parents) == 0 {
+		return fmt.Errorf("%s Bead must name its subject in parents (empty parents would resolve to the shared Pod, escaping per-patient scoping)", b.Type)
+	}
+	return nil
 }
 
 // requireParentsIndexed rejects a Bead whose parents are not all already

@@ -134,22 +134,43 @@ func BuildCooccurrenceRuleBead(timestamp string) bead.Bead {
 // since a fresh store legitimately has no link_rule Bead until one is
 // explicitly seeded (BuildCooccurrenceRuleBead + engine.Ingest).
 //
-// If more than one Bead matches, the lexicographically greatest Bead ID
-// wins deterministically (ties are impossible in practice since two
-// byte-identical rule contents collapse to the same content-addressed ID —
-// this only matters if a future second rule variant is ever seeded
-// alongside this one under the same rule_id, which this package does not
-// itself do).
-func LoadActiveCooccurrenceRule(idx *index.DB, getContent func(id string) (map[string]any, error)) (LinkRule, error) {
+// knowledgeBeadIDs, when non-empty, restricts which candidate Bead IDs are
+// even considered: a candidate whose ID is not in this set is skipped
+// before the "greatest ID wins" comparison below, so the manifest/caller's
+// explicitly-consulted set always wins over any other same-rule_id revision
+// that happens to exist in the shared Pod but was not named (specs/
+// U4_state_derivation.md's U3 follow-up — this is the exact fix for
+// "辞書順最大 ID 勝ち" silently ignoring which rule the manifest declared).
+// An empty knowledgeBeadIDs disables this filter entirely (every candidate
+// is considered), preserving this function's original "greatest ID among
+// every matching Bead wins" behavior for callers that have not adopted
+// explicit rule selection yet.
+//
+// Among the (possibly filtered) remaining candidates, the lexicographically
+// greatest Bead ID wins deterministically (ties are impossible in practice
+// since two byte-identical rule contents collapse to the same
+// content-addressed ID).
+func LoadActiveCooccurrenceRule(idx *index.DB, getContent func(id string) (map[string]any, error), knowledgeBeadIDs ...string) (LinkRule, error) {
 	refs, err := idx.ListSharedBeads()
 	if err != nil {
 		return LinkRule{}, fmt.Errorf("projector: load link_rule: %w", err)
+	}
+
+	var allowed map[string]bool
+	if len(knowledgeBeadIDs) > 0 {
+		allowed = make(map[string]bool, len(knowledgeBeadIDs))
+		for _, id := range knowledgeBeadIDs {
+			allowed[id] = true
+		}
 	}
 
 	var bestID string
 	var bestContent map[string]any
 	for _, ref := range refs {
 		if ref.Type != linkRuleType {
+			continue
+		}
+		if allowed != nil && !allowed[ref.ID] {
 			continue
 		}
 		content, err := getContent(ref.ID)

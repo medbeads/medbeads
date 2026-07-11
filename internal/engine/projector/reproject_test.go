@@ -425,3 +425,100 @@ func TestReproject_DoesNotCreateSiblingLinkBeads(t *testing.T) {
 		t.Errorf("sibling_link Bead count = %d, want 0 (Reproject must not mint sibling_link Beads)", n)
 	}
 }
+
+// --- U3 follow-up: loadRule honors knowledgeBeadIDs, not just "greatest ID
+// wins" (specs/U4_state_derivation.md's U3 follow-up) -----------------------
+
+// altTriggerCooccurrenceRuleBead builds a second link_rule Bead sharing
+// CooccurrenceRuleID (the same rule_id as BuildCooccurrenceRuleBead) but a
+// different trigger.tag_namespaces set (atc:/risk: only, rxnorm: excluded) —
+// different content therefore a different content-addressed Bead ID, the
+// same "two variants of one rule_id" shape reindex_reproject_test.go's own
+// altCooccurrenceRuleBead uses for its "different knowledge_bead_ids yields
+// a different projection" proof.
+func altTriggerCooccurrenceRuleBead(timestamp string) bead.Bead {
+	content := map[string]any{
+		"schema":      "medbeads.link_rule.v1",
+		"rule_id":     projector.CooccurrenceRuleID,
+		"rule_family": "cooccurrence",
+		"trigger": map[string]any{
+			"tag_namespaces": []any{"atc:", "risk:"},
+			"min_shared":     1,
+			"excludes": map[string]any{
+				"same_code_namespaces": []any{"loinc:"},
+			},
+		},
+		"relation":       "clinical_correlation",
+		"severity":       "info",
+		"evidence_basis": "cooccurrence",
+		"score_model": map[string]any{
+			"weights": map[string]any{"shared_tag": 1},
+		},
+	}
+	return bead.Bead{
+		Type:      "link_rule",
+		Timestamp: timestamp,
+		Author:    "projector_seed",
+		Content:   content,
+	}
+}
+
+// TestReproject_LoadRuleHonorsKnowledgeBeadIDs seeds TWO link_rule Bead
+// variants under the same rule_id (so LoadActiveCooccurrenceRule's bare
+// "greatest ID wins" scan would pick whichever variant happens to sort
+// last), then calls Reproject naming the NON-greatest one via
+// knowledgeBeadIDs and asserts the resulting clinical_links row's
+// rule_version is the EXPLICITLY NAMED rule Bead's ID, not the
+// lexicographically greatest one — proving loadRule/LoadActiveCooccurrenceRule
+// actually restrict candidates to the caller-declared set rather than
+// silently ignoring it (the exact bug specs/U4_state_derivation.md's U3
+// follow-up fixes: reproject.go's loadRule previously did `_ =
+// knowledgeBeadIDs`).
+func TestReproject_LoadRuleHonorsKnowledgeBeadIDs(t *testing.T) {
+	e := openT(t)
+
+	original := seedCooccurrenceRule(t, e)
+	alt := ingestT(t, e, altTriggerCooccurrenceRuleBead("2026-01-02T00:00:00Z"))
+
+	// Determine which of the two variants sorts lexicographically greatest —
+	// the one bare LoadActiveCooccurrenceRule (no filter) would pick — and
+	// name the OTHER one via knowledgeBeadIDs, so a passing test can only
+	// mean the filter, not coincidence, picked the named rule.
+	if original.ID == alt.ID {
+		t.Fatal("test setup invariant broken: the two rule variants minted the same Bead ID (content not actually distinct)")
+	}
+	nonGreatest := original
+	if original.ID > alt.ID {
+		nonGreatest = alt
+	}
+
+	root := seedPatient(t, e, "patient A")
+	padWithNoiseBeads(t, e, root, 10)
+	// atc:/risk: shared tag: triggers under BOTH variants (rxnorm: is not
+	// involved), so a link is produced regardless of which rule wins —
+	// this test isolates "which rule_version gets stamped", not "does a
+	// link get created at all".
+	rx := seedChildBead(t, e, root, "fhir_medicationrequest",
+		[]string{"risk:nephrotoxic", "atc:c09aa03"}, map[string]any{"drug": "meropenem"})
+	lab := seedChildBead(t, e, root, "fhir_observation",
+		[]string{"risk:nephrotoxic"}, map[string]any{"test": "eGFR"})
+	_, _ = rx, lab
+
+	res, err := projector.Reproject(e.Index(), engineReader{e}, []string{nonGreatest.ID}, "test-code-v1", "2026-07-11T00:00:00Z")
+	if err != nil {
+		t.Fatalf("Reproject (knowledgeBeadIDs naming the non-greatest rule): %v", err)
+	}
+	if res.LinksWritten == 0 {
+		t.Fatal("Reproject wrote 0 clinical_links — test setup did not actually create a cooccurrence pair")
+	}
+
+	links := queryClinicalLinks(t, e.Index(), root.ID)
+	if len(links) != 1 {
+		t.Fatalf("clinical_links rows = %d, want 1: %+v", len(links), links)
+	}
+	if links[0].RuleVersion != nonGreatest.ID {
+		t.Errorf("rule_version = %q, want %q (the explicitly named, non-greatest rule Bead) — "+
+			"loadRule/LoadActiveCooccurrenceRule ignored knowledgeBeadIDs and picked the greatest ID instead",
+			links[0].RuleVersion, nonGreatest.ID)
+	}
+}

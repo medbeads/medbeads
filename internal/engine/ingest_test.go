@@ -205,6 +205,110 @@ func TestIngest_RejectsUnknownParent(t *testing.T) {
 	}
 }
 
+// --- subject-in-parents guard (specs/U4_state_derivation.md "穴1") ---------
+
+// TestIngest_RejectsRetractionWithEmptyParents checks the U4a ingest guard:
+// a "retraction" typed Bead with empty Parents must be rejected, since
+// resolvePatientRoot would otherwise fall back to the shared Pod ("") for
+// it, escaping per-patient scoping (specs/U4_state_derivation.md's "穴1").
+func TestIngest_RejectsRetractionWithEmptyParents(t *testing.T) {
+	e := openT(t)
+
+	root, err := e.Ingest(unsavedBead("patient_registration", nil, map[string]any{"name": "empty parents test"}))
+	if err != nil {
+		t.Fatalf("Ingest (root): %v", err)
+	}
+	note, err := e.Ingest(unsavedBead("clinical_note", []string{root.ID}, map[string]any{"raw_text": "original"}))
+	if err != nil {
+		t.Fatalf("Ingest (note): %v", err)
+	}
+
+	// Parents deliberately left empty: the retraction only points at its
+	// target via Retracts, which is exactly the shape that must be rejected.
+	retraction := unsavedBead("retraction", nil, map[string]any{"reason_code": "entered-in-error"})
+	retraction.Retracts = []string{note.ID}
+	if _, err := e.Ingest(retraction); err == nil {
+		t.Fatal("Ingest of a retraction Bead with empty parents succeeded, want error")
+	}
+}
+
+// TestIngest_RejectsAttestationWithEmptyParents mirrors
+// TestIngest_RejectsRetractionWithEmptyParents for the "attestation" type.
+func TestIngest_RejectsAttestationWithEmptyParents(t *testing.T) {
+	e := openT(t)
+
+	root, err := e.Ingest(unsavedBead("patient_registration", nil, map[string]any{"name": "empty parents test"}))
+	if err != nil {
+		t.Fatalf("Ingest (root): %v", err)
+	}
+	_, err = e.Ingest(unsavedBead("clinical_note", []string{root.ID}, map[string]any{"raw_text": "amended note"}))
+	if err != nil {
+		t.Fatalf("Ingest (note): %v", err)
+	}
+
+	attestation := unsavedBead("attestation", nil, map[string]any{"verdict": "approved"})
+	if _, err := e.Ingest(attestation); err == nil {
+		t.Fatal("Ingest of an attestation Bead with empty parents succeeded, want error")
+	}
+}
+
+// TestIngest_AcceptsRetractionWithSubjectInParents is the positive-path
+// counterpart: a retraction Bead that names its subject in Parents (the
+// required shape) is accepted and lands in the SUBJECT's patient Pod, not
+// the shared Pod — the cross-Pod fixture specs/U4_state_derivation.md's
+// "穴1" fix calls for.
+func TestIngest_AcceptsRetractionWithSubjectInParents(t *testing.T) {
+	e := openT(t)
+
+	rootA, err := e.Ingest(unsavedBead("patient_registration", nil, map[string]any{"name": "patient A"}))
+	if err != nil {
+		t.Fatalf("Ingest (rootA): %v", err)
+	}
+	noteA, err := e.Ingest(unsavedBead("clinical_note", []string{rootA.ID}, map[string]any{"raw_text": "note A"}))
+	if err != nil {
+		t.Fatalf("Ingest (noteA): %v", err)
+	}
+
+	rootB, err := e.Ingest(unsavedBead("patient_registration", nil, map[string]any{"name": "patient B"}))
+	if err != nil {
+		t.Fatalf("Ingest (rootB): %v", err)
+	}
+	// A second patient (B) exists so this test can also confirm the
+	// retraction does NOT leak into patient B's tree or the shared Pod.
+	_ = rootB
+
+	retraction := unsavedBead("retraction", []string{rootA.ID}, map[string]any{"reason_code": "entered-in-error"})
+	retraction.Retracts = []string{noteA.ID}
+	saved, err := e.Ingest(retraction)
+	if err != nil {
+		t.Fatalf("Ingest (retraction with subject in parents): %v", err)
+	}
+
+	ref, err := e.idx.GetBead(saved.ID)
+	if err != nil {
+		t.Fatalf("GetBead(retraction): %v", err)
+	}
+	if ref.PatientRoot != rootA.ID {
+		t.Errorf("retraction patient_root = %q, want %q (patient A, the subject's own Pod, not shared)", ref.PatientRoot, rootA.ID)
+	}
+
+	all, err := e.ListPatientBeads(rootA.ID)
+	if err != nil {
+		t.Fatalf("ListPatientBeads(rootA): %v", err)
+	}
+	if !collectIDs(all)[saved.ID] {
+		t.Errorf("ListPatientBeads(rootA) missing retraction %s — patient scoping fix did not take effect", saved.ID)
+	}
+
+	shared, err := e.idx.ListSharedBeads()
+	if err != nil {
+		t.Fatalf("ListSharedBeads: %v", err)
+	}
+	if collectIDsFromRefs(shared)[saved.ID] {
+		t.Errorf("retraction %s landed in the shared Pod — the exact hole this guard closes", saved.ID)
+	}
+}
+
 // --- amends/retracts validation (specs/DESIGN_v3.1_draft.md §2) ------------
 
 // TestIngest_RejectsUnknownAmendsTarget checks that Amends is subject to the
