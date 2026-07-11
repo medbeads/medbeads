@@ -84,3 +84,22 @@
 - **スコープ確定**: U2 = スキーマの器 + recorded_at 追加まで(新表は空・旧経路無傷 → 中間半端状態が
   構造的に発生しない)。書込切替・link projector は U3。active_conditions/medications の物理表化は
   U4 で計測後判断(過剰設計回避)。
+
+## 2026-07-11: U3 link projector 設計 — Codex peer 統合(条件付き GO → 確定)
+
+- **peer**: data-reviewer + codex に同一中立問題文を並列投入。両者とも**条件付き GO**。統合仕様 =
+  specs/U3_link_projector.md。
+- **合意点(採用)**: 3分割(U3a タグ経路 atomic swap + recorded_at / U3b link projector 新設 / U3c read 切替 +
+  テスト強化)/ U3a は書込+読取6箇所+full reindex を1原子ユニット(片側だけ切ると空テーブル読取の
+  half-migrated)/ U3b は scanner 改造でなく新設(bead_apc_scan/generation/sibling_link 依存を延命しない)/
+  link_rule Bead は content-addressed JSON・U3 では共起 info のみ・warning は後続 / rule_version=link_rule Bead ID /
+  不変条件を「Pod のみ」→「Pod + knowledge Bead IDs + config_hash + code_version」へ明示強化 / round-trip テストは
+  削除でなく置換 / created_at・link_id を内容導出で決定論化。
+- **実証で決着した crux**: 全再投影の方式。単一トランザクション全 DELETE→INSERT は 104万規模で NO-GO
+  (実証: SetMaxOpenConns(1)・busy_timeout=5000・WAL、現状 reindex は既に batchSize=500 で per-tx 分割 →
+  単一 tx は既存設計に逆行、writer ロック長期保持で日次 Ingest が5秒タイムアウト)。→ **patient_root バッチ +
+  manifest active フリップ**を採用。Reproject(知識更新の投影入替、Pod 再スキャンなし)を Reindex(index.db
+  消失復旧)と別関数に分離。codex の実測ゲート(1,135患者で <15分)を U3b done 条件に。
+- **U3 前の仕様修正**: DESIGN_v3.1 の「Pod のみ再構築」文言を強化版に修正。link_rule Bead content スキーマ確定。
+- **failure catalog 起案2件**(要承認): ①知識更新の全再投影を Reindex で実装しない(Reproject と分離)
+  ②大量投影入替を単一 tx にしない(原子性の単位を patient_root に落とす)。
