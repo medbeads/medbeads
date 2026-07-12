@@ -5,12 +5,14 @@ import {
   fetchAllPatients,
   searchPatients,
   fetchPatientTimeline,
+  fetchPatientGraph,
   fetchClearanceRules,
   createClearanceRule,
   checkAccess,
   fetchAIInsight,
   setViewerRoles,
   type Bead,
+  type PatientGraph,
 } from '../lib/api';
 
 const patientBead: Bead = {
@@ -78,6 +80,38 @@ describe('fetchPatientTimeline', () => {
     const [url, config] = get.mock.calls[0];
     expect(url).toBe('/beads/context');
     expect(config?.params.lookup).toBe('reverse');
+  });
+});
+
+describe('fetchPatientGraph', () => {
+  it('requests the graph endpoint for the given patient root and forwards the viewer role header', async () => {
+    setViewerRoles(['specialist']);
+    const graph: PatientGraph = {
+      patient_root: 'patient-1234567890',
+      beads: [
+        {
+          id: 'patient-1234567890',
+          type: 'patient_registration',
+          timestamp: '2026-01-01T00:00:00Z',
+          recorded_at: '2026-01-01T00:00:00Z',
+          summary: 'Tanaka Hanako',
+          status: '',
+          current_bead_id: '',
+          amends: [],
+          retracts: [],
+        },
+      ],
+      edges: [],
+      links: [],
+    };
+    const get = vi.spyOn(api, 'get').mockResolvedValue({ data: graph });
+
+    const result = await fetchPatientGraph('patient-1234567890');
+
+    expect(result).toEqual(graph);
+    const [url, config] = get.mock.calls[0];
+    expect(url).toBe('/patients/patient-1234567890/graph');
+    expect(config?.headers?.['X-Viewer-Roles']).toBe('specialist');
   });
 });
 

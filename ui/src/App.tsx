@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Activity, Pill, FileText, AlertCircle, Stethoscope, User, LayoutList, Network } from 'lucide-react';
-import { fetchPatientTimeline, fetchClearanceRules, setViewerRoles, getViewerRoles } from './lib/api';
-import type { Patient, TimelineItem, ViewerRole, ClearanceRule } from './lib/api';
+import { fetchPatientTimeline, fetchPatientGraph, fetchClearanceRules, setViewerRoles, getViewerRoles } from './lib/api';
+import type { Patient, TimelineItem, ViewerRole, ClearanceRule, PatientGraph } from './lib/api';
 import { TimelineCard } from './components/TimelineCard';
 import { DetailPanel } from './components/DetailPanel';
 import { PatientSidebar } from './components/PatientSidebar';
@@ -19,6 +19,9 @@ function App() {
   const [viewMode, setViewMode] = useState<'list' | 'graph'>('list');
   const [viewerRoles, setViewerRolesState] = useState<ViewerRole[]>(getViewerRoles());
   const [clearanceRulesMap, setClearanceRulesMap] = useState<Record<string, ClearanceRule[]>>({});
+  const [patientGraph, setPatientGraph] = useState<PatientGraph | null>(null);
+  const [graphLoading, setGraphLoading] = useState(false);
+  const [graphError, setGraphError] = useState<string | null>(null);
 
   const handleViewerRolesChange = useCallback((roles: ViewerRole[]) => {
     setViewerRolesState(roles);
@@ -26,14 +29,27 @@ function App() {
     // Re-fetch data with new roles
     if (selectedPatient) {
       fetchTimelineData();
+      if (viewMode === 'graph') {
+        fetchGraphData();
+      }
     }
-  }, [selectedPatient]);
+  }, [selectedPatient, viewMode]);
 
   useEffect(() => {
     if (selectedPatient) {
       fetchTimelineData();
     }
   }, [selectedPatient?.id]);
+
+  // Graph data (R7) is fetched lazily: only once the user actually switches
+  // to Graph View, and again whenever the selected patient changes while
+  // already in Graph View. Avoids an extra request per patient click when
+  // the user never opens the graph.
+  useEffect(() => {
+    if (selectedPatient && viewMode === 'graph') {
+      fetchGraphData();
+    }
+  }, [selectedPatient?.id, viewMode]);
 
   // Fetch clearance rules for all timeline items
   useEffect(() => {
@@ -71,6 +87,23 @@ function App() {
       console.error('Error fetching timeline data:', error);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function fetchGraphData() {
+    if (!selectedPatient) return;
+
+    try {
+      setGraphLoading(true);
+      setGraphError(null);
+      const graph = await fetchPatientGraph(selectedPatient.id);
+      setPatientGraph(graph);
+    } catch (error) {
+      console.error('Error fetching patient graph:', error);
+      setPatientGraph(null);
+      setGraphError('Failed to load the bead graph for this patient.');
+    } finally {
+      setGraphLoading(false);
     }
   }
 
@@ -193,13 +226,45 @@ function App() {
                         </button>
                     </div>
                     <span className="px-3 py-1 bg-white/20 text-white text-sm font-semibold rounded-lg">
-                        {filteredItems.length} items
+                        {viewMode === 'graph' ? `${patientGraph?.beads.length ?? 0} beads` : `${filteredItems.length} items`}
                     </span>
                   </div>
                 </div>
                 
                 <div className="flex-1 overflow-hidden relative">
-                  {loading ? (
+                  {viewMode === 'graph' ? (
+                    graphLoading ? (
+                      <div className="flex items-center justify-center py-16 h-full">
+                        <div className="animate-spin rounded-full h-12 w-12 border-4 border-blue-600 border-t-transparent"></div>
+                      </div>
+                    ) : graphError ? (
+                      <div className="text-center py-16 text-slate-500 h-full flex flex-col items-center justify-center">
+                        <AlertCircle className="w-16 h-16 mx-auto mb-4 text-red-300" />
+                        <p className="text-lg font-medium text-red-600">{graphError}</p>
+                        <button
+                          onClick={() => fetchGraphData()}
+                          className="mt-4 px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                        >
+                          Retry
+                        </button>
+                      </div>
+                    ) : patientGraph && patientGraph.beads.length > 0 ? (
+                      <GraphView
+                        graph={patientGraph}
+                        onBeadClick={(bead) => {
+                          const item = timelineItems.find((i) => i.data?.id === bead.id);
+                          if (item) setSelectedItem(item);
+                        }}
+                        selectedBeadId={selectedItem?.data?.id}
+                      />
+                    ) : (
+                      <div className="text-center py-16 text-slate-500 h-full flex flex-col items-center justify-center">
+                        <Network className="w-16 h-16 mx-auto mb-4 text-slate-300" />
+                        <p className="text-lg font-medium">No graph data available</p>
+                        <p className="text-sm mt-2">No beads found for this patient</p>
+                      </div>
+                    )
+                  ) : loading ? (
                     <div className="flex items-center justify-center py-16 h-full">
                       <div className="animate-spin rounded-full h-12 w-12 border-4 border-blue-600 border-t-transparent"></div>
                     </div>
@@ -210,28 +275,17 @@ function App() {
                       <p className="text-sm mt-2">No records found for this patient</p>
                     </div>
                   ) : (
-                    <>
-                        {viewMode === 'list' ? (
-                            <div className="overflow-y-auto h-full p-6 space-y-4">
-                                {filteredItems.map((item, index) => (
-                                    <TimelineCard
-                                    key={`${item.type}-${item.data?.id || index}`}
-                                    item={item}
-                                    isSelected={selectedItem === item}
-                                    onClick={() => setSelectedItem(item)}
-                                    clearanceRules={item.data?.id ? clearanceRulesMap[item.data.id] : undefined}
-                                    />
-                                ))}
-                            </div>
-                        ) : (
-                            <GraphView
-                                items={timelineItems}
-                                onNodeClick={(item) => setSelectedItem(item)}
-                                selectedId={selectedItem?.data?.id}
-                                clearanceRulesMap={clearanceRulesMap}
+                    <div className="overflow-y-auto h-full p-6 space-y-4">
+                        {filteredItems.map((item, index) => (
+                            <TimelineCard
+                            key={`${item.type}-${item.data?.id || index}`}
+                            item={item}
+                            isSelected={selectedItem === item}
+                            onClick={() => setSelectedItem(item)}
+                            clearanceRules={item.data?.id ? clearanceRulesMap[item.data.id] : undefined}
                             />
-                        )}
-                    </>
+                        ))}
+                    </div>
                   )}
                 </div>
               </div>

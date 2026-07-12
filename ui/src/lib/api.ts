@@ -123,6 +123,63 @@ export interface TimelineItem {
   snippet?: string; // Search result snippet for this item
 }
 
+// --- Patient Graph Types (R7, specs/R7_graph_view.md) ---
+//
+// These mirror the Go server's graphBeadView/graphEdgeView/graphLinkView/
+// graphResponse types (internal/rest/views.go) verbatim, field-for-field and
+// casing-for-casing (server JSON tags are snake_case; these TS field names
+// match them exactly so no per-screen re-mapping is needed). This is the
+// single, one-place definition of the /patients/{root}/graph contract —
+// do not redefine these shapes in component files.
+
+// '' is a valid wire value: an absent bead_status row is the "active"
+// fallback (see internal/rest/graph_test.go TestHandleGraph_FullShape:
+// "absent bead_status row = active fallback: Status/CurrentBeadID empty").
+// Treat '' the same as 'active' when rendering — do not treat it as unknown.
+export type GraphBeadStatus = '' | 'active' | 'amended' | 'retracted' | 'unattested';
+
+export interface GraphBead {
+  id: string;
+  type: string;
+  timestamp: string; // RFC3339, clinical event time
+  recorded_at: string; // RFC3339, write-instant; may be ''
+  summary: string;
+  status: GraphBeadStatus;
+  current_bead_id: string; // replacement bead id when status === 'amended'; '' otherwise
+  amends: string[]; // always an array, [] when empty (never null)
+  retracts: string[]; // always an array, [] when empty (never null)
+}
+
+// Parent DAG edge (vertical axis). Only edge_type='parent' rows are emitted
+// server-side; sibling edges are dead and never appear here.
+export interface GraphEdge {
+  child_id: string;
+  parent_id: string;
+}
+
+export type GraphLinkSeverity = 'info' | 'warning' | 'alert' | 'critical';
+export type GraphLinkEvidenceBasis = 'cooccurrence' | 'curated_knowledge' | 'guideline';
+
+// clinical_links edge (horizontal axis). Undirected: bead_a < bead_b is
+// enforced server-side (DB CHECK constraint), not by this client.
+export interface GraphLink {
+  link_id: string;
+  bead_a: string;
+  bead_b: string;
+  relation: string;
+  matched_tag: string;
+  severity: GraphLinkSeverity;
+  evidence_basis: GraphLinkEvidenceBasis;
+  rule_version: string; // rule bead id, or '' if not rule-derived
+}
+
+export interface PatientGraph {
+  patient_root: string;
+  beads: GraphBead[];
+  edges: GraphEdge[];
+  links: GraphLink[];
+}
+
 // --- API Functions ---
 
 export const mapBeadToPatient = (bead: Bead): Patient => ({
@@ -178,6 +235,18 @@ export const fetchPatientTimeline = async (patientId: string): Promise<TimelineI
     .filter((item): item is TimelineItem => item !== null);
 
   return items.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+};
+
+// fetchPatientGraph fetches the two-axis Bead graph (vertical parent DAG +
+// horizontal clinical_links) for one patient. Clearance masking and
+// retracted/unattested link-endpoint normalization are applied server-side
+// (same path as MCP get_links, per specs/R7_graph_view.md) — the response is
+// already safe to render as-is for the current viewer.
+export const fetchPatientGraph = async (patientRoot: string): Promise<PatientGraph> => {
+  const response = await api.get<PatientGraph>(`/patients/${patientRoot}/graph`, {
+    headers: getViewerHeaders(),
+  });
+  return response.data;
 };
 
 export function mapBeadToTimelineItem(bead: Bead): TimelineItem | null {
