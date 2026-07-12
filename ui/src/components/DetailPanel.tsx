@@ -2,16 +2,20 @@ import { useState, useEffect, type ReactNode } from 'react';
 import { Sparkles, Info, AlertTriangle, Code, ChevronDown, ChevronRight, ShieldX } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { fetchAIInsight, getViewerRoles } from '../lib/api';
-import type { TimelineItem, Patient, BeadUsed, ClearanceRule } from '../lib/api';
-import { isRestrictedForViewer } from '../lib/clearance';
+import type { TimelineItem, Patient } from '../lib/api';
+import type { BeadUsed } from '../lib/api';
 
 interface DetailPanelProps {
   selectedItem: TimelineItem | null;
   patient: Patient;
-  clearanceRulesMap?: Record<string, ClearanceRule[]>;
+  // Set of bead ids the server already marked as restricted for the current
+  // viewer (derived once in App.tsx from each TimelineItem.restricted — see
+  // R8b). Replaces the old per-bead ClearanceRule[] map: only a boolean is
+  // needed here, and it requires zero extra requests.
+  restrictedIds?: Set<string>;
 }
 
-export function DetailPanel({ selectedItem, clearanceRulesMap = {} }: DetailPanelProps) {
+export function DetailPanel({ selectedItem, restrictedIds = new Set() }: DetailPanelProps) {
   const [insight, setInsight] = useState<string | null>(null);
   const [beadsUsed, setBeadsUsed] = useState<BeadUsed[]>([]);
   const [loadingInsight, setLoadingInsight] = useState(false);
@@ -19,8 +23,7 @@ export function DetailPanel({ selectedItem, clearanceRulesMap = {} }: DetailPane
 
   const viewerRoles = getViewerRoles();
   const beadId = selectedItem?.data?.id;
-  const rules = beadId ? clearanceRulesMap[beadId] : undefined;
-  const isRestricted = isRestrictedForViewer(rules, viewerRoles);
+  const isRestricted = !!beadId && restrictedIds.has(beadId);
 
   useEffect(() => {
     setInsight(null);
@@ -70,13 +73,11 @@ export function DetailPanel({ selectedItem, clearanceRulesMap = {} }: DetailPane
     );
   }
 
-  // Show access denied message if viewer doesn't have permission
+  // Show access denied message if viewer doesn't have permission. Only the
+  // boolean is available here (see restrictedIds / R8b) — the specific
+  // denied-roles/reason/expiry are deliberately not shown to the denied
+  // viewer, since that rule detail is itself sensitive information.
   if (isRestricted) {
-    const deniedRoles = rules?.flatMap(r => r.denied_roles) || [];
-    const uniqueDeniedRoles = [...new Set(deniedRoles)];
-    const allowedRoles = rules?.flatMap(r => r.allowed_roles || []) || [];
-    const uniqueAllowedRoles = [...new Set(allowedRoles)];
-
     return (
       <div className="flex flex-col items-center justify-center h-full p-12 text-center">
         <div className="w-24 h-24 bg-gradient-to-br from-red-100 to-orange-100 rounded-full flex items-center justify-center mb-6">
@@ -86,23 +87,6 @@ export function DetailPanel({ selectedItem, clearanceRulesMap = {} }: DetailPane
         <p className="text-slate-600 max-w-md mb-4">
           Your current role ({viewerRoles.join(', ')}) does not have permission to view this information.
         </p>
-        <div className="bg-red-50 border border-red-200 rounded-lg p-4 max-w-md">
-          {uniqueDeniedRoles.length > 0 && (
-            <p className="text-sm text-red-800">
-              <strong>Restricted for:</strong> {uniqueDeniedRoles.join(', ')}
-            </p>
-          )}
-          {uniqueAllowedRoles.length > 0 && (
-            <p className="text-sm text-red-800">
-              <strong>Viewable only by:</strong> {uniqueAllowedRoles.join(', ')}
-            </p>
-          )}
-          {rules?.[0]?.reason && (
-            <p className="text-sm text-red-700 mt-2">
-              <strong>Reason:</strong> {rules[0].reason}
-            </p>
-          )}
-        </div>
         <p className="text-xs text-slate-400 mt-4">
           If you need access, switch to system or emergency role.
         </p>

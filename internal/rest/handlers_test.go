@@ -663,18 +663,94 @@ func TestWithRateLimit_Returns429(t *testing.T) {
 	handler := s.withRateLimit(ok)
 
 	codes := make([]int, 0, 3)
+	var lastW *httptest.ResponseRecorder
 	for i := 0; i < 3; i++ {
 		r := httptest.NewRequest(http.MethodGet, "/beads", nil)
 		r.RemoteAddr = "192.0.2.1:1234"
 		w := httptest.NewRecorder()
 		handler(w, r)
 		codes = append(codes, w.Code)
+		lastW = w
 	}
 	if codes[0] != http.StatusOK || codes[1] != http.StatusOK {
 		t.Errorf("first two requests should be 200, got %v", codes)
 	}
 	if codes[2] != http.StatusTooManyRequests {
 		t.Errorf("third request should be 429, got %d", codes[2])
+	}
+	// Pin existing correct behavior: a throttled *actual* request still
+	// carries CORS headers (this was never the bug — the bug was that the
+	// OPTIONS preflight itself got throttled; see
+	// TestWithRateLimit_OPTIONSNeverThrottled below) plus Retry-After so
+	// clients can back off intelligently.
+	if got := lastW.Header().Get("Access-Control-Allow-Origin"); got != "*" {
+		t.Errorf("429 response Access-Control-Allow-Origin = %q, want *", got)
+	}
+	if got := lastW.Header().Get("Retry-After"); got != "60" {
+		t.Errorf("429 response Retry-After = %q, want 60 (matches the one-minute fixed window)", got)
+	}
+}
+
+// TestWithRateLimit_OPTIONSNeverThrottled is the regression test for the
+// bug this task fixes: a browser preflight (OPTIONS) must always get an ok
+// (2xx) status, even after the per-IP counter has already tripped for
+// actual requests from the same IP. Before the fix, Mux() wrapped the
+// OPTIONS branch in withRateLimit just like every other method, so once an
+// IP's counter passed RateLimit, its *next* preflight returned 429 — and
+// the Fetch spec requires a preflight to be 2xx regardless of the CORS
+// headers it carries, so the browser reported an opaque CORS failure
+// instead of an honest 429. Removing the OPTIONS short-circuit in
+// withRateLimit must make this test fail (verified by mutation).
+func TestWithRateLimit_OPTIONSNeverThrottled(t *testing.T) {
+	e := openT(t)
+	s, err := New(Config{Engine: e, CORSAllowedOrigins: []string{"*"}, RateLimit: 1})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ok := func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }
+	handler := s.withRateLimit(ok)
+
+	// Exhaust the limit (RateLimit: 1) with real GET requests from the same IP.
+	for i := 0; i < 5; i++ {
+		r := httptest.NewRequest(http.MethodGet, "/beads", nil)
+		r.RemoteAddr = "198.51.100.7:1234"
+		w := httptest.NewRecorder()
+		handler(w, r)
+	}
+
+	// The counter is now well past the limit. A preflight from the same IP
+	// must still succeed.
+	r := httptest.NewRequest(http.MethodOptions, "/beads", nil)
+	r.RemoteAddr = "198.51.100.7:1234"
+	r.Header.Set("Origin", "http://localhost:5173")
+	w := httptest.NewRecorder()
+	handler(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("OPTIONS after rate limit exhausted: status = %d, want 200 (preflight must never be throttled)", w.Code)
+	}
+	if got := w.Header().Get("Access-Control-Allow-Origin"); got != "*" {
+		t.Errorf("OPTIONS after rate limit exhausted: Access-Control-Allow-Origin = %q, want *", got)
+	}
+}
+
+// TestSetCORSHeaders_MaxAge pins Access-Control-Max-Age so browsers cache
+// preflights instead of re-preflighting every request that carries the
+// UI's non-CORS-safelisted X-Viewer-Roles header.
+func TestSetCORSHeaders_MaxAge(t *testing.T) {
+	e := openT(t)
+	s, err := New(Config{Engine: e, CORSAllowedOrigins: []string{"*"}})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	r := httptest.NewRequest(http.MethodGet, "/beads", nil)
+	w := httptest.NewRecorder()
+	s.setCORSHeaders(w, r)
+
+	if got := w.Header().Get("Access-Control-Max-Age"); got != "600" {
+		t.Errorf("Access-Control-Max-Age = %q, want 600", got)
 	}
 }
 

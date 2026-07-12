@@ -177,11 +177,25 @@ func clientIP(r *http.Request) string {
 }
 
 // withRateLimit wraps a handler with per-IP rate limiting (ported verbatim
-// from v2.2.0's core/api.withRateLimit).
+// from v2.2.0's core/api.withRateLimit), with one addition beyond v2: a CORS
+// preflight (OPTIONS) is answered before the per-IP counter is even
+// consulted. A preflight carries no body and triggers no engine work, so
+// counting it against the limit is pure cost — and worse, once the counter
+// trips it turns an honest 429 into a browser-visible, undiagnosable CORS
+// failure: the Fetch spec requires a preflight response to have an ok (2xx)
+// status regardless of which CORS headers it carries, so a throttled
+// OPTIONS silently fails every subsequent actual request that needed that
+// preflight to succeed first.
 func (s *Server) withRateLimit(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodOptions {
+			s.setCORSHeaders(w, r)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
 		if s.limiter != nil && !s.limiter.allow(clientIP(r)) {
 			s.setCORSHeaders(w, r)
+			w.Header().Set("Retry-After", "60")
 			http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
 			return
 		}
@@ -236,4 +250,9 @@ func (s *Server) setCORSHeaders(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Viewer-Roles, X-User-ID, X-Service-Token, X-Access-Reason")
+	// Access-Control-Max-Age lets the browser cache this preflight's result
+	// (600s = 10min) instead of re-preflighting every single request that
+	// carries a non-CORS-safelisted header (the UI's X-Viewer-Roles is one),
+	// which otherwise doubles request volume against the rate limiter above.
+	w.Header().Set("Access-Control-Max-Age", "600")
 }

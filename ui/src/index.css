@@ -1,1 +1,47 @@
 @import "tailwindcss";
+
+/* Bead-graph "Clinical Spine" (R7c): subtle expand/collapse re-layout
+   transition, disabled under prefers-reduced-motion per the design brief. */
+@media (prefers-reduced-motion: no-preference) {
+  .bead-graph-spine .react-flow__node {
+    transition: transform 220ms ease-out;
+  }
+}
+
+/* Bead-graph hover z-index + popover reveal — CSS-ONLY, deliberately not
+   React state (GraphView.tsx's BeadTile has the full history: a first fix
+   used a `hoveredNodeId` React state fed into the node-building useMemo,
+   which caused a flicker/render loop — every hover recomputed the whole
+   nodes array with brand-new label elements, replacing the DOM under the
+   cursor, refiring mouseenter/mouseleave, refiring the state update, ad
+   infinitum). `:hover` triggers zero React re-renders, so it cannot feed
+   back into itself.
+   `!important` is required: ReactFlow's NodeWrapper puts `node.style` last
+   in its inline style object (verified in @reactflow/core dist/esm/index.js),
+   so any node.style.zIndex would otherwise always beat this class-based
+   rule — GraphView.tsx no longer sets style.zIndex on these node kinds at
+   all, but !important is kept as a defensive guarantee against that
+   assumption silently regressing again. */
+.react-flow__node.bead-tile-node {
+  z-index: 9;
+}
+.react-flow__node.bead-tile-node:hover {
+  z-index: 10000 !important;
+}
+.react-flow__node.bead-encounter-node,
+.react-flow__node.bead-root-node {
+  z-index: 10;
+}
+.react-flow__node.bead-encounter-node:hover,
+.react-flow__node.bead-root-node:hover {
+  z-index: 10000 !important;
+}
+
+/* BeadTile's popover: always in the DOM, hidden by default, revealed by the
+   tile node's own :hover — no JS/state involved. */
+.bead-tile-popover {
+  display: none;
+}
+.react-flow__node.bead-tile-node:hover .bead-tile-popover {
+  display: block;
+}

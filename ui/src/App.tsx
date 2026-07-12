@@ -1,7 +1,7 @@
-import { useState, useEffect, useCallback } from 'react';
-import { Activity, Pill, FileText, AlertCircle, Stethoscope, User, LayoutList, Network } from 'lucide-react';
-import { fetchPatientTimeline, fetchPatientGraph, fetchClearanceRules, setViewerRoles, getViewerRoles } from './lib/api';
-import type { Patient, TimelineItem, ViewerRole, ClearanceRule, PatientGraph } from './lib/api';
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import { Activity, Pill, FileText, AlertCircle, Stethoscope, User, LayoutList, Network, Maximize2, Minimize2 } from 'lucide-react';
+import { fetchPatientTimeline, fetchPatientGraph, setViewerRoles, getViewerRoles } from './lib/api';
+import type { Patient, TimelineItem, ViewerRole, PatientGraph } from './lib/api';
 import { TimelineCard } from './components/TimelineCard';
 import { DetailPanel } from './components/DetailPanel';
 import { PatientSidebar } from './components/PatientSidebar';
@@ -17,8 +17,12 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<TabType>('timeline');
   const [viewMode, setViewMode] = useState<'list' | 'graph'>('list');
+  // Manual 1-column/2-column toggle for the view body (independent of
+  // viewMode — usable from both list and graph, not auto-driven by graph
+  // mode), triggered by the expand/collapse button in the view panel's
+  // header bar. Session-only; no persistence required.
+  const [wideView, setWideView] = useState(false);
   const [viewerRoles, setViewerRolesState] = useState<ViewerRole[]>(getViewerRoles());
-  const [clearanceRulesMap, setClearanceRulesMap] = useState<Record<string, ClearanceRule[]>>({});
   const [patientGraph, setPatientGraph] = useState<PatientGraph | null>(null);
   const [graphLoading, setGraphLoading] = useState(false);
   const [graphError, setGraphError] = useState<string | null>(null);
@@ -51,28 +55,20 @@ function App() {
     }
   }, [selectedPatient?.id, viewMode]);
 
-  // Fetch clearance rules for all timeline items
-  useEffect(() => {
-    async function fetchAllClearanceRules() {
-      const rulesMap: Record<string, ClearanceRule[]> = {};
-      for (const item of timelineItems) {
-        if (item.data?.id) {
-          try {
-            const rules = await fetchClearanceRules(item.data.id);
-            if (rules.length > 0) {
-              rulesMap[item.data.id] = rules;
-            }
-          } catch (error) {
-            // Silently ignore errors for individual items
-          }
-        }
+  // restrictedIds is derived synchronously from data the timeline fetch
+  // already returned (each item's `restricted` flag, itself derived from the
+  // bead's `_restricted` marker set server-side by clearance.FilterByAccess
+  // for the current viewer's roles). No follow-up request per bead is ever
+  // made — see R8b: this replaces an O(N) `/clearance` fan-out (~1 request
+  // per bead) that blew the server's rate limit on large patients.
+  const restrictedIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const item of timelineItems) {
+      if (item.data?.id && item.restricted) {
+        ids.add(item.data.id);
       }
-      setClearanceRulesMap(rulesMap);
     }
-
-    if (timelineItems.length > 0) {
-      fetchAllClearanceRules();
-    }
+    return ids;
   }, [timelineItems]);
 
   async function fetchTimelineData() {
@@ -80,7 +76,6 @@ function App() {
 
     try {
       setLoading(true);
-      setClearanceRulesMap({});
       const items = await fetchPatientTimeline(selectedPatient.id);
       setTimelineItems(items);
     } catch (error) {
@@ -197,9 +192,25 @@ function App() {
               </div>
             </div>
 
-            <div className="flex-1 grid grid-cols-2 gap-6 p-6 overflow-hidden">
+            <div
+              className={`flex-1 grid gap-6 p-6 overflow-hidden relative ${
+                wideView ? 'grid-cols-1' : 'grid-cols-2'
+              }`}
+            >
               <div className="bg-white rounded-xl shadow-lg border border-slate-200 overflow-hidden flex flex-col h-full">
-                <div className="flex-none bg-gradient-to-r from-slate-700 to-slate-600 px-6 py-4 flex items-center justify-between">
+                <div
+                  className="flex-none bg-gradient-to-r from-slate-700 to-slate-600 px-6 py-4 flex items-center justify-between cursor-pointer"
+                  onClick={() => setWideView((v) => !v)}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={wideView ? '2カラムに戻す' : '全幅表示'}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      setWideView((v) => !v);
+                    }
+                  }}
+                >
                   <h2 className="text-xl font-bold text-white">
                     {activeTab === 'timeline' && 'Timeline'}
                     {activeTab === 'medications' && 'Medications'}
@@ -207,9 +218,9 @@ function App() {
                     {activeTab === 'reports' && 'Reports'}
                     {activeTab === 'conditions' && 'Conditions'}
                   </h2>
-                  
+
                   <div className="flex items-center gap-4">
-                    <div className="flex bg-slate-800/50 rounded-lg p-1">
+                    <div className="flex bg-slate-800/50 rounded-lg p-1" onClick={(e) => e.stopPropagation()}>
                         <button
                             onClick={() => setViewMode('list')}
                             className={`p-1.5 rounded-md transition-all ${viewMode === 'list' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-300 hover:text-white'}`}
@@ -228,9 +239,20 @@ function App() {
                     <span className="px-3 py-1 bg-white/20 text-white text-sm font-semibold rounded-lg">
                         {viewMode === 'graph' ? `${patientGraph?.beads.length ?? 0} beads` : `${filteredItems.length} items`}
                     </span>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setWideView((v) => !v);
+                      }}
+                      className="p-1.5 rounded-md text-slate-300 hover:text-white hover:bg-slate-800/50 transition-all"
+                      title={wideView ? '2カラムに戻す' : '全幅表示'}
+                      aria-label={wideView ? '2カラムに戻す' : '全幅表示'}
+                    >
+                      {wideView ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
+                    </button>
                   </div>
                 </div>
-                
+
                 <div className="flex-1 overflow-hidden relative">
                   {viewMode === 'graph' ? (
                     graphLoading ? (
@@ -282,7 +304,7 @@ function App() {
                             item={item}
                             isSelected={selectedItem === item}
                             onClick={() => setSelectedItem(item)}
-                            clearanceRules={item.data?.id ? clearanceRulesMap[item.data.id] : undefined}
+                            restricted={item.restricted}
                             />
                         ))}
                     </div>
@@ -290,24 +312,53 @@ function App() {
                 </div>
               </div>
 
-              <div className="bg-white rounded-xl shadow-lg border border-slate-200 overflow-hidden flex flex-col">
-                <div className="flex-none bg-gradient-to-r from-cyan-700 to-cyan-600 px-6 py-4">
-                  <h2 className="text-xl font-bold text-white">Details & AI Insights</h2>
-                </div>
-                <div className="flex-1 overflow-y-auto">
-                  {selectedItem ? (
-                    <DetailPanel selectedItem={selectedItem} patient={selectedPatient} clearanceRulesMap={clearanceRulesMap} />
-                  ) : (
-                    <div className="flex items-center justify-center h-full p-6 text-slate-500">
-                      <div className="text-center">
-                        <FileText className="w-16 h-16 mx-auto mb-4 text-slate-300" />
-                        <p className="text-lg font-medium">Select an item</p>
-                        <p className="text-sm mt-2">Click on an item from the list to view details</p>
+              {wideView ? (
+                // wideView (user-toggled via the header bar's expand/collapse
+                // button — independent of viewMode, useful for both list and
+                // graph) drops to 1 column so the view body gets full width;
+                // Details & AI Insights renders as a floating overlay instead
+                // of a permanent 2nd column — only shown once a Bead/item is
+                // actually selected, and dismissible so it never permanently
+                // eats the reclaimed width.
+                selectedItem && (
+                  <div className="absolute top-0 right-0 h-full w-full max-w-md z-20 p-3">
+                    <div className="bg-white rounded-xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col h-full">
+                      <div className="flex-none bg-gradient-to-r from-cyan-700 to-cyan-600 px-6 py-4 flex items-center justify-between">
+                        <h2 className="text-xl font-bold text-white">Details & AI Insights</h2>
+                        <button
+                          onClick={() => setSelectedItem(null)}
+                          className="text-white/80 hover:text-white text-sm font-medium"
+                          aria-label="Close details panel"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                      <div className="flex-1 overflow-y-auto">
+                        <DetailPanel selectedItem={selectedItem} patient={selectedPatient} restrictedIds={restrictedIds} />
                       </div>
                     </div>
-                  )}
+                  </div>
+                )
+              ) : (
+                <div className="bg-white rounded-xl shadow-lg border border-slate-200 overflow-hidden flex flex-col">
+                  <div className="flex-none bg-gradient-to-r from-cyan-700 to-cyan-600 px-6 py-4">
+                    <h2 className="text-xl font-bold text-white">Details & AI Insights</h2>
+                  </div>
+                  <div className="flex-1 overflow-y-auto">
+                    {selectedItem ? (
+                      <DetailPanel selectedItem={selectedItem} patient={selectedPatient} restrictedIds={restrictedIds} />
+                    ) : (
+                      <div className="flex items-center justify-center h-full p-6 text-slate-500">
+                        <div className="text-center">
+                          <FileText className="w-16 h-16 mx-auto mb-4 text-slate-300" />
+                          <p className="text-lg font-medium">Select an item</p>
+                          <p className="text-sm mt-2">Click on an item from the list to view details</p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           </>
         ) : (

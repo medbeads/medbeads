@@ -1,15 +1,19 @@
 import { Calendar, Pill, Activity, FileText, AlertCircle } from 'lucide-react';
-import type { TimelineItem, ClearanceRule } from '../lib/api';
+import type { TimelineItem } from '../lib/api';
 import { ClearanceBadge } from './ClearanceBadge';
 
 interface TimelineCardProps {
   item: TimelineItem;
   isSelected: boolean;
   onClick: () => void;
-  clearanceRules?: ClearanceRule[];
+  // Server already knows whether this bead is restricted for the current
+  // viewer (see TimelineItem.restricted / R8b) — no rule detail (denied
+  // roles/reason) is passed down, since that metadata is itself sensitive
+  // and showing it to the very viewer being denied is not desirable.
+  restricted?: boolean;
 }
 
-export function TimelineCard({ item, isSelected, onClick, clearanceRules }: TimelineCardProps) {
+export function TimelineCard({ item, isSelected, onClick, restricted }: TimelineCardProps) {
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
     return {
@@ -160,9 +164,7 @@ export function TimelineCard({ item, isSelected, onClick, clearanceRules }: Time
         <span>{date}</span>
         <span className="text-slate-400">・</span>
         <span>{time}</span>
-        {clearanceRules && clearanceRules.length > 0 && (
-          <ClearanceBadge rules={clearanceRules} compact />
-        )}
+        {restricted && <ClearanceBadge compact />}
       </div>
       <div className="flex items-start gap-4">
         <div className={`flex-shrink-0 w-12 h-12 ${colors.icon} rounded-xl flex items-center justify-center`}>

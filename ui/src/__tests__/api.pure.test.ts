@@ -79,6 +79,72 @@ describe('mapBeadToTimelineItem', () => {
     expect(item?.data.condition_name).toBe('Condition');
   });
 
+  // R8b: TimelineItem.restricted is the client's ONLY source of "is this
+  // bead restricted for the current viewer" — it must survive regardless of
+  // which type-specific branch handles the bead, since several branches
+  // (fhir_observation, fhir_encounter, fhir_medicationrequest, ...) build a
+  // custom `data` object WITHOUT spreading `content`, which would otherwise
+  // silently drop the `_restricted` marker for those bead types.
+  describe('restricted flag propagation (R8b)', () => {
+    it('is false for a normal, unmasked bead', () => {
+      const bead: Bead = {
+        id: 'obs-ok',
+        type: 'fhir_observation',
+        content: { effectiveDateTime: '2026-03-01', code: { text: 'BP' } },
+        parents: [],
+        timestamp: '2026-03-01T00:00:00Z',
+      };
+      expect(mapBeadToTimelineItem(bead)?.restricted).toBe(false);
+    });
+
+    it('is true for a masked fhir_condition bead (spreads content)', () => {
+      const bead: Bead = {
+        id: 'masked-condition',
+        type: 'fhir_condition',
+        content: { _restricted: true },
+        parents: [],
+        timestamp: '2026-02-01T00:00:00Z',
+      };
+      expect(mapBeadToTimelineItem(bead)?.restricted).toBe(true);
+    });
+
+    it('is true for a masked fhir_observation bead (does NOT spread content into data)', () => {
+      const bead: Bead = {
+        id: 'masked-obs',
+        type: 'fhir_observation',
+        content: { _restricted: true },
+        parents: [],
+        timestamp: '2026-02-01T00:00:00Z',
+      };
+      const item = mapBeadToTimelineItem(bead);
+      expect(item?.restricted).toBe(true);
+      // No real observation content leaks through.
+      expect(item?.data.display_name).toBe('Observation');
+    });
+
+    it('is true for a masked fhir_encounter bead (does NOT spread content into data)', () => {
+      const bead: Bead = {
+        id: 'masked-encounter',
+        type: 'fhir_encounter',
+        content: { _restricted: true },
+        parents: [],
+        timestamp: '2026-02-01T00:00:00Z',
+      };
+      expect(mapBeadToTimelineItem(bead)?.restricted).toBe(true);
+    });
+
+    it('is true for a masked fhir_medicationrequest bead (does NOT spread content into data)', () => {
+      const bead: Bead = {
+        id: 'masked-med',
+        type: 'fhir_medicationrequest',
+        content: { _restricted: true },
+        parents: [],
+        timestamp: '2026-02-01T00:00:00Z',
+      };
+      expect(mapBeadToTimelineItem(bead)?.restricted).toBe(true);
+    });
+  });
+
   it('defends against null content', () => {
     const bead = {
       id: 'n1',

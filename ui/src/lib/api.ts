@@ -121,6 +121,13 @@ export interface TimelineItem {
   data: any;
   parents: string[];
   snippet?: string; // Search result snippet for this item
+  // True when the server-side clearance filter (internal/engine/clearance
+  // FilterByAccess) replaced this bead's content with `{_restricted: true}`
+  // for the CURRENT viewer's roles (X-Viewer-Roles header already sent on
+  // the timeline fetch). This is computed once here, directly from the raw
+  // bead content, so no per-bead follow-up request is ever needed to know
+  // whether a bead is restricted for the viewer (see R8b).
+  restricted: boolean;
 }
 
 // --- Patient Graph Types (R7, specs/R7_graph_view.md) ---
@@ -250,6 +257,19 @@ export const fetchPatientGraph = async (patientRoot: string): Promise<PatientGra
 };
 
 export function mapBeadToTimelineItem(bead: Bead): TimelineItem | null {
+  // Computed once, up front, directly off the raw bead content — independent
+  // of every type-specific branch below (several of which build a custom
+  // `data` object without spreading `content`, which would otherwise silently
+  // drop this flag for those bead types). See FilterByAccess
+  // (internal/engine/clearance/access.go) for the server-side origin of this
+  // marker.
+  const restricted = bead.content?._restricted === true;
+  const item = mapBeadContentToTimelineItem(bead);
+  if (!item) return null;
+  return { ...item, restricted };
+}
+
+function mapBeadContentToTimelineItem(bead: Bead): Omit<TimelineItem, 'restricted'> | null {
   const content = bead.content || {};
   const type = bead.type;
 

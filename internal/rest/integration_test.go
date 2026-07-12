@@ -107,13 +107,19 @@ func TestMux_RegistersAllPaths(t *testing.T) {
 	paths := []string{
 		"/beads", "/beads/context", "/patients", "/search",
 		"/resource-counts", "/clearance", "/clearance/check", "/roles",
+		// R7's /patients/{root}/graph is not one of v2's frozen paths, but
+		// it is wrapped in withRateLimit exactly like every v2-frozen route
+		// (see Mux()), so its OPTIONS preflight must answer 200 too — this
+		// was the actual failing browser path in the reported CORS bug
+		// (a 542-bead patient's graph view), not a hypothetical.
+		"/patients/patient-1/graph",
 	}
 	for _, p := range paths {
 		r := httptest.NewRequest(http.MethodOptions, p, nil)
 		w := httptest.NewRecorder()
 		mux.ServeHTTP(w, r)
 		if w.Code != http.StatusOK {
-			t.Errorf("OPTIONS %s: status = %d, want 200 (mux does not route this v2-frozen path)", p, w.Code)
+			t.Errorf("OPTIONS %s: status = %d, want 200 (mux does not route this path)", p, w.Code)
 		}
 	}
 }
