@@ -127,6 +127,7 @@ func (s *Server) Mux() *http.ServeMux {
 	handle("/beads", s.handleBeads)
 	handle("/beads/context", s.handleContext)
 	handle("/patients", s.handlePatients)
+	handle("/patients/{root}/graph", s.handleGraph)
 	handle("/search", s.handleSearch)
 	handle("/resource-counts", s.handleResourceCounts)
 	handle("/clearance", s.handleClearance)

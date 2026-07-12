@@ -119,3 +119,80 @@ func newClearanceRuleViews(rules []clearance.Rule) []clearanceRuleView {
 	}
 	return out
 }
+
+// --- graph view (R7a, specs/R7_graph_view.md) ------------------------------
+//
+// These are a NEW, separate view family for GET /patients/{root}/graph — NOT
+// an extension of beadView (see beadView's own doc comment: it is a frozen
+// v2 contract, and widening it is itself a contract change). graphBeadView
+// carries fields (recorded_at, status, current_bead_id, amends, retracts)
+// beadView has never had and never will. Like every other view in this
+// package, IDs here are plain hex, no "sha256:" prefix (see doc.go's "ID
+// notation" — this package's convention, not v2.2.0's, since this is a new
+// v3-only endpoint with no v2 precedent either way; consistency with every
+// other ID this package already emits weighed more than adopting mcpserver's
+// sha256: convention for one single new endpoint).
+
+// graphBeadView is one beads[] entry in R7a's response: ListPatientBeads'
+// identifying fields plus recorded_at (write-instant) and the bead_status
+// fields (status/current_bead_id) the frozen beadView never carries, plus
+// amends/retracts read directly off the Bead's own content (bead.Bead.Amends/
+// Retracts are hash-target fields, not projection-derived — see
+// specs/R7_graph_view.md: "amends/retracts は edge ではなく beads[].amends/
+// retracts フィールドで表現"). Amends/Retracts are arrays (0..n), matching
+// bead.Bead.Amends/Retracts' own []string shape verbatim — the contract was
+// corrected to arrays (2026-07-12, lead ruling) specifically so a multi-
+// target amend/retract does not lose information the way a single-string
+// reduction would; a nil bead.Bead.Amends/Retracts is rendered as `[]`, never
+// `null` (see newGraphBeadView).
+type graphBeadView struct {
+	ID            string   `json:"id"`
+	Type          string   `json:"type"`
+	Timestamp     string   `json:"timestamp"`
+	RecordedAt    string   `json:"recorded_at"`
+	Summary       string   `json:"summary"`
+	Status        string   `json:"status"`
+	CurrentBeadID string   `json:"current_bead_id"`
+	Amends        []string `json:"amends"`
+	Retracts      []string `json:"retracts"`
+}
+
+// graphEdgeView is one edges[] entry: a single 'parent' bead_edges row
+// (specs/R7_graph_view.md: "bead_edges の edge_type='parent' のみ… sibling は
+// 死文化なので出さない").
+type graphEdgeView struct {
+	ChildID  string `json:"child_id"`
+	ParentID string `json:"parent_id"`
+}
+
+// graphLinkView is one links[] entry: a patient-scoped clinical_links row,
+// naming both endpoints (bead_a < bead_b, undirected — the table's own CHECK
+// constraint already normalizes this order, see migrations/
+// 0006_projection_v31.sql) rather than get_links'
+// caller-relative "other_bead_id" shape, per specs/R7_graph_view.md's
+// contract JSON.
+type graphLinkView struct {
+	LinkID        string `json:"link_id"`
+	BeadA         string `json:"bead_a"`
+	BeadB         string `json:"bead_b"`
+	Relation      string `json:"relation"`
+	MatchedTag    string `json:"matched_tag"`
+	Severity      string `json:"severity"`
+	EvidenceBasis string `json:"evidence_basis"`
+	RuleVersion   string `json:"rule_version"`
+}
+
+// graphResponse is R7a's full GET /patients/{root}/graph response shape,
+// verbatim per specs/R7_graph_view.md's contract. Unlike newBeadViews'
+// nil-preserving convention (this package's frozen v2 endpoints emit JSON
+// `null` for zero results), beads/edges/links here are always non-nil
+// (empty `[]`, never `null`): this is a brand-new v3 endpoint with no v2
+// wire-format precedent to reproduce byte-for-byte, and a graph-drawing UI
+// consuming this response benefits from never having to special-case `null`
+// vs `[]` for three different array fields in one object.
+type graphResponse struct {
+	PatientRoot string          `json:"patient_root"`
+	Beads       []graphBeadView `json:"beads"`
+	Edges       []graphEdgeView `json:"edges"`
+	Links       []graphLinkView `json:"links"`
+}

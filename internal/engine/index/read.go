@@ -196,6 +196,48 @@ func (d *DB) GetEdges(beadID string) ([]string, error) {
 	return out, nil
 }
 
+// ParentEdge is one bead_edges('parent') row, named ChildID/ParentID rather
+// than reusing GetEdges' bare []string return shape, since a patient-scoped
+// batch (unlike GetEdges' single-beadID query) must report which child each
+// parent_id belongs to.
+type ParentEdge struct {
+	ChildID  string
+	ParentID string
+}
+
+// GetParentEdgesForPatient returns every 'parent' bead_edges row whose child
+// is indexed under patientRoot — one query (JOIN against beads on child_id,
+// scoped by patient_root), not one GetEdges(childID) call per Bead in the
+// patient's timeline. This is R7a's edge-fetch building block for the graph
+// view's vertical axis (specs/R7_graph_view.md: "edges: bead_edges の
+// edge_type='parent' のみ"), mirroring GetClinicalLinksForPatient's identical
+// "batch, don't N+1" discipline for the horizontal axis.
+func (d *DB) GetParentEdgesForPatient(patientRoot string) ([]ParentEdge, error) {
+	rows, err := d.sqlDB.Query(`
+		SELECT e.child_id, e.parent_id
+		FROM bead_edges e
+		JOIN beads b ON b.id = e.child_id
+		WHERE b.patient_root = ? AND e.edge_type = 'parent'
+		ORDER BY e.child_id, e.parent_id`, patientRoot)
+	if err != nil {
+		return nil, fmt.Errorf("index: get parent edges for patient %s: %w", patientRoot, err)
+	}
+	defer rows.Close()
+
+	var out []ParentEdge
+	for rows.Next() {
+		var e ParentEdge
+		if err := rows.Scan(&e.ChildID, &e.ParentID); err != nil {
+			return nil, fmt.Errorf("index: get parent edges for patient %s: scan: %w", patientRoot, err)
+		}
+		out = append(out, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("index: get parent edges for patient %s: %w", patientRoot, err)
+	}
+	return out, nil
+}
+
 // GetTags returns every tag attached to beadID (bead_tags — bead_antigens'
 // successor, specs/U2_projection_schema.md / U3a).
 func (d *DB) GetTags(beadID string) ([]string, error) {
@@ -426,6 +468,133 @@ func (d *DB) GetClinicalLinks(beadID string) ([]ClinicalLinkRow, error) {
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("index: get clinical links %s: %w", beadID, err)
+	}
+	return out, nil
+}
+
+// PatientLinkRow is one clinical_links row scoped to a patient (R7a's
+// GetClinicalLinksForPatient), naming BOTH endpoints explicitly (BeadA/BeadB,
+// already normalized BeadA < BeadB by the table's own CHECK constraint —
+// migrations/0006_projection_v31.sql) rather than resolving an "other" side
+// relative to some caller-supplied anchor Bead, the way ClinicalLinkRow does
+// for GetClinicalLinks(beadID). A patient-scoped graph view has no single
+// anchor Bead to be relative to: it wants every link in the patient's
+// bundle as an undirected (bead_a, bead_b) pair, per specs/R7_graph_view.md's
+// contract shape (`{"bead_a":..., "bead_b":...}`).
+type PatientLinkRow struct {
+	LinkID          string
+	BeadA           string
+	BeadB           string
+	Relation        string
+	MatchedTag      string
+	Severity        string
+	EvidenceBasis   string
+	EvidenceBeadIDs string // canonical JSON array, stored/returned verbatim (see migrations/0006's comment on this column)
+	RuleID          string
+	RuleVersion     string
+	CreatedAt       string
+}
+
+// GetClinicalLinksForPatient returns every clinical_links row whose
+// patient_root equals patientRoot, ordered deterministically by created_at
+// then matched_tag (mirroring GetClinicalLinks' own tie-break) — the R7a
+// "縦=DAG / 横=clinical_links" graph view's per-patient link fetch
+// (specs/R7_graph_view.md), a single query using idx_clinical_links_patient_sev
+// (patient_root, severity, relation) rather than N calls to GetClinicalLinks
+// per Bead in the patient's timeline (the "N 回呼ばない" requirement the spec
+// calls out explicitly). Like GetClinicalLinks, this is a plain index-layer
+// read: it does not itself apply clearance inheritance or bead_status
+// normalization to either endpoint — that is the caller's job (rest package),
+// exactly as GetClinicalLinks leaves it to mcpserver.
+func (d *DB) GetClinicalLinksForPatient(patientRoot string) ([]PatientLinkRow, error) {
+	rows, err := d.sqlDB.Query(`
+		SELECT link_id, bead_a, bead_b, relation, matched_tag,
+		       severity, evidence_basis, evidence_bead_ids,
+		       COALESCE(rule_id, ''), COALESCE(rule_version, ''), created_at
+		FROM clinical_links
+		WHERE patient_root = ?
+		ORDER BY created_at, matched_tag`, patientRoot)
+	if err != nil {
+		return nil, fmt.Errorf("index: get clinical links for patient %s: %w", patientRoot, err)
+	}
+	defer rows.Close()
+
+	var out []PatientLinkRow
+	for rows.Next() {
+		var r PatientLinkRow
+		if err := rows.Scan(&r.LinkID, &r.BeadA, &r.BeadB, &r.Relation, &r.MatchedTag,
+			&r.Severity, &r.EvidenceBasis, &r.EvidenceBeadIDs,
+			&r.RuleID, &r.RuleVersion, &r.CreatedAt); err != nil {
+			return nil, fmt.Errorf("index: get clinical links for patient %s: scan: %w", patientRoot, err)
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("index: get clinical links for patient %s: %w", patientRoot, err)
+	}
+	return out, nil
+}
+
+// GraphBeadRow is one Bead's worth of R7a graph-view fields: BeadRef's
+// identifying/location columns are not needed here (the graph view never
+// opens a Pod frame directly — the caller resolves full Content via
+// engine.GetBead only for Beads that survive clearance, same as every other
+// REST handler), so this is a narrower, purpose-built row rather than an
+// extension of BeadRef. RecordedAt is "" when NULL (a pre-U3 Bead this store
+// has never reprojected — see migrations/0006's comment on recorded_at
+// starting NULL for existing rows). Status/CurrentBeadID are LEFT JOINed
+// from bead_status and are the zero value ("") when absent, mirroring
+// BeadStatusFor's own "absent = active" convention (the caller applies that
+// fallback, not this query).
+type GraphBeadRow struct {
+	ID            string
+	Type          string
+	Timestamp     string
+	RecordedAt    string
+	Summary       string
+	Status        string
+	CurrentBeadID string
+}
+
+// ListPatientBeadsForGraph returns every Bead indexed under patientRoot,
+// ordered by timestamp (matching ListPatientBeads' own order — R7a's
+// contract wants beads[] "timestamp 昇順"), with RecordedAt and its
+// bead_status fields (Status/CurrentBeadID) already joined in — one query,
+// not ListPatientBeads followed by a separate per-patient BeadStatusFor
+// batch, since a LEFT JOIN here costs the same one round trip either way and
+// keeps R7a's handler from having to build its own id-keyed map afterward.
+// A Bead with no bead_status row (reproject never ran, or ran before this
+// Bead existed) gets Status="" / CurrentBeadID="" — the caller (rest
+// package's handleGraph) is responsible for applying the same "absent =
+// active" fallback specs/U5_api_retrieve.md's U5b section establishes,
+// exactly as BeadStatusFor's own callers do.
+func (d *DB) ListPatientBeadsForGraph(patientRoot string) ([]GraphBeadRow, error) {
+	if patientRoot == "" {
+		return nil, fmt.Errorf("index: list patient beads for graph: patientRoot must not be empty")
+	}
+	rows, err := d.sqlDB.Query(`
+		SELECT b.id, b.type, b.timestamp, COALESCE(b.recorded_at, ''), COALESCE(b.summary, ''),
+		       COALESCE(s.status, ''), COALESCE(s.current_bead_id, '')
+		FROM beads b
+		LEFT JOIN bead_status s ON s.bead_id = b.id
+		WHERE b.patient_root = ?
+		ORDER BY b.timestamp, b.id`, patientRoot)
+	if err != nil {
+		return nil, fmt.Errorf("index: list patient beads for graph %s: %w", patientRoot, err)
+	}
+	defer rows.Close()
+
+	var out []GraphBeadRow
+	for rows.Next() {
+		var r GraphBeadRow
+		if err := rows.Scan(&r.ID, &r.Type, &r.Timestamp, &r.RecordedAt, &r.Summary,
+			&r.Status, &r.CurrentBeadID); err != nil {
+			return nil, fmt.Errorf("index: list patient beads for graph %s: scan: %w", patientRoot, err)
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("index: list patient beads for graph %s: %w", patientRoot, err)
 	}
 	return out, nil
 }

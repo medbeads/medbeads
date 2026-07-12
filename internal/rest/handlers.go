@@ -452,6 +452,255 @@ func (s *Server) handleBeads(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, newBeadView(b))
 }
 
+// --- graph (R7a, specs/R7_graph_view.md) --------------------------------
+
+// graphLinkStatus is the per-bead subset of index.BeadStatusRow's
+// status-normalization rule that graphLinkEndpointAccessible/handleGraph
+// need to decide whether a clinical_links row's endpoint should drop the
+// link entirely — the same retracted/amended/unattested rule
+// mcpserver.resolveStatus applies (specs/U5_api_retrieve.md's U5b section),
+// re-derived here rather than imported because mcpserver's resolveStatus and
+// its resolvedLinkEndpoint/statusNormalizeLinkEndpoints machinery are
+// unexported (package-private to mcpserver) and this package must not
+// depend on mcpserver (REST and MCP are siblings under internal/, per this
+// project's layering — see doc.go). Both packages operate on the identical
+// index.BeadStatusRow shape from the same index.DB.BeadStatusFor call, so
+// this is the same rule applied to the same data, not a divergent
+// reimplementation of different logic.
+//
+//   - retracted -> drop.
+//   - unattested -> drop (R7a has no include_unattested toggle of its own;
+//     the graph view always excludes unattested endpoints, matching
+//     get_links' own no-flag default).
+//   - amended -> substitute to current_bead_id; an amended row whose
+//     current_bead_id is empty (NULL — a chain terminating at a retracted
+//     leaf) is dropped exactly like the plain retracted case.
+//   - active, or absent from the bead_status map entirely -> keep as is
+//     (BeadStatusFor's own "absent = active" fallback).
+func graphResolveLinkEndpoint(id string, statuses map[string]index.BeadStatusRow) (resolvedID string, keep bool) {
+	st, ok := statuses[id]
+	if !ok {
+		return id, true
+	}
+	switch st.Status {
+	case "retracted":
+		return "", false
+	case "unattested":
+		return "", false
+	case "amended":
+		if st.CurrentBeadID == "" {
+			return "", false
+		}
+		return st.CurrentBeadID, true
+	default: // "active", or any future status this pass does not special-case
+		return id, true
+	}
+}
+
+// nonNilStrings returns ids unchanged if non-nil, else a non-nil empty
+// slice — so graphBeadView.Amends/Retracts always marshal as JSON `[]` for a
+// Bead with no amends/retracts targets, never `null` (specs/R7_graph_view.md,
+// corrected 2026-07-12 to array shape: "amends"/"retracts" are `["<id>",
+// ...]`, 0..n, matching bead.Bead.Amends/Retracts' own []string verbatim —
+// no reduction to a single element, so a multi-target amend/retract keeps
+// every target).
+func nonNilStrings(ids []string) []string {
+	if ids == nil {
+		return []string{}
+	}
+	return ids
+}
+
+// handleGraph serves GET /patients/{root}/graph (R7a, specs/R7_graph_view.md):
+// the two-axis Bead graph a UI needs to draw for one patient — vertical
+// (parent DAG + amends/retracts correction chains) and horizontal
+// (clinical_links). root is the patient_root Bead ID (plain hex, matching
+// this package's existing ID convention — see doc.go's "ID notation"; this
+// is a new v3-only endpoint with no v2 wire format to match either way).
+//
+// # Fetch order and clearance/status masking
+//
+//  1. Resolve every Bead under root (index.DB.ListPatientBeadsForGraph — one
+//     query, recorded_at + bead_status already joined in, per that function's
+//     own doc comment on why this is not ListPatientBeads + a second
+//     BeadStatusFor batch).
+//  2. Resolve every 'parent' edge under root (index.DB.GetParentEdgesForPatient
+//     — one query, no per-Bead GetEdges N+1).
+//  3. Resolve every clinical_links row under root
+//     (index.DB.GetClinicalLinksForPatient — one query, using
+//     idx_clinical_links_patient_sev; see this unit's task report for the
+//     EXPLAIN QUERY PLAN confirming index use).
+//  4. Clearance-mask the beads (clearance.FilterByAccess, the same helper
+//     every other endpoint in this package uses) and DROP (not mask) any
+//     Bead the viewer may not access — per specs/R7_graph_view.md's
+//     "マスクされた bead はレスポンスから除外し、その bead を端点に持つ
+//     edge/link も落とす(dangling 防止)": unlike handlePatients/handleSearch,
+//     which mask-and-keep a restricted Bead (so a UI can render a locked
+//     node), the graph view drops it entirely, and any edge/link naming it as
+//     an endpoint is dropped along with it, so the response never contains a
+//     dangling reference to a Bead that is not itself present in beads[].
+//  5. Apply bead_status normalization to each link's TWO endpoints
+//     (graphResolveLinkEndpoint, mirroring mcpserver's get_links/
+//     statusNormalizeLinkEndpoints rule — see that function's own doc
+//     comment on why this is re-derived rather than imported): a link whose
+//     either endpoint is retracted/unattested is dropped, and an amended
+//     endpoint is substituted to its current_bead_id — same as get_links,
+//     but applied to both bead_a and bead_b rather than a single
+//     caller-relative "other" endpoint, since this view has no anchor Bead a
+//     link is relative to.
+func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
+	s.setCORSHeaders(w, r)
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	root := r.PathValue("root")
+	if root == "" {
+		http.Error(w, "Missing 'root' path parameter", http.StatusBadRequest)
+		return
+	}
+
+	db := s.eng.Index()
+
+	graphRows, err := db.ListPatientBeadsForGraph(root)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to retrieve patient beads: %v", err), http.StatusInternalServerError)
+		return
+	}
+	if len(graphRows) == 0 {
+		// No Bead indexed under this patient_root — an empty (not 404) graph,
+		// mirroring handleContext's "unresolvable start walks to an empty
+		// result" precedent rather than treating "no beads" as an error.
+		writeJSON(w, http.StatusOK, graphResponse{PatientRoot: root, Beads: []graphBeadView{}, Edges: []graphEdgeView{}, Links: []graphLinkView{}})
+		return
+	}
+
+	edgeRows, err := db.GetParentEdgesForPatient(root)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to retrieve patient edges: %v", err), http.StatusInternalServerError)
+		return
+	}
+	linkRows, err := db.GetClinicalLinksForPatient(root)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to retrieve patient links: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Resolve full Bead content for every graph row so clearance.FilterByAccess
+	// has real Clearance/embedded-rule data to evaluate (graphRows only
+	// carries index-projected columns, not the Bead's own Content/Clearance
+	// overlay) — the same "resolve full Bead before filtering" pattern
+	// handlePatients/handleSearch/handleContext already use.
+	beads := make([]bead.Bead, len(graphRows))
+	for i, gr := range graphRows {
+		b, err := s.eng.GetBead(gr.ID)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Failed to resolve bead %s: %v", gr.ID, err), http.StatusInternalServerError)
+			return
+		}
+		beads[i] = b
+	}
+
+	viewerRoles := s.parseViewerRoles(r)
+	filtered, err := clearance.FilterByAccess(db, beads, viewerRoles)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Access filter failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+	s.auditEmergencyAccess(r, filtered, viewerRoles)
+
+	// Build the accessible-bead set: only a Bead that both survived
+	// clearance (accessible(filtered[i])) is kept, per this endpoint's
+	// drop-not-mask policy (see handleGraph's own doc comment point 4).
+	accessibleIDs := make(map[string]bool, len(graphRows))
+	beadViews := make([]graphBeadView, 0, len(graphRows))
+	for i, gr := range graphRows {
+		if !accessible(filtered[i]) {
+			continue
+		}
+		accessibleIDs[gr.ID] = true
+		beadViews = append(beadViews, graphBeadView{
+			ID:            gr.ID,
+			Type:          gr.Type,
+			Timestamp:     gr.Timestamp,
+			RecordedAt:    gr.RecordedAt,
+			Summary:       gr.Summary,
+			Status:        gr.Status,
+			CurrentBeadID: gr.CurrentBeadID,
+			Amends:        nonNilStrings(filtered[i].Amends),
+			Retracts:      nonNilStrings(filtered[i].Retracts),
+		})
+	}
+
+	edgeViews := make([]graphEdgeView, 0, len(edgeRows))
+	for _, e := range edgeRows {
+		if !accessibleIDs[e.ChildID] || !accessibleIDs[e.ParentID] {
+			// Dangling-reference prevention (handleGraph's doc comment point
+			// 4): an edge naming a masked-out endpoint is dropped, not just
+			// the endpoint itself.
+			continue
+		}
+		edgeViews = append(edgeViews, graphEdgeView{ChildID: e.ChildID, ParentID: e.ParentID})
+	}
+
+	// bead_status normalization for link endpoints (graphResolveLinkEndpoint):
+	// one BeadStatusFor batch over every bead_a/bead_b id in this patient's
+	// links, mirroring statusNormalizeLinkEndpoints' own single-batch
+	// discipline (no N+1 per link row).
+	statusIDs := make([]string, 0, len(linkRows)*2)
+	for _, l := range linkRows {
+		statusIDs = append(statusIDs, l.BeadA, l.BeadB)
+	}
+	statuses, err := db.BeadStatusFor(statusIDs)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to resolve link endpoint status: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	linkViews := make([]graphLinkView, 0, len(linkRows))
+	for _, l := range linkRows {
+		beadA, keepA := graphResolveLinkEndpoint(l.BeadA, statuses)
+		if !keepA {
+			continue
+		}
+		beadB, keepB := graphResolveLinkEndpoint(l.BeadB, statuses)
+		if !keepB {
+			continue
+		}
+		// Clearance drop: both (possibly status-substituted) endpoints must
+		// have survived clearance filtering above, or this link is dropped
+		// entirely (handleGraph's doc comment point 4/get_links' own
+		// clearance-inheritance rule) — a link naming an inaccessible Bead
+		// must not surface that Bead's ID, matched_tag, or the mere fact of
+		// the link's existence.
+		if !accessibleIDs[beadA] || !accessibleIDs[beadB] {
+			continue
+		}
+		linkViews = append(linkViews, graphLinkView{
+			LinkID:        l.LinkID,
+			BeadA:         beadA,
+			BeadB:         beadB,
+			Relation:      l.Relation,
+			MatchedTag:    l.MatchedTag,
+			Severity:      l.Severity,
+			EvidenceBasis: l.EvidenceBasis,
+			RuleVersion:   l.RuleVersion,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, graphResponse{
+		PatientRoot: root,
+		Beads:       beadViews,
+		Edges:       edgeViews,
+		Links:       linkViews,
+	})
+}
+
 // --- clearance --------------------------------------------------------
 
 // handleClearance dispatches GET/POST/DELETE for clearance_rules — ported
@@ -634,6 +883,25 @@ func (s *Server) handleClearanceCheck(w http.ResponseWriter, r *http.Request) {
 
 	hasAccess := clearance.HasAccessWithRules(rules, viewerRoles)
 	writeJSON(w, http.StatusOK, map[string]bool{"has_access": hasAccess})
+}
+
+// accessible reports whether b (as returned by clearance.FilterByAccess) is
+// the real Bead rather than the masked {"_restricted": true} placeholder
+// FilterByAccess substitutes in place for a Bead the viewer may not see (see
+// FilterByAccess's own doc comment). Every other endpoint in this package
+// (handlePatients/handleSearch/handleContext) mask-and-keep a restricted
+// Bead instead of checking this — this package's only caller of accessible
+// is handleGraph, which per specs/R7_graph_view.md must DROP (not mask) a
+// restricted Bead and every edge/link naming it, so it needs this per-
+// element check the same way mcpserver's identically-named, identically-
+// shaped helper (internal/mcpserver/render.go's accessible) does for every
+// one of its own tools. Duplicated rather than imported because mcpserver is
+// a sibling package this one must not depend on (see doc.go), and the check
+// itself is a one-line read of a public field, not shared business logic
+// worth factoring across a package boundary.
+func accessible(b bead.Bead) bool {
+	restricted, ok := b.Content["_restricted"].(bool)
+	return !(ok && restricted)
 }
 
 // --- shared helpers -----------------------------------------------------
