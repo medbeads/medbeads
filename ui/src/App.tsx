@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { Activity, Pill, FileText, AlertCircle, Stethoscope, User, LayoutList, Network, Maximize2, Minimize2 } from 'lucide-react';
+import { Activity, Pill, FileText, AlertCircle, Stethoscope, User, LayoutList, Network, Maximize2, Minimize2, Printer } from 'lucide-react';
 import { fetchPatientTimeline, fetchPatientGraph, setViewerRoles, getViewerRoles } from './lib/api';
 import type { Patient, TimelineItem, ViewerRole, PatientGraph } from './lib/api';
 import { TimelineCard } from './components/TimelineCard';
@@ -22,6 +22,12 @@ function App() {
   // mode), triggered by the expand/collapse button in the view panel's
   // header bar. Session-only; no persistence required.
   const [wideView, setWideView] = useState(false);
+  // "Figure mode" (paper-figure capture): opt-in, only meaningful in Graph
+  // View. Renders larger text-labeled Bead tiles and boosted-opacity/width
+  // clinical_link arcs so a static screenshot is legible without hovering —
+  // see GraphView.tsx's `figureMode` prop. Session-only; no persistence
+  // required (same convention as `wideView`).
+  const [figureMode, setFigureMode] = useState(false);
   const [viewerRoles, setViewerRolesState] = useState<ViewerRole[]>(getViewerRoles());
   const [patientGraph, setPatientGraph] = useState<PatientGraph | null>(null);
   const [graphLoading, setGraphLoading] = useState(false);
@@ -235,6 +241,16 @@ function App() {
                         >
                             <Network size={18} />
                         </button>
+                        {viewMode === 'graph' && (
+                            <button
+                                onClick={() => setFigureMode((v) => !v)}
+                                className={`p-1.5 rounded-md transition-all ${figureMode ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-300 hover:text-white'}`}
+                                title="Figure Mode"
+                                aria-pressed={figureMode}
+                            >
+                                <Printer size={18} />
+                            </button>
+                        )}
                     </div>
                     <span className="px-3 py-1 bg-white/20 text-white text-sm font-semibold rounded-lg">
                         {viewMode === 'graph' ? `${patientGraph?.beads.length ?? 0} beads` : `${filteredItems.length} items`}
@@ -278,6 +294,7 @@ function App() {
                           if (item) setSelectedItem(item);
                         }}
                         selectedBeadId={selectedItem?.data?.id}
+                        figureMode={figureMode}
                       />
                     ) : (
                       <div className="text-center py-16 text-slate-500 h-full flex flex-col items-center justify-center">

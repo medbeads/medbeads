@@ -41,6 +41,13 @@ interface GraphViewProps {
   graph?: PatientGraph;
   onBeadClick?: (bead: GraphBead) => void;
   selectedBeadId?: string;
+  // "Figure mode" (paper-figure capture, see requirements at call site):
+  // renders larger, text-labeled Bead tiles and boosted-opacity/width
+  // clinical_link arcs so a static screenshot is legible without hovering.
+  // Opt-in, defaults to false (normal interactive view unchanged). Only
+  // affects BeadGraphView (the `graph` prop path) — LegacyGraphView ignores
+  // it, since figure mode is defined against the R7c Clinical Spine layout.
+  figureMode?: boolean;
 }
 
 const nodeWidth = 180;
@@ -73,6 +80,25 @@ const SEVERITY_STYLE: Record<GraphLinkSeverity, { stroke: string; width: number;
   warning: { stroke: PAPER.warningArc, width: 2.25 },
   alert: { stroke: '#c2410c', width: 3 },
   critical: { stroke: '#9f1d1d', width: 4 },
+};
+
+// Figure-mode severity styling (requirement 2): print/screenshot legibility
+// for a static capture. `info` is ~100% of the real clinical_links corpus
+// (a DB CHECK constraint enforces severity='info' whenever
+// evidence_basis='cooccurrence' — see migrations_0006_test.go), so in the
+// interactive view it is intentionally faint (opacity 0.32, width 1) to keep
+// the co-occurrence "haze" from drowning out true warning/alert/critical
+// arcs. In a static figure that faintness reads as "no relationships at
+// all". This table shifts the WHOLE scale up (stroke width AND a per-severity
+// opacity) so info becomes a clearly-visible line while the ordering
+// info < warning < alert < critical stays strictly increasing in both width
+// and opacity — the legend stays truthful, only the baseline moved. Color
+// per severity is unchanged (same semantic meaning as the interactive view).
+const FIGURE_SEVERITY_STYLE: Record<GraphLinkSeverity, { stroke: string; width: number; opacity: number }> = {
+  info: { stroke: PAPER.quietArc, width: 2, opacity: 0.75 },
+  warning: { stroke: PAPER.warningArc, width: 3, opacity: 0.9 },
+  alert: { stroke: '#c2410c', width: 4, opacity: 0.95 },
+  critical: { stroke: '#9f1d1d', width: 5.5, opacity: 1 },
 };
 
 // status: active=green accent / amended=amber accent / retracted=strikethrough
@@ -137,6 +163,11 @@ interface ClinicalLinkEdgeData {
   matchedTag: string;
   severity: GraphLinkSeverity;
   evidenceBasis: string;
+  // Threaded through edge data (rather than component props) because
+  // ArcLinkEdge is registered once in the static `spineEdgeTypes` map and
+  // instantiated per-edge by ReactFlow itself — data is the only per-edge
+  // channel available for a mode flag like this.
+  figureMode: boolean;
 }
 
 // --- Legacy date-grouped layout (TimelineItem[] mode) -----------------------
@@ -455,17 +486,34 @@ const spineGapCollapsed = 28;
 const spineGapExpanded = 32;
 const islandGap = 20; // horizontal gap between type-islands
 const islandHeaderHeight = 18;
-const tileWidth = 96;
-const tileHeight = 30;
-const tileGapX = 6;
-const tileGapY = 6;
-const tileCols = 3; // wrap each island's tiles into a grid this many columns wide
 const islandPadding = 8;
 // Fixed pixel margin the initial viewport pans in from the content origin
 // (0,0), where the root/first chapter card sits — keeps it comfortably clear
 // of the pane edge and Controls, without ever letting fitView re-center the
 // graph and hide the start of the spine off-screen.
 const spineViewportMargin = 40;
+
+// Tile grid metrics (size of one Bead tile within an expanded island, and how
+// many columns it wraps to). Two variants:
+//  - default: dense, icon-only tiles (fit 3-per-row) for interactive use —
+//    the full label only needs to be legible on hover (see BeadTile's doc
+//    comment below).
+//  - figure: requirement 1 — tiles must show readable text (type + summary)
+//    with no hovering, so they are wider/taller and wrap to fewer columns.
+interface TileMetrics {
+  width: number;
+  height: number;
+  gapX: number;
+  gapY: number;
+  cols: number;
+}
+
+const TILE_METRICS: TileMetrics = { width: 96, height: 30, gapX: 6, gapY: 6, cols: 3 };
+const FIGURE_TILE_METRICS: TileMetrics = { width: 168, height: 54, gapX: 10, gapY: 10, cols: 2 };
+
+function tileMetricsFor(figureMode: boolean): TileMetrics {
+  return figureMode ? FIGURE_TILE_METRICS : TILE_METRICS;
+}
 
 interface TypeIsland {
   type: string; // short type, e.g. "observation"
@@ -535,17 +583,17 @@ function typeOrderRank(type: string): number {
 // Height of one type-island's tile grid (header + wrapped NxM tiles), given
 // its bead count — used both to position tiles and to reserve enough
 // vertical room before the next chapter so islands never overlap.
-function islandHeight(beadCount: number): number {
-  const rows = Math.max(1, Math.ceil(beadCount / tileCols));
-  return islandHeaderHeight + rows * tileHeight + Math.max(0, rows - 1) * tileGapY + islandPadding * 2;
+function islandHeight(beadCount: number, tm: TileMetrics): number {
+  const rows = Math.max(1, Math.ceil(beadCount / tm.cols));
+  return islandHeaderHeight + rows * tm.height + Math.max(0, rows - 1) * tm.gapY + islandPadding * 2;
 }
 
-function islandWidth(beadCount: number): number {
-  const cols = Math.min(tileCols, Math.max(1, beadCount));
-  return cols * tileWidth + Math.max(0, cols - 1) * tileGapX + islandPadding * 2;
+function islandWidth(beadCount: number, tm: TileMetrics): number {
+  const cols = Math.min(tm.cols, Math.max(1, beadCount));
+  return cols * tm.width + Math.max(0, cols - 1) * tm.gapX + islandPadding * 2;
 }
 
-function layoutBeadGraph(graph: PatientGraph, expandedIds: Set<string>): SpineLayout {
+function layoutBeadGraph(graph: PatientGraph, expandedIds: Set<string>, tm: TileMetrics): SpineLayout {
   const beadById = new Map(graph.beads.map((b) => [b.id, b]));
 
   // parent_id -> child beads, restricted to parents that are actually
@@ -617,15 +665,15 @@ function layoutBeadGraph(graph: PatientGraph, expandedIds: Set<string>): SpineLa
 
       chapter.islands.forEach((island) => {
         island.beads.forEach((bead, i) => {
-          const row = Math.floor(i / tileCols);
-          const col = i % tileCols;
+          const row = Math.floor(i / tm.cols);
+          const col = i % tm.cols;
           positions[bead.id] = {
-            x: islandX + islandPadding + col * (tileWidth + tileGapX),
-            y: cardTopY + islandHeaderHeight + islandPadding + row * (tileHeight + tileGapY),
+            x: islandX + islandPadding + col * (tm.width + tm.gapX),
+            y: cardTopY + islandHeaderHeight + islandPadding + row * (tm.height + tm.gapY),
           };
         });
-        maxIslandHeight = Math.max(maxIslandHeight, islandHeight(island.beads.length));
-        islandX += islandWidth(island.beads.length) + islandGap;
+        maxIslandHeight = Math.max(maxIslandHeight, islandHeight(island.beads.length, tm));
+        islandX += islandWidth(island.beads.length, tm) + islandGap;
       });
 
       // Reserve room for the tallest island so the next chapter card cannot
@@ -659,8 +707,12 @@ function arcPath(sourceX: number, sourceY: number, targetX: number, targetY: num
 
 function ArcLinkEdge({ id, sourceX, sourceY, targetX, targetY, data, markerEnd }: EdgeProps<ClinicalLinkEdgeData>) {
   const [edgePath, labelX, labelY] = arcPath(sourceX, sourceY, targetX, targetY);
-  const style = SEVERITY_STYLE[data?.severity ?? 'info'];
+  const figureMode = data?.figureMode === true;
   const quiet = data?.evidenceBasis === 'cooccurrence';
+
+  const strokeStyle = figureMode
+    ? FIGURE_SEVERITY_STYLE[data?.severity ?? 'info']
+    : { ...SEVERITY_STYLE[data?.severity ?? 'info'], opacity: quiet ? 0.32 : 0.85 };
 
   return (
     <>
@@ -669,8 +721,8 @@ function ArcLinkEdge({ id, sourceX, sourceY, targetX, targetY, data, markerEnd }
         path={edgePath}
         markerEnd={markerEnd}
         style={{
-          stroke: style.stroke,
-          strokeWidth: style.width,
+          stroke: strokeStyle.stroke,
+          strokeWidth: strokeStyle.width,
           // Quiet (info/co-occurrence) links are the overwhelming majority
           // of clinical_links (a DB CHECK constraint enforces
           // severity='info' whenever evidence_basis='cooccurrence' — see
@@ -680,7 +732,11 @@ function ArcLinkEdge({ id, sourceX, sourceY, targetX, targetY, data, markerEnd }
           // and true warning/alert/critical arcs stay legible by contrast —
           // static tuning only, no new interactive state (kept intentionally
           // simple per this round's "optional, don't over-engineer" note).
-          opacity: quiet ? 0.32 : 0.85,
+          // Figure mode (requirement 2) instead uses FIGURE_SEVERITY_STYLE,
+          // which raises the whole scale (width AND opacity) so `info` reads
+          // as a deliberate line in print rather than an artifact, while
+          // keeping the info < warning < alert < critical ordering intact.
+          opacity: strokeStyle.opacity,
           fill: 'none',
         }}
       />
@@ -698,7 +754,7 @@ function ArcLinkEdge({ id, sourceX, sourceY, targetX, targetY, data, markerEnd }
         >
           <span
             className="text-[9px] font-medium px-1 py-0.5 rounded bg-white/90 border shadow-sm whitespace-nowrap"
-            style={{ borderColor: style.stroke, color: style.stroke, opacity: quiet ? 0.7 : 1 }}
+            style={{ borderColor: strokeStyle.stroke, color: strokeStyle.stroke, opacity: quiet ? 0.7 : 1 }}
           >
             {data?.relation}
           </span>
@@ -773,6 +829,7 @@ function BeadTile({
   bead,
   status,
   popoverAlign = 'center',
+  figureMode = false,
 }: {
   bead: GraphBead;
   status: NormalizedStatus;
@@ -784,22 +841,47 @@ function BeadTile({
   // static, layout-time value (known from the tile's grid column), not
   // something that needs to be recomputed on hover.
   popoverAlign?: 'left' | 'center';
+  // Requirement 1: in figure mode the tile itself must show a short text
+  // label (type + summary) — a hover popover is useless in a static
+  // screenshot. The popover below is still rendered (harmless, CSS-hidden by
+  // default) so normal interactive use inside figure mode is unaffected; it
+  // is simply redundant with the always-visible text in this mode.
+  figureMode?: boolean;
 }) {
   const icon = beadTypeLabel(bead.type).split(' ')[0]; // just the emoji glyph
+  const shortType = shortBeadType(bead.type);
 
   return (
     <div className="nodrag nopan" style={{ position: 'relative', width: '100%', height: '100%' }}>
-      <div
-        style={{
-          textAlign: 'center',
-          lineHeight: 1.2,
-          fontSize: '13px',
-          textDecoration: status === 'retracted' ? 'line-through' : 'none',
-          opacity: status === 'retracted' ? 0.7 : 1,
-        }}
-      >
-        {icon}
-      </div>
+      {figureMode ? (
+        <div
+          style={{
+            textAlign: 'left',
+            lineHeight: 1.25,
+            textDecoration: status === 'retracted' ? 'line-through' : 'none',
+            opacity: status === 'retracted' ? 0.75 : 1,
+          }}
+        >
+          <div style={{ fontSize: '11px', fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {icon} {shortType}
+          </div>
+          <div style={{ fontSize: '10px', marginTop: 1 }}>
+            {truncate(bead.summary, 30) || '(no summary)'}
+          </div>
+        </div>
+      ) : (
+        <div
+          style={{
+            textAlign: 'center',
+            lineHeight: 1.2,
+            fontSize: '13px',
+            textDecoration: status === 'retracted' ? 'line-through' : 'none',
+            opacity: status === 'retracted' ? 0.7 : 1,
+          }}
+        >
+          {icon}
+        </div>
+      )}
       {/* Always in the DOM; visibility + reveal is pure CSS (see
           .bead-tile-popover in ui/src/index.css) — no React state, no
           re-render on hover, no loop. */}
@@ -845,7 +927,17 @@ function BeadTile({
   );
 }
 
-function BeadGraphView({ graph, onBeadClick, selectedBeadId }: { graph: PatientGraph; onBeadClick?: (bead: GraphBead) => void; selectedBeadId?: string }) {
+function BeadGraphView({
+  graph,
+  onBeadClick,
+  selectedBeadId,
+  figureMode = false,
+}: {
+  graph: PatientGraph;
+  onBeadClick?: (bead: GraphBead) => void;
+  selectedBeadId?: string;
+  figureMode?: boolean;
+}) {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set());
   // Legend starts OPEN by default (top-right, clear of the spine which
   // originates top-left — see defaultViewport below) — still collapsible via
@@ -857,6 +949,13 @@ function BeadGraphView({ graph, onBeadClick, selectedBeadId }: { graph: PatientG
   // for the full call graph). Hover-driven z-index and popover visibility
   // are now handled entirely in CSS (`.bead-tile-node:hover` etc. in
   // ui/src/index.css), which triggers no React re-render at all.
+  //
+  // `figureMode` is a plain prop (owned by the App-level toolbar toggle, see
+  // GraphView's default export below), not local state derived from hover or
+  // any per-render computation — it is a stable dependency for the nodes/
+  // edges useMemo below, so it cannot reintroduce the Bug 2 render loop
+  // documented on BeadTile: it only changes when the user explicitly clicks
+  // the toolbar toggle, exactly like `expandedIds`.
 
   const toggleExpanded = useCallback((encounterId: string) => {
     setExpandedIds((prev) => {
@@ -868,7 +967,8 @@ function BeadGraphView({ graph, onBeadClick, selectedBeadId }: { graph: PatientG
   }, []);
 
   const { nodes, edges } = useMemo(() => {
-    const layout = layoutBeadGraph(graph, expandedIds);
+    const tm = tileMetricsFor(figureMode);
+    const layout = layoutBeadGraph(graph, expandedIds, tm);
     const beadById = new Map(graph.beads.map((b) => [b.id, b]));
 
     // Resolve every bead id to the node id it should currently render as: the
@@ -1018,7 +1118,7 @@ function BeadGraphView({ graph, onBeadClick, selectedBeadId }: { graph: PatientG
               background: 'transparent',
               border: 'none',
               padding: 0,
-              width: islandWidth(island.beads.length) - islandPadding * 2,
+              width: islandWidth(island.beads.length, tm) - islandPadding * 2,
               minHeight: islandHeaderHeight,
               pointerEvents: 'none' as const,
               zIndex: 8,
@@ -1031,11 +1131,11 @@ function BeadGraphView({ graph, onBeadClick, selectedBeadId }: { graph: PatientG
             const childStyle = STATUS_STYLE[childStatus];
             const isChildSelected = selectedBeadId === child.id;
             // Last column of the tile grid (per layoutBeadGraph's own
-            // `col = i % tileCols`) is the practical "near the right edge"
+            // `col = i % tm.cols`) is the practical "near the right edge"
             // case for this left-to-right island layout — bias the popover
             // leftward there so it doesn't run off-screen. This is a static,
             // layout-time value; it does not depend on hover state.
-            const isLastCol = childIndex % tileCols === tileCols - 1;
+            const isLastCol = childIndex % tm.cols === tm.cols - 1;
             nodes.push({
               id: child.id,
               position: childPos,
@@ -1043,19 +1143,26 @@ function BeadGraphView({ graph, onBeadClick, selectedBeadId }: { graph: PatientG
               targetPosition: Position.Left,
               className: 'bead-tile-node',
               data: {
-                label: <BeadTile bead={child} status={childStatus} popoverAlign={isLastCol ? 'left' : 'center'} />,
+                label: (
+                  <BeadTile
+                    bead={child}
+                    status={childStatus}
+                    popoverAlign={isLastCol ? 'left' : 'center'}
+                    figureMode={figureMode}
+                  />
+                ),
               },
               style: {
                 background: childStyle.bg,
                 border: `1.5px ${childStyle.borderStyle} ${childStyle.border}`,
                 color: childStyle.text,
                 borderRadius: '6px',
-                padding: '3px 6px',
-                width: tileWidth,
-                minHeight: tileHeight,
+                padding: figureMode ? '5px 8px' : '3px 6px',
+                width: tm.width,
+                minHeight: tm.height,
                 display: 'flex',
                 alignItems: 'center',
-                justifyContent: 'center',
+                justifyContent: figureMode ? 'flex-start' : 'center',
                 boxShadow: isChildSelected ? '0 0 0 2px rgba(59,49,112,0.35)' : 'none',
                 cursor: 'pointer',
                 // NOTE: no inline zIndex — baseline (9) AND hover-bump
@@ -1069,7 +1176,7 @@ function BeadGraphView({ graph, onBeadClick, selectedBeadId }: { graph: PatientG
             });
           });
 
-          islandX += islandWidth(island.beads.length) + islandGap;
+          islandX += islandWidth(island.beads.length, tm) + islandGap;
         });
       }
     });
@@ -1152,12 +1259,13 @@ function BeadGraphView({ graph, onBeadClick, selectedBeadId }: { graph: PatientG
           matchedTag: link.matched_tag,
           severity: link.severity,
           evidenceBasis: link.evidence_basis,
+          figureMode,
         },
       });
     });
 
     return { nodes, edges };
-  }, [graph, selectedBeadId, expandedIds, toggleExpanded]);
+  }, [graph, selectedBeadId, expandedIds, toggleExpanded, figureMode]);
 
   const handleNodeClick = useCallback(
     (_: React.MouseEvent, node: Node) => {
@@ -1239,10 +1347,21 @@ function BeadGraphView({ graph, onBeadClick, selectedBeadId }: { graph: PatientG
             <div className="mb-2">
               <div className="font-medium mb-1" style={{ color: '#5b5b56' }}>Clinical-link arc severity</div>
               <div className="space-y-1">
-                <LegendLine color={SEVERITY_STYLE.info.stroke} width={1} label="info / co-occurrence" />
-                <LegendLine color={SEVERITY_STYLE.warning.stroke} width={2.25} label="warning" />
-                <LegendLine color={SEVERITY_STYLE.alert.stroke} width={3} label="alert" />
-                <LegendLine color={SEVERITY_STYLE.critical.stroke} width={4} label="critical" />
+                {(() => {
+                  // Legend reflects whichever severity scale is actually
+                  // rendering right now (figure mode vs interactive), so it
+                  // never claims a width the arcs don't actually use — see
+                  // requirement 2's "legend stays truthful".
+                  const scale = figureMode ? FIGURE_SEVERITY_STYLE : SEVERITY_STYLE;
+                  return (
+                    <>
+                      <LegendLine color={scale.info.stroke} width={scale.info.width} label="info / co-occurrence" />
+                      <LegendLine color={scale.warning.stroke} width={scale.warning.width} label="warning" />
+                      <LegendLine color={scale.alert.stroke} width={scale.alert.width} label="alert" />
+                      <LegendLine color={scale.critical.stroke} width={scale.critical.width} label="critical" />
+                    </>
+                  );
+                })()}
               </div>
             </div>
 
@@ -1315,7 +1434,12 @@ export default function GraphView(props: GraphViewProps) {
     <div style={{ width: '100%', height: '100%' }} className="bg-slate-50">
       <ReactFlowProvider>
         {props.graph ? (
-          <BeadGraphView graph={props.graph} onBeadClick={props.onBeadClick} selectedBeadId={props.selectedBeadId} />
+          <BeadGraphView
+            graph={props.graph}
+            onBeadClick={props.onBeadClick}
+            selectedBeadId={props.selectedBeadId}
+            figureMode={props.figureMode ?? false}
+          />
         ) : (
           <LegacyGraphView
             items={props.items ?? []}
