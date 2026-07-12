@@ -199,3 +199,378 @@ func TestDefaultFlattener_Deterministic(t *testing.T) {
 		}
 	}
 }
+
+// --- FHIR-aware summary tests -------------------------------------------
+
+// TestDefaultFlattener_FHIRObservation_TextAndValueQuantity checks the
+// requirement-2 headline case: an Observation with code.text and
+// valueQuantity produces "<label> <value> <unit>", value rounded to a
+// sensible number of decimal places (VERIFIED-shaped: this is the real
+// store's own Body-temperature Observation content, 37.791 Cel).
+func TestDefaultFlattener_FHIRObservation_TextAndValueQuantity(t *testing.T) {
+	b := bead.Bead{
+		Type: "fhir_observation",
+		Content: map[string]any{
+			"code": map[string]any{
+				"text": "Body temperature",
+				"coding": []any{
+					map[string]any{"system": "http://loinc.org", "code": "8310-5", "display": "Body temperature"},
+				},
+			},
+			"valueQuantity": map[string]any{
+				"value": 37.791,
+				"unit":  "Cel",
+				"code":  "Cel",
+			},
+		},
+	}
+	_, summary := DefaultFlattener{}.Flatten(b)
+	want := "fhir_observation: Body temperature 37.791 Cel"
+	if summary != want {
+		t.Errorf("summary = %q, want %q", summary, want)
+	}
+}
+
+// TestDefaultFlattener_FHIRObservation_RoundsFloatArtifact checks the
+// requirement-2 "do not print 37.791000000001" example directly: a
+// valueQuantity.value with floating-point noise past 3 decimal places must
+// still render as a short, clean number.
+func TestDefaultFlattener_FHIRObservation_RoundsFloatArtifact(t *testing.T) {
+	b := bead.Bead{
+		Type: "fhir_observation",
+		Content: map[string]any{
+			"code":          map[string]any{"text": "Body temperature"},
+			"valueQuantity": map[string]any{"value": 37.791000000001, "unit": "Cel"},
+		},
+	}
+	_, summary := DefaultFlattener{}.Flatten(b)
+	want := "fhir_observation: Body temperature 37.791 Cel"
+	if summary != want {
+		t.Errorf("summary = %q, want %q (rounded, no float artifact)", summary, want)
+	}
+}
+
+// TestDefaultFlattener_FHIRObservation_ValueCodeableConcept checks the
+// non-numeric-result case (e.g. "Tobacco smoking status" ->
+// "Never smoked tobacco (finding)"): valueCodeableConcept.text is appended
+// exactly like a valueQuantity would be.
+func TestDefaultFlattener_FHIRObservation_ValueCodeableConcept(t *testing.T) {
+	b := bead.Bead{
+		Type: "fhir_observation",
+		Content: map[string]any{
+			"code": map[string]any{"text": "Tobacco smoking status"},
+			"valueCodeableConcept": map[string]any{
+				"text": "Never smoked tobacco (finding)",
+			},
+		},
+	}
+	_, summary := DefaultFlattener{}.Flatten(b)
+	want := "fhir_observation: Tobacco smoking status Never smoked tobacco (finding)"
+	if summary != want {
+		t.Errorf("summary = %q, want %q", summary, want)
+	}
+}
+
+// TestDefaultFlattener_FHIRCondition_ClinicalStatusCodeableConcept is the
+// direct regression test for the failure class commit 80b812e already fixed
+// once in package projector (fhirCodeString): Condition.clinicalStatus is a
+// CodeableConcept in real Synthea data, not a plain string. This test's
+// point is narrower — it does not read clinicalStatus for the summary at
+// all — but it plants a CodeableConcept-shaped clinicalStatus/
+// verificationStatus alongside code to prove flattenFHIRSummary's code.text
+// extraction is unaffected by, and does not mis-scan into, sibling fields
+// that happen to share the CodeableConcept shape.
+func TestDefaultFlattener_FHIRCondition_ClinicalStatusCodeableConcept(t *testing.T) {
+	b := bead.Bead{
+		Type: "fhir_condition",
+		Content: map[string]any{
+			"clinicalStatus": map[string]any{
+				"coding": []any{map[string]any{"code": "active"}},
+			},
+			"verificationStatus": map[string]any{
+				"coding": []any{map[string]any{"code": "confirmed"}},
+			},
+			"code": map[string]any{
+				"text": "Asthma (disorder)",
+				"coding": []any{
+					map[string]any{"system": "http://snomed.info/sct", "code": "195967001", "display": "Asthma (disorder)"},
+				},
+			},
+		},
+	}
+	_, summary := DefaultFlattener{}.Flatten(b)
+	want := "fhir_condition: Asthma (disorder)"
+	if summary != want {
+		t.Errorf("summary = %q, want %q", summary, want)
+	}
+}
+
+// TestDefaultFlattener_FHIRMedicationRequest_MedicationCodeableConcept
+// checks the medication-specific field path (medicationCodeableConcept, not
+// code) per requirement 2.
+func TestDefaultFlattener_FHIRMedicationRequest_MedicationCodeableConcept(t *testing.T) {
+	b := bead.Bead{
+		Type: "fhir_medicationrequest",
+		Content: map[string]any{
+			"medicationCodeableConcept": map[string]any{
+				"text": "amLODIPine 2.5 MG Oral Tablet",
+				"coding": []any{
+					map[string]any{"system": "http://www.nlm.nih.gov/research/umls/rxnorm", "code": "308136", "display": "amLODIPine 2.5 MG Oral Tablet"},
+				},
+			},
+		},
+	}
+	_, summary := DefaultFlattener{}.Flatten(b)
+	want := "fhir_medicationrequest: amLODIPine 2.5 MG Oral Tablet"
+	if summary != want {
+		t.Errorf("summary = %q, want %q", summary, want)
+	}
+}
+
+// TestDefaultFlattener_FHIRProcedure_Text checks Procedure's code.text path
+// ("Throat culture (procedure)" from the real store).
+func TestDefaultFlattener_FHIRProcedure_Text(t *testing.T) {
+	b := bead.Bead{
+		Type: "fhir_procedure",
+		Content: map[string]any{
+			"code": map[string]any{"text": "Throat culture (procedure)"},
+		},
+	}
+	_, summary := DefaultFlattener{}.Flatten(b)
+	want := "fhir_procedure: Throat culture (procedure)"
+	if summary != want {
+		t.Errorf("summary = %q, want %q", summary, want)
+	}
+}
+
+// TestDefaultFlattener_FHIRDiagnosticReport_CodingDisplayFallback checks the
+// preference order's second rung: code.text absent, so summary falls back to
+// coding[0].display (VERIFIED-shaped: the real store's DiagnosticReport.code
+// carries coding[] but no top-level text).
+func TestDefaultFlattener_FHIRDiagnosticReport_CodingDisplayFallback(t *testing.T) {
+	b := bead.Bead{
+		Type: "fhir_diagnosticreport",
+		Content: map[string]any{
+			"code": map[string]any{
+				"coding": []any{
+					map[string]any{"system": "http://loinc.org", "code": "34117-2", "display": "History and physical note"},
+					map[string]any{"system": "http://loinc.org", "code": "51847-2", "display": "Evaluation + Plan note"},
+				},
+			},
+		},
+	}
+	_, summary := DefaultFlattener{}.Flatten(b)
+	want := "fhir_diagnosticreport: History and physical note"
+	if summary != want {
+		t.Errorf("summary = %q, want %q", summary, want)
+	}
+}
+
+// TestDefaultFlattener_FHIREncounter_TypeArray checks Encounter's summary
+// path, which (unlike every other type handled here) has no top-level
+// "code" at all: the label lives at type[0] (VERIFIED against the real
+// store).
+func TestDefaultFlattener_FHIREncounter_TypeArray(t *testing.T) {
+	b := bead.Bead{
+		Type: "fhir_encounter",
+		Content: map[string]any{
+			"type": []any{
+				map[string]any{
+					"text": "Encounter for symptom (procedure)",
+					"coding": []any{
+						map[string]any{"system": "http://snomed.info/sct", "code": "185345009", "display": "Encounter for symptom (procedure)"},
+					},
+				},
+			},
+		},
+	}
+	_, summary := DefaultFlattener{}.Flatten(b)
+	want := "fhir_encounter: Encounter for symptom (procedure)"
+	if summary != want {
+		t.Errorf("summary = %q, want %q", summary, want)
+	}
+}
+
+// TestDefaultFlattener_FHIRImmunization_VaccineCode checks Immunization's
+// vaccineCode.text path.
+func TestDefaultFlattener_FHIRImmunization_VaccineCode(t *testing.T) {
+	b := bead.Bead{
+		Type: "fhir_immunization",
+		Content: map[string]any{
+			"vaccineCode": map[string]any{"text": "Influenza, split virus, trivalent, PF"},
+		},
+	}
+	_, summary := DefaultFlattener{}.Flatten(b)
+	want := "fhir_immunization: Influenza, split virus, trivalent, PF"
+	if summary != want {
+		t.Errorf("summary = %q, want %q", summary, want)
+	}
+}
+
+// TestDefaultFlattener_FHIRAllergyIntolerance_Text checks
+// AllergyIntolerance's code.text path.
+func TestDefaultFlattener_FHIRAllergyIntolerance_Text(t *testing.T) {
+	b := bead.Bead{
+		Type: "fhir_allergyintolerance",
+		Content: map[string]any{
+			"code": map[string]any{"text": "Grass pollen (substance)"},
+		},
+	}
+	_, summary := DefaultFlattener{}.Flatten(b)
+	want := "fhir_allergyintolerance: Grass pollen (substance)"
+	if summary != want {
+		t.Errorf("summary = %q, want %q", summary, want)
+	}
+}
+
+// TestDefaultFlattener_FHIRImagingStudy_ProcedureCodeArray checks
+// ImagingStudy's summary path, which (like Encounter) has no top-level
+// "code": the label lives at procedureCode[0] (VERIFIED against the real
+// store).
+func TestDefaultFlattener_FHIRImagingStudy_ProcedureCodeArray(t *testing.T) {
+	b := bead.Bead{
+		Type: "fhir_imagingstudy",
+		Content: map[string]any{
+			"procedureCode": []any{
+				map[string]any{"text": "Dental plain X-ray bitewing (procedure)"},
+			},
+		},
+	}
+	_, summary := DefaultFlattener{}.Flatten(b)
+	want := "fhir_imagingstudy: Dental plain X-ray bitewing (procedure)"
+	if summary != want {
+		t.Errorf("summary = %q, want %q", summary, want)
+	}
+}
+
+// TestDefaultFlattener_FHIR_MissingCodeFallsBackToGeneric checks the
+// requirement-3 degrade-gracefully case: a FHIR-typed Bead whose Content has
+// no code field at all (not even the wrong shape — simply absent) must not
+// panic and must not produce an empty summary; it falls back to
+// DefaultFlattener's fully generic behavior.
+func TestDefaultFlattener_FHIR_MissingCodeFallsBackToGeneric(t *testing.T) {
+	b := bead.Bead{
+		Type: "fhir_observation",
+		Content: map[string]any{
+			"status": "final",
+		},
+	}
+	_, summary := DefaultFlattener{}.Flatten(b)
+	want := "fhir_observation: final"
+	if summary != want {
+		t.Errorf("summary = %q, want %q (generic fallback, not empty/panic)", summary, want)
+	}
+}
+
+// TestDefaultFlattener_FHIR_CodeWrongShapeFallsBackToGeneric checks the
+// requirement-3 "may be a string" case directly: content.code as a bare
+// string (not a CodeableConcept object) must not panic
+// (fhirCodeableConceptLabel's map[string]any type assertion fails cleanly)
+// and must degrade to the generic fallback rather than an empty summary.
+func TestDefaultFlattener_FHIR_CodeWrongShapeFallsBackToGeneric(t *testing.T) {
+	b := bead.Bead{
+		Type: "fhir_condition",
+		Content: map[string]any{
+			"code": "not-a-codeable-concept",
+		},
+	}
+	_, summary := DefaultFlattener{}.Flatten(b)
+	want := "fhir_condition: not-a-codeable-concept"
+	if summary != want {
+		t.Errorf("summary = %q, want %q (generic fallback, not empty/panic)", summary, want)
+	}
+}
+
+// TestDefaultFlattener_FHIR_EmptyCodingFallsBackToGeneric checks the
+// requirement-3 "coding present but empty" edge: code.coding == [] and no
+// code.text must not panic, and must degrade to the generic fallback (no
+// clinical label is extractable) rather than an empty summary.
+func TestDefaultFlattener_FHIR_EmptyCodingFallsBackToGeneric(t *testing.T) {
+	b := bead.Bead{
+		Type: "fhir_procedure",
+		Content: map[string]any{
+			"code":   map[string]any{"coding": []any{}},
+			"status": "completed",
+		},
+	}
+	_, summary := DefaultFlattener{}.Flatten(b)
+	want := "fhir_procedure: completed"
+	if summary != want {
+		t.Errorf("summary = %q, want %q (generic fallback, not empty/panic)", summary, want)
+	}
+}
+
+// TestDefaultFlattener_FHIR_CodingCodeFallback checks the third-rung
+// preference: no text, no display, only coding[0].code.
+func TestDefaultFlattener_FHIR_CodingCodeFallback(t *testing.T) {
+	b := bead.Bead{
+		Type: "fhir_condition",
+		Content: map[string]any{
+			"code": map[string]any{
+				"coding": []any{
+					map[string]any{"system": "http://snomed.info/sct", "code": "195967001"},
+				},
+			},
+		},
+	}
+	_, summary := DefaultFlattener{}.Flatten(b)
+	want := "fhir_condition: 195967001"
+	if summary != want {
+		t.Errorf("summary = %q, want %q", summary, want)
+	}
+}
+
+// TestDefaultFlattener_FHIR_SearchTextStillGeneric checks that FHIR-aware
+// summary derivation does not change search_text's own contract: it must
+// still be the sorted, order-independent collectStrings walk (so full-text
+// search recall is unaffected by this change), not just the summary label.
+func TestDefaultFlattener_FHIR_SearchTextStillGeneric(t *testing.T) {
+	b := bead.Bead{
+		Type: "fhir_observation",
+		Content: map[string]any{
+			"code":   map[string]any{"text": "Body temperature"},
+			"status": "final",
+		},
+	}
+	searchText, _ := DefaultFlattener{}.Flatten(b)
+	for _, want := range []string{"Body temperature", "final"} {
+		if !strings.Contains(searchText, want) {
+			t.Errorf("search_text = %q, want it to contain %q", searchText, want)
+		}
+	}
+}
+
+// TestDefaultFlattener_FHIR_Deterministic checks that flattening the same
+// FHIR Content repeatedly always yields the same summary, mirroring
+// TestDefaultFlattener_Deterministic / _ClinicalNote_Deterministic for the
+// new FHIR-aware summary path.
+func TestDefaultFlattener_FHIR_Deterministic(t *testing.T) {
+	f := DefaultFlattener{}
+	var firstSummary string
+	for i := 0; i < 20; i++ {
+		b := bead.Bead{
+			Type: "fhir_observation",
+			Content: map[string]any{
+				"code": map[string]any{
+					"text": "Body temperature",
+					"coding": []any{
+						map[string]any{"system": "http://loinc.org", "code": "8310-5", "display": "Body temperature"},
+					},
+				},
+				"valueQuantity": map[string]any{"value": 37.791, "unit": "Cel"},
+				"status":        "final",
+				"category": []any{
+					map[string]any{"coding": []any{map[string]any{"code": "vital-signs"}}},
+				},
+			},
+		}
+		_, summary := f.Flatten(b)
+		if i == 0 {
+			firstSummary = summary
+			continue
+		}
+		if summary != firstSummary {
+			t.Fatalf("Flatten not deterministic: run 0 = %q, run %d = %q", firstSummary, i, summary)
+		}
+	}
+}
