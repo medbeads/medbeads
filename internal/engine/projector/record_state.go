@@ -121,15 +121,29 @@ func StatusReproject(idx *index.DB, reader statusBeadReader, codeVersion string,
 		if err != nil {
 			return res, fmt.Errorf("projector: status reproject: patient %s: list beads: %w", p.ID, err)
 		}
-		recordedAt, err := queryPatientRecordedAt(idx.SQLDB(), p.ID)
+		loci, err := queryPatientLoci(idx.SQLDB(), p.ID)
 		if err != nil {
 			return res, fmt.Errorf("projector: status reproject: patient %s: %w", p.ID, err)
 		}
 
 		resolveInput := make([]resolveBead, 0, len(beads))
 		for _, b := range beads {
-			ra, valid := recordedAt[b.ID]
-			resolveInput = append(resolveInput, resolveBead{Bead: b, RecordedAt: ra, RecordedAtValid: valid})
+			locus, ok := loci[b.ID]
+			if !ok {
+				// ListPatientBeads produced this Bead, but `beads` has no row for
+				// it — the index disagrees with the Pods. Do not guess at an
+				// append position: defaulting the offset to 0 would sort this Bead
+				// as the patient's OLDEST and could hand a correction chain to the
+				// wrong version, silently.
+				return res, fmt.Errorf("projector: status reproject: patient %s: bead %s has no indexed offset; reindex required",
+					p.ID, b.ID)
+			}
+			resolveInput = append(resolveInput, resolveBead{
+				Bead:            b,
+				Offset:          locus.Offset,
+				RecordedAt:      locus.RecordedAt,
+				RecordedAtValid: locus.RecordedAtValid,
+			})
 		}
 		states := resolvePatientState(resolveInput)
 
@@ -161,25 +175,48 @@ func StatusReproject(idx *index.DB, reader statusBeadReader, codeVersion string,
 // as "" — an empty string recorded_at is not a value this schema ever
 // produces, but the map-presence check keeps that distinction explicit
 // regardless).
-func queryPatientRecordedAt(sqlDB *sql.DB, patientRoot string) (map[string]string, error) {
+// beadLocus is one Bead's ordering position plus its (display-only) write
+// instant. Offset is the Pod frame's byte position — the append order, which is
+// the key resolvePatientState orders correction chains on (see beadOrderLess).
+type beadLocus struct {
+	Offset          int64
+	RecordedAt      string
+	RecordedAtValid bool
+}
+
+// queryPatientLoci returns, per Bead ID, the Pod frame offset that fixes its
+// position in the patient's append order, plus recorded_at for audit/display.
+//
+// beads.offset is NOT NULL and IndexBead populates it for every Bead, so a Bead
+// missing from this map means the index disagrees with the Pods. The caller
+// treats that as a hard error rather than defaulting the offset to zero: a Bead
+// silently sorted to offset 0 would order as the patient's OLDEST and could lose
+// a correction chain it should win.
+func queryPatientLoci(sqlDB *sql.DB, patientRoot string) (map[string]beadLocus, error) {
 	rows, err := sqlDB.Query(
-		`SELECT id, recorded_at FROM beads WHERE patient_root = ? AND recorded_at IS NOT NULL`,
+		`SELECT id, offset, recorded_at FROM beads WHERE patient_root = ?`,
 		patientRoot)
 	if err != nil {
-		return nil, fmt.Errorf("query patient recorded_at %s: %w", patientRoot, err)
+		return nil, fmt.Errorf("query patient loci %s: %w", patientRoot, err)
 	}
 	defer rows.Close()
 
-	out := make(map[string]string)
+	out := make(map[string]beadLocus)
 	for rows.Next() {
-		var id, recordedAt string
-		if err := rows.Scan(&id, &recordedAt); err != nil {
-			return nil, fmt.Errorf("query patient recorded_at %s: scan: %w", patientRoot, err)
+		var id string
+		var offset int64
+		var recordedAt sql.NullString
+		if err := rows.Scan(&id, &offset, &recordedAt); err != nil {
+			return nil, fmt.Errorf("query patient loci %s: scan: %w", patientRoot, err)
 		}
-		out[id] = recordedAt
+		out[id] = beadLocus{
+			Offset:          offset,
+			RecordedAt:      recordedAt.String,
+			RecordedAtValid: recordedAt.Valid,
+		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("query patient recorded_at %s: %w", patientRoot, err)
+		return nil, fmt.Errorf("query patient loci %s: %w", patientRoot, err)
 	}
 	return out, nil
 }

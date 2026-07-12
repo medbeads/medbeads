@@ -14,7 +14,21 @@ import (
 // pre-recorded_at-backfill row where the column is still NULL, per
 // migrations/0006's comment on why it is nullable).
 type resolveBead struct {
-	Bead            bead.Bead
+	Bead bead.Bead
+
+	// Offset is the Bead's frame position within its patient's Pod — the byte
+	// offset returned by pod.Store.Append. It IS the append order: a Pod is
+	// append-only and no frame is ever moved, so a frame appended later has a
+	// strictly greater offset. This is the ordering key for correction chains
+	// (see beadOrderLess), and it is derivable from the Pods alone, so a reindex
+	// reproduces it exactly.
+	Offset int64
+
+	// RecordedAt is the write instant (beads.recorded_at, Pod meta WrittenAt —
+	// distinct from bead.Bead.Timestamp, the clinical event instant).
+	//
+	// It is kept for audit and display. It is NOT an ordering key: see
+	// beadOrderLess for why ordering on it is unsafe.
 	RecordedAt      string
 	RecordedAtValid bool
 }
@@ -280,23 +294,62 @@ func resolvePatientState(beads []resolveBead) map[string]beadState {
 	return out
 }
 
-// beadOrderLess implements specs/U4_state_derivation.md's §2 ordering key —
-// "newest valid first": (recorded_at IS NULL) ASC, recorded_at DESC, id DESC.
-// A Bead with a non-NULL recorded_at always sorts before (is "newer than")
-// one with NULL recorded_at, regardless of either value; among two non-NULL
-// recorded_at values the lexicographically greater one (RFC3339 timestamps
-// compare correctly as strings) wins; among two NULL-recorded_at Beads, the
-// lexicographically greater Bead ID wins. This is deliberately NOT
-// bead.Bead.Timestamp (the clinical event time) — see specs/
-// U4_state_derivation.md's "穴2" fix and this package's resolve_test.go for
-// the fixture that fails if someone sorts by Timestamp instead.
+// beadOrderLess implements specs/U4_state_derivation.md's §2 ordering key,
+// "newest first" — where newest means LAST APPENDED: Offset DESC, id DESC.
+//
+// # Why append order, and not recorded_at
+//
+// This comparator used to order on recorded_at as a STRING, on the stated
+// assumption that "RFC3339 timestamps compare correctly as strings". That
+// assumption is false for the format this system actually writes, and the
+// resulting defect is a clinical one.
+//
+// pod/record.go writes recorded_at with time.RFC3339Nano, which OMITS TRAILING
+// ZEROS in the fractional second. Two Beads written 8ms apart serialize as:
+//
+//	appended first : "2026-07-11T13:51:46.89Z"       (i.e. .890000)
+//	appended second: "2026-07-11T13:51:46.897924Z"
+//
+// Chronologically the second is later. Lexicographically the FIRST is greater,
+// because 'Z' (0x5A) sorts above '7' (0x37). A string compare therefore names
+// the earlier-appended Bead as the newer one. 208 such inverted pairs exist in
+// the production store. Applied to a correction chain this silently makes a
+// SUPERSEDED amendment the patient's current record — deterministically, with no
+// clock anomaly required.
+//
+// Parsing recorded_at into a time.Time would fix that inversion while keeping a
+// wall-clock dependency the system does not need: time.Now() is not monotonic
+// across NTP correction, VM suspend, or container migration.
+//
+// The append-only log already carries the order this code is trying to recover.
+// Offset IS that order: pod.Store.Append appends and returns the frame's start
+// offset, no frame is ever moved or rewritten (there is no compaction path in
+// internal/engine/pod), and reindex re-derives the same offsets from the Pods.
+// So ordering on Offset is correct by construction, independent of any clock,
+// and reproducible from the fact layer alone — which the two-layer invariant
+// requires.
+//
+// Correction chains never cross Pods: Engine.Ingest resolves patient_root from
+// Parents and rejects cross-patient corrections, and create_bead independently
+// validates that every amends/retracts target shares the new Bead's
+// patient_root. One patient's Beads live in one Pod, so a bare Offset is a total
+// order over any set of Beads that can actually compete in one resolution.
+//
+// pod_id is deliberately NOT part of the key: it is a SQLite surrogate assigned
+// by RegisterPod in index-registration order, i.e. index state rather than
+// fact-layer state, and it is not a stable ordering axis across a reindex.
+//
+// recorded_at is retained on resolveBead for audit and display. It must not be
+// used to order.
+//
+// This is also deliberately NOT bead.Bead.Timestamp (the clinical event time) —
+// see specs/U4_state_derivation.md's "穴2" fix and resolve_test.go's fixture,
+// which fails if someone sorts by Timestamp instead.
 func beadOrderLess(a, b resolveBead) bool {
-	if a.RecordedAtValid != b.RecordedAtValid {
-		// The one WITH a valid recorded_at is newer (sorts first / "less").
-		return a.RecordedAtValid
+	if a.Offset != b.Offset {
+		return a.Offset > b.Offset // later append == newer
 	}
-	if a.RecordedAtValid && b.RecordedAtValid && a.RecordedAt != b.RecordedAt {
-		return a.RecordedAt > b.RecordedAt
-	}
+	// Unreachable for two distinct Beads in one Pod (a frame's offset is unique),
+	// but keeps the order total and deterministic regardless.
 	return a.Bead.ID > b.Bead.ID
 }

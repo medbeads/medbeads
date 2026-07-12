@@ -2,12 +2,28 @@ package projector
 
 import (
 	"testing"
+	"time"
 
 	"github.com/medbeads/medbeads/internal/engine/bead"
 )
 
 // rb is a resolve_test.go-local shorthand for building a resolveBead fixture
 // without repeating field names at every call site.
+//
+// The ordering axis is Offset — the Pod frame's append position — not
+// recorded_at (see beadOrderLess for why string-ordering recorded_at is unsafe).
+// These fixtures predate that change and express their intent through
+// recorded_at, so rb DERIVES an offset from it: a chronologically later
+// recorded_at yields a greater offset, which is exactly what the real system
+// produces (a Bead recorded later was appended later, so its frame sits further
+// into the Pod). A fixture with no recorded_at models a pre-backfill row and gets
+// offset 0 — the oldest possible position — preserving the "NULL recorded_at is
+// oldest" semantics the fixtures below assert.
+//
+// The production path never derives an offset from a timestamp: queryPatientLoci
+// reads the real frame offset from the index and treats a missing one as a hard
+// error. This derivation exists only so these fixtures keep saying what they were
+// written to say.
 func rb(id, typ string, parents, amends, retracts []string, content map[string]any, recordedAt string, recordedAtValid bool) resolveBead {
 	if content == nil {
 		content = map[string]any{}
@@ -21,9 +37,26 @@ func rb(id, typ string, parents, amends, retracts []string, content map[string]a
 			Retracts: retracts,
 			Content:  content,
 		},
+		Offset:          offsetFromRecordedAt(recordedAt, recordedAtValid),
 		RecordedAt:      recordedAt,
 		RecordedAtValid: recordedAtValid,
 	}
+}
+
+// offsetFromRecordedAt maps a fixture's recorded_at onto the append position the
+// real system would have produced for it. It PARSES the timestamp — it does not
+// string-compare it, so it is immune to the RFC3339Nano trailing-zero defect that
+// made string ordering wrong — and uses its Unix nanoseconds, which is monotonic
+// in the instant. An absent/invalid recorded_at yields 0: the oldest position.
+func offsetFromRecordedAt(recordedAt string, valid bool) int64 {
+	if !valid || recordedAt == "" {
+		return 0
+	}
+	t, err := time.Parse(time.RFC3339Nano, recordedAt)
+	if err != nil {
+		return 0
+	}
+	return t.UnixNano()
 }
 
 // --- must-fix: NULL recorded_at + ordering axis -----------------------------
