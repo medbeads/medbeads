@@ -31,10 +31,13 @@ Commands:
             (flags: -data <dir> -embedder <url> [-embed-model <name>] [-batch <n>])
   reproject Rebuild clinical_links from bead_tags + the cooccurrence link_rule
             Bead and flip projection_manifest's active run (flags: -data <dir>
-            [-code-version <v>] [-record-state]; does not re-scan Pods, see
-            reindex for that). -record-state additionally runs U4b's
-            record_state projector (bead_status/active_conditions/
+            [-code-version <v>] [-record-state] [-rule-file <json>]; does not
+            re-scan Pods, see reindex for that). -record-state additionally runs
+            U4b's record_state projector (bead_status/active_conditions/
             active_medications, its own separate manifest lineage)
+  correct   Write a correction Bead — amend / retract / attest. A record is never
+            edited: a correction is a NEW immutable Bead naming the one it
+            corrects. Run 'medbeadsd correct' for the subcommands.
 `
 
 func main() {
@@ -59,6 +62,8 @@ func run(args []string, stdout, stderr *os.File) int {
 		return runEmbed(args[1:], stdout, stderr)
 	case "reproject":
 		return runReproject(args[1:], stdout, stderr)
+	case "correct":
+		return runCorrect(args[1:], stdout, stderr)
 	case "serve":
 		return runServe(args[1:], stdout, stderr)
 	case "-h", "-help", "--help", "help":
