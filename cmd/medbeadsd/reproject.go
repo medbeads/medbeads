@@ -6,9 +6,13 @@
 // Reproject never touches Pods — see projector.Reproject's own doc comment).
 //
 // This subcommand also seeds the built-in cooccurrence link_rule Bead
-// (projector.BuildCooccurrenceRuleBead) if one is not already present in
-// the shared Pod, so an operator can bootstrap a fresh store with a single
-// `reproject` call rather than needing a separate seeding step.
+// (projector.BuildCooccurrenceRuleBead), so an operator can bootstrap a
+// fresh store with a single `reproject` call rather than needing a
+// separate seeding step. Seeding always ingests THIS build's own rule Bead
+// (a no-op if content-identical to one already present) and explicitly
+// names its ID to the projector rather than asking "is anything with this
+// rule_id already seeded" — see ensureCooccurrenceRule's doc comment for
+// why the latter would silently ignore a code-level rule revision.
 //
 // With -record-state, it additionally runs U4b's record_state projector
 // (projector.StatusReproject, specs/U4_state_derivation.md) after
@@ -24,14 +28,12 @@
 package main
 
 import (
-	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"time"
 
 	"github.com/medbeads/medbeads/internal/engine"
-	"github.com/medbeads/medbeads/internal/engine/index"
 	"github.com/medbeads/medbeads/internal/engine/projector"
 )
 
@@ -112,30 +114,44 @@ func runReproject(args []string, stdout, stderr *os.File) int {
 	return 0
 }
 
-// ensureCooccurrenceRule finds the already-seeded cooccurrence link_rule
-// Bead (projector.LoadActiveCooccurrenceRule), or ingests
-// projector.BuildCooccurrenceRuleBead if none exists yet, returning the
-// rule Bead's own ID (clinical_links.rule_version's value) either way.
+// ensureCooccurrenceRule ingests this package's built-in cooccurrence
+// link_rule Bead (projector.BuildCooccurrenceRuleBead) — a no-op if a
+// content-identical Bead is already present (bead IDs are content hashes;
+// see engine.Ingest's "idempotent replay" doc comment) — and returns its ID
+// (clinical_links.rule_version's value) either way.
+//
+// This deliberately does NOT call projector.LoadActiveCooccurrenceRule
+// first to check "is some rule already seeded". rule_id
+// (projector.CooccurrenceRuleID) is a stable key across revisions BY
+// DESIGN — that's the whole point of rule_version being the Bead's own
+// content hash, a separate field, precisely so a rule's content can be
+// revised without changing its rule_id (specs/U2_projection_schema.md).
+// But it means LoadActiveCooccurrenceRule with no knowledgeBeadIDs filter
+// (its "greatest ID among every matching rule_id Bead wins" mode) would
+// happily keep matching an OLDER same-rule_id Bead already in the store and
+// return early, before this package's own current
+// BuildCooccurrenceRuleBead is ever computed or ingested — silently
+// pinning every reproject run to stale knowledge no matter how this
+// package's own rule content is revised. (This is exactly the bug this
+// function used to have: an older rule Bead already present in the store
+// made every subsequent build's own reordered TriggerNamespaces a 100%
+// no-op, because it never even got ingested, let alone selected.)
+//
+// Always computing and ingesting the CURRENT build's rule Bead, then
+// handing its own ID to loadRule's knowledgeBeadIDs filter (reproject.go's
+// loadRule, which already implements "restrict candidates to exactly this
+// set" — see its own doc comment), is what makes selection track code
+// instead of "whatever happened to be seeded first": the current build's
+// rule Bead is guaranteed both present and selected, and an older
+// same-rule_id Bead from a prior revision is left untouched in the shared
+// Pod (knowledge Beads are immutable; a superseded rule Bead is not deleted
+// or overwritten, only no longer the one this call names).
 //
 // The seeding timestamp is a fixed literal (not time.Now()) so that two
 // independent fresh-store bootstraps mint the byte-identical rule Bead ID —
 // see BuildCooccurrenceRuleBead's own doc comment on why a knowledge Bead's
 // ID must not depend on when it happened to be seeded.
 func ensureCooccurrenceRule(eng *engine.Engine) (string, error) {
-	rule, err := projector.LoadActiveCooccurrenceRule(eng.Index(), func(id string) (map[string]any, error) {
-		b, err := eng.GetBead(id)
-		if err != nil {
-			return nil, err
-		}
-		return b.Content, nil
-	})
-	if err == nil {
-		return rule.RuleVersion, nil
-	}
-	if !errors.Is(err, index.ErrNotFound) {
-		return "", fmt.Errorf("load link_rule: %w", err)
-	}
-
 	ruleBead := projector.BuildCooccurrenceRuleBead("2026-01-01T00:00:00Z")
 	saved, err := eng.Ingest(ruleBead)
 	if err != nil {

@@ -72,19 +72,43 @@ type clinicalLink struct {
 // tag-bearing Bead count needed for the frequency filter (via
 // tagBeadCounts/totalTagBeads, both derived from patientTags itself so this
 // function has no direct SQL dependency — see queryPatientTags for the
-// actual query shape). Output is deterministically ordered (sorted by
-// bead_a, then bead_b, then matched_tag) so a caller comparing two runs'
-// output for byte-identical determinism does not need its own sort.
+// actual query shape).
+//
+// The output slice's own ORDER is sorted (by bead_a, then bead_b, then
+// matched_tag) purely for caller convenience — but that final sort.Slice
+// alone does NOT make two runs' output the same SET of links, and must not
+// be read as a determinism guarantee. maxLinksPerBead caps how many links a
+// single Bead may appear in per pass; once that cap actually binds on a
+// Bead that is a candidate for links across more than one triggering tag,
+// WHICH tag's pairs get to claim that Bead's remaining slots depends on the
+// order triggering tags are visited in the pairing loop below — sorting the
+// *output* after the fact cannot undo an already-nondeterministic selection
+// made during pair generation. What actually makes this function
+// deterministic is that the pairing loop itself visits triggering tags
+// grouped by namespace in rule.TriggerNamespaces' own declared order (ties
+// within one namespace broken by sort.Strings), never beadsByTag's raw map
+// iteration order (which Go randomizes per process) and never a namespace
+// priority hard-coded in this package: see the pairing loop's own comment.
+// Given that, two runs over byte-identical (rule, patientTags) always
+// select the same set of links, and the final sort.Slice then makes that
+// set's slice representation byte-identical too. A consequence worth
+// stating explicitly: when the cap binds, namespaces earlier in
+// rule.TriggerNamespaces win contested slots over namespaces later in it —
+// so that priority is knowledge carried by the rule Bead's own content
+// (and therefore its content-addressed rule_version), not a fact about this
+// function. Revising the priority means publishing a new rule Bead and
+// re-projecting; it does not mean editing this file.
 //
 // # Trigger rule (specs/U3_link_projector.md's U3b section)
 //
 // Two Beads in the same patient trigger a link if and only if they share at
-// least one tag whose namespace is in rule.TriggerNamespaces (atc:/risk:/
-// rxnorm: for the built-in cooccurrence rule) — NOT because they merely
-// share *any* tag. A shared loinc: or temporal: tag alone never triggers a
-// link (dropping "LOINC 同一コード・temporal 単独" cooccurrence is U3b's
-// entire noise-reduction point): those namespaces are excluded here at the
-// tag-filtering step, before pairs are even formed, rather than filtered out
+// least one tag whose namespace is in rule.TriggerNamespaces (risk:/atc:/
+// rxnorm:, in that priority order, for the built-in cooccurrence rule) —
+// NOT because they merely share *any* tag. A shared loinc: or temporal: tag
+// alone never triggers a link (dropping "LOINC 同一コード・temporal 単独"
+// cooccurrence is U3b's entire noise-reduction point): those namespaces are
+// excluded here at the tag-filtering step, before pairs are even formed,
+// rather than filtered out
 // after generating a link — so a loinc-only or temporal-only shared tag
 // produces literally zero candidate pairs, not a link that is then
 // discarded.
@@ -146,12 +170,55 @@ func projectPatientLinks(rule LinkRule, patientRoot string, tags []patientTag) [
 	// clinical_links row per distinct matched_tag (mirrors sibling_pairs'
 	// one-row-per-antigen convention — see clinical_links' UNIQUE(bead_a,
 	// bead_b, relation, matched_tag), which is exactly this granularity).
+	//
+	// Triggering tags are visited grouped by namespace, in the order
+	// rule.TriggerNamespaces itself declares those namespaces — NOT
+	// beadsByTag's own map iteration order (which Go randomizes per run),
+	// and NOT alphabetical order either. linkCount below is a per-Bead cap
+	// shared across every tag in this loop, so which tag's pairs get to
+	// claim a capped Bead's remaining slots depends on visitation order:
+	// making that order equal to the rule Bead's own declared namespace
+	// priority means cap-consumption priority is knowledge (published in
+	// the rule Bead, content-addressed, revisable by publishing a new rule
+	// Bead and re-projecting) rather than a policy hard-coded here. Within
+	// one namespace, tags are visited in sorted order — every triggering
+	// tag has a well-defined namespace (hasTriggerNamespace already
+	// filtered out anything that does not), so this ordering is total and
+	// leaves no tag's position ambiguous.
+	tagsByNamespace := make(map[string][]string, len(rule.TriggerNamespaces))
+	for tag := range beadsByTag {
+		ns := tagNamespace(tag)
+		tagsByNamespace[ns] = append(tagsByNamespace[ns], tag)
+	}
+	triggerTags := make([]string, 0, len(beadsByTag))
+	visitedNS := make(map[string]bool, len(rule.TriggerNamespaces))
+	for _, ns := range rule.TriggerNamespaces {
+		// Defensive dedup: a rule Bead listing the same namespace twice in
+		// TriggerNamespaces (malformed content, not something
+		// BuildCooccurrenceRuleBead itself ever produces) must not expand
+		// that namespace's tags into triggerTags twice — the pairing loop's
+		// own seen[pairKey] map already makes a duplicate expansion
+		// harmless for correctness (no duplicate clinical_links row would
+		// result), but visiting the same tags twice is still wasted work
+		// and an unclear signal to a reader of this order, so skip a
+		// namespace already visited rather than relying on seen to paper
+		// over it.
+		if visitedNS[ns] {
+			continue
+		}
+		visitedNS[ns] = true
+		nsTags := tagsByNamespace[ns]
+		sort.Strings(nsTags)
+		triggerTags = append(triggerTags, nsTags...)
+	}
+
 	type pairKey struct{ a, b, tag string }
 	seen := make(map[pairKey]bool)
 	linkCount := make(map[string]int) // bead ID -> how many links it already appears in this pass
 
 	var out []clinicalLink
-	for tag, ids := range beadsByTag {
+	for _, tag := range triggerTags {
+		ids := beadsByTag[tag]
 		for i := 0; i < len(ids); i++ {
 			for j := i + 1; j < len(ids); j++ {
 				a, b := ids[i], ids[j]

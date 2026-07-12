@@ -43,16 +43,33 @@ const (
 	evidenceBasisCooccurrence = "cooccurrence"
 )
 
-// triggerNamespaces is the sorted set of bead_tags namespace prefixes (see
+// triggerNamespaces is the ordered set of bead_tags namespace prefixes (see
 // antigen/extract.go's prefix constants) whose shared occurrence between two
 // Beads in the same patient can trigger a cooccurrence link. It deliberately
 // excludes "loinc:" and "temporal:" — dropping same-LOINC-code and
 // temporal-only cooccurrence is the whole point of U3b (specs/
 // U3_link_projector.md: "LOINC 同一コード・temporal 単独をトリガー除外(87%
-// ノイズ根絶)"). Kept sorted (not just conceptually but as this literal's own
-// order) so linkRuleContent's canonical JSON encoding is stable regardless of
-// how this slice is ever edited.
-var triggerNamespaces = []string{"atc:", "risk:", "rxnorm:"}
+// ノイズ根絶)").
+//
+// This slice's ORDER is itself knowledge, not incidental: it is
+// projectPatientLinks' cap-consumption priority (see project.go's pairing
+// loop) — when a Bead's maxLinksPerBead cap binds across more than one
+// trigger namespace, the namespace listed earlier here wins the contested
+// slots. risk: is listed first (ahead of atc: and rxnorm:) because it is
+// this rule's clinically load-bearing namespace: the v2 post-mortem
+// (docs/reviews/2026-07-10_scheme_critique_A_internal.md) found v2's whole
+// failure was clinically valuable risk: links drowning in bulk rxnorm:
+// noise, and letting cap consumption default to alphabetical order (atc: <
+// risk: < rxnorm:) reproduced that exact failure, just deterministically
+// instead of randomly. Because array element order survives JCS
+// canonicalization unchanged (only object member order is normalized),
+// this slice's order is part of BuildCooccurrenceRuleBead's content and
+// therefore part of the rule Bead's own content-addressed ID
+// (rule_version): revising this priority means editing this literal,
+// which mints a new rule Bead ID, which a caller must re-seed and
+// re-project against — never a live rewrite of an existing rule_version's
+// meaning.
+var triggerNamespaces = []string{"risk:", "atc:", "rxnorm:"}
 
 // excludedSameCodeNamespaces mirrors the rule content's
 // trigger.excludes.same_code_namespaces: a cooccurrence trigger is also
@@ -232,7 +249,15 @@ func decodeLinkRule(ruleBeadID string, content map[string]any) (LinkRule, error)
 		}
 	}
 
-	sort.Strings(namespaces)
+	// namespaces is intentionally NOT sorted here: its declared order is
+	// itself knowledge — projectPatientLinks' cap-consumption priority
+	// follows rule.TriggerNamespaces' order exactly (see project.go's
+	// pairing-loop comment), so this decode step must preserve whatever
+	// order the rule Bead's own content.trigger.tag_namespaces declared,
+	// not silently normalize it away. ExcludedSameCodeNamespaces, in
+	// contrast, is only ever tested for set membership
+	// (excludedBySameCodeOnly), so its order carries no meaning and sorting
+	// it is harmless (kept for readability/reproducible logging only).
 	sort.Strings(excludedSameCode)
 
 	return LinkRule{
