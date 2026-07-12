@@ -1,4 +1,4 @@
-import { useMemo, useCallback, useState } from 'react';
+import { useMemo, useCallback, useState, useEffect } from 'react';
 import ReactFlow, {
   Background,
   Controls,
@@ -8,6 +8,7 @@ import ReactFlow, {
   ReactFlowProvider,
   BaseEdge,
   EdgeLabelRenderer,
+  useReactFlow,
   type Node,
   type Edge,
   type EdgeProps,
@@ -143,6 +144,23 @@ function beadTypeLabel(type: string): string {
 function truncate(s: string, max = 34): string {
   if (!s) return '';
   return s.length > max ? s.slice(0, max - 1) + '…' : s;
+}
+
+// Display-only: every bead.summary is server-formatted as "<bead.type>: <text>"
+// (verified against the live API: 0/675 beads on a sample patient deviate
+// from this — see graph_test.go / the flattener that produces `summary`).
+// The tile already renders the type separately (bold, via beadTypeLabel), so
+// showing the summary as-is burns close to half the tile's width on a
+// duplicate of information already on screen (e.g. "fhir_observation:
+// Cholesterol…" instead of "Cholesterol…"). This strips exactly that
+// redundant "<type>: " prefix for rendering; it never touches `bead.summary`
+// itself or anything sent back to the API — a stale/missing prefix (e.g. a
+// future bead type this wasn't verified against) just falls through
+// unchanged, so this is safe to apply unconditionally, not only in figure
+// mode.
+function displaySummary(bead: Pick<GraphBead, 'type' | 'summary'>): string {
+  const prefix = `${bead.type}: `;
+  return bead.summary.startsWith(prefix) ? bead.summary.slice(prefix.length) : bead.summary;
 }
 
 function formatLocalDate(iso: string): string {
@@ -509,7 +527,14 @@ interface TileMetrics {
 }
 
 const TILE_METRICS: TileMetrics = { width: 96, height: 30, gapX: 6, gapY: 6, cols: 3 };
-const FIGURE_TILE_METRICS: TileMetrics = { width: 168, height: 54, gapX: 10, gapY: 10, cols: 2 };
+// Widened further (168->220) and taller (54->64) than the first figure-mode
+// pass: with the redundant "<type>: " prefix now stripped (displaySummary)
+// the clinical name is the dominant text, but names like "Asthma follow-up
+// (regime/therapy changed)" or "Body mass index (BMI) [Percentile] Per
+// age..." still need two full lines to read without truncation —
+// "legibility beats density" per requirement 1, and cols stays at 2 so
+// widening the tile doesn't blow out the per-chapter island row width.
+const FIGURE_TILE_METRICS: TileMetrics = { width: 220, height: 64, gapX: 12, gapY: 12, cols: 2 };
 
 function tileMetricsFor(figureMode: boolean): TileMetrics {
   return figureMode ? FIGURE_TILE_METRICS : TILE_METRICS;
@@ -688,6 +713,101 @@ function layoutBeadGraph(graph: PatientGraph, expandedIds: Set<string>, tm: Tile
   return { roots, chapters, positions, totalHeight: currentY };
 }
 
+// --- Figure-mode auto-focus (requirement 2) --------------------------------
+//
+// The whole point of the figure is a reader seeing BOTH axes at once: the
+// vertical spine (encounters) and a horizontal arc (a clinical_link) landing
+// on identifiable Beads at both ends. With the spine collapsed by default,
+// every arc's endpoints resolve to encounter CARDS, which are already
+// visible — but that shows only "these two encounters relate", not "these
+// two BEADS relate", which is the actual claim clinical_links make. So in
+// figure mode we auto-expand two encounters chosen so that:
+//   1. they are adjacent in spine order (minimal vertical distance, so both
+//      expanded islands can land in one viewport without an extreme zoom-out
+//      that makes text illegible), and
+//   2. they have the most clinical_links directly connecting their children
+//      (so expanding them surfaces the richest cluster of visible arcs, not
+//      an isolated pair).
+// This is computed generically from `graph` (not hardcoded to any one
+// patient's bead ids), so it holds for whichever patient is loaded.
+//
+// `linkedBeadIds` is every bead that is the actual endpoint of one of the
+// clinical_links counted toward this pair (NOT every child of either
+// encounter — an encounter can have 10-15 children and only a handful of
+// them participate in the pair's links). This is what the caller should
+// fit the viewport to: fitting to entire islands (verified via a Playwright
+// capture) produces a huge bounding box that zooms out far enough to make
+// tile text illegible again, defeating requirement 1; fitting to just the
+// two encounter cards (also verified) crops out the very tiles the arcs
+// connect, since islands extend far to the right of their card. Fitting to
+// the two cards + only the linked tiles keeps the frame tight around
+// exactly the arcs being highlighted while still showing the spine context.
+interface FigureFocus {
+  pair: [string, string];
+  linkedBeadIds: string[];
+}
+
+function findFigureFocusPair(graph: PatientGraph): FigureFocus | null {
+  const beadById = new Map(graph.beads.map((b) => [b.id, b]));
+  const encounters = graph.beads.filter((b) => b.type === 'fhir_encounter');
+  if (encounters.length < 2) return null;
+
+  // Spine order matches layoutBeadGraph's chapter sort: newest-at-top.
+  const spineOrder = encounters
+    .slice()
+    .sort((a, b) => b.timestamp.localeCompare(a.timestamp) || b.id.localeCompare(a.id));
+  const rankOf = new Map(spineOrder.map((e, i) => [e.id, i]));
+
+  const parentOf = new Map<string, string>();
+  graph.edges.forEach((e) => parentOf.set(e.child_id, e.parent_id));
+  const encounterIds = new Set(encounters.map((e) => e.id));
+
+  function owningEncounter(beadId: string): string | null {
+    const p = parentOf.get(beadId);
+    return p && encounterIds.has(p) ? p : null;
+  }
+
+  // Count clinical_links per (encounter, encounter) pair whose two beads
+  // belong to different encounters, tracking the minimum spine-rank distance
+  // observed for that pair and the specific bead ids each link connects.
+  const linkCountByPair = new Map<string, number>();
+  const linkedBeadIdsByPair = new Map<string, Set<string>>();
+  graph.links.forEach((link) => {
+    if (!beadById.has(link.bead_a) || !beadById.has(link.bead_b)) return;
+    const ea = owningEncounter(link.bead_a);
+    const eb = owningEncounter(link.bead_b);
+    if (!ea || !eb || ea === eb) return;
+    const key = ea < eb ? `${ea}::${eb}` : `${eb}::${ea}`;
+    linkCountByPair.set(key, (linkCountByPair.get(key) ?? 0) + 1);
+    const beadSet = linkedBeadIdsByPair.get(key) ?? new Set<string>();
+    beadSet.add(link.bead_a);
+    beadSet.add(link.bead_b);
+    linkedBeadIdsByPair.set(key, beadSet);
+  });
+
+  let best: { key: string; dist: number; count: number } | null = null;
+  linkCountByPair.forEach((count, key) => {
+    const [ea, eb] = key.split('::');
+    const ra = rankOf.get(ea);
+    const rb = rankOf.get(eb);
+    if (ra === undefined || rb === undefined) return;
+    const dist = Math.abs(ra - rb);
+    // Prefer smallest spine distance first (fits one viewport), then most
+    // links as the tiebreaker (richest visible cluster).
+    if (!best || dist < best.dist || (dist === best.dist && count > best.count)) {
+      best = { key, dist, count };
+    }
+  });
+
+  if (!best) return null;
+  const { key } = best as { key: string };
+  const [ea, eb] = key.split('::');
+  return {
+    pair: [ea, eb],
+    linkedBeadIds: Array.from(linkedBeadIdsByPair.get(key) ?? []),
+  };
+}
+
 // --- Custom edge: arcs curve to one side of the spine, independent of the
 // (mostly single-column) node X positions — a plain bezier between two nodes
 // stacked in the same column would read as a nearly straight vertical line,
@@ -753,10 +873,17 @@ function ArcLinkEdge({ id, sourceX, sourceY, targetX, targetY, data, markerEnd }
           }`}
         >
           <span
-            className="text-[9px] font-medium px-1 py-0.5 rounded bg-white/90 border shadow-sm whitespace-nowrap"
+            className={figureMode ? 'text-[10px] font-semibold px-1.5 py-0.5 rounded bg-white border shadow-sm whitespace-nowrap' : 'text-[9px] font-medium px-1 py-0.5 rounded bg-white/90 border shadow-sm whitespace-nowrap'}
             style={{ borderColor: strokeStyle.stroke, color: strokeStyle.stroke, opacity: quiet ? 0.7 : 1 }}
           >
-            {data?.relation}
+            {/* Figure mode (requirement 2 bonus): show the specific
+                matched_tag (e.g. "rxnorm:308136", "atc:c09aa03") rather than
+                the generic `relation` string ("clinical_correlation" for
+                every link in the corpus) — the tag is the part that actually
+                differentiates one arc from another and is what a reader of
+                the paper figure needs to see "why" two Beads are linked.
+                Falls back to `relation` if a link has no matched_tag. */}
+            {figureMode ? data?.matchedTag || data?.relation : data?.relation}
           </span>
         </div>
       </EdgeLabelRenderer>
@@ -865,8 +992,24 @@ function BeadTile({
           <div style={{ fontSize: '11px', fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
             {icon} {shortType}
           </div>
-          <div style={{ fontSize: '10px', marginTop: 1 }}>
-            {truncate(bead.summary, 30) || '(no summary)'}
+          <div
+            style={{
+              fontSize: '10px',
+              marginTop: 1,
+              // Requirement 1: legibility beats density — allow the clinical
+              // name to wrap onto a second line instead of clipping via
+              // ellipsis, now that the redundant "<type>: " prefix
+              // (displaySummary) is stripped and FIGURE_TILE_METRICS gives it
+              // room. Capped at 2 lines (not unlimited) so an unusually long
+              // summary cannot blow out the island grid layout, which is
+              // computed from a fixed tile height in layoutBeadGraph.
+              display: '-webkit-box',
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: 'vertical' as const,
+              overflow: 'hidden',
+            }}
+          >
+            {displaySummary(bead) || '(no summary)'}
           </div>
         </div>
       ) : (
@@ -916,7 +1059,7 @@ function BeadTile({
               marginBottom: 4,
             }}
           >
-            {bead.summary || '(no summary)'}
+            {displaySummary(bead) || '(no summary)'}
           </div>
           <div style={{ fontSize: '10px', color: '#5b5b56' }}>
             {formatLocalDate(bead.timestamp)} · {status}
@@ -966,9 +1109,37 @@ function BeadGraphView({
     });
   }, []);
 
+  const { fitView } = useReactFlow();
+
+  // Requirement 2 — figure-mode auto-focus: in figure mode, a pair of nearby
+  // encounters whose children are linked by clinical_links (findFigureFocus
+  // Pair, computed generically from `graph`, not hardcoded to any patient)
+  // is treated as always-expanded, so a static screenshot shows at least one
+  // arc with both endpoints on identifiable Beads rather than every link
+  // resolving to a collapsed encounter card (or sweeping off-screen to a
+  // temporally distant chapter). This is derived at render time — a `Set`
+  // union of the user's own manual `expandedIds` toggles with the auto-focus
+  // pair — rather than an effect that calls setExpandedIds on mount
+  // (react-hooks/set-state-in-effect correctly flags that pattern: it is
+  // exactly the kind of "synchronize derived state via an extra render"
+  // effect https://react.dev/learn/you-might-not-need-an-effect warns
+  // against). It never shrinks the user's own selection, only adds to it,
+  // and is a plain function of existing props/state, so it cannot
+  // reintroduce the render loop documented on BeadTile (hover is still not
+  // involved anywhere in this computation).
+  const effectiveExpandedIds = useMemo(() => {
+    if (!figureMode) return expandedIds;
+    const focus = findFigureFocusPair(graph);
+    if (!focus) return expandedIds;
+    if (focus.pair.every((id) => expandedIds.has(id))) return expandedIds;
+    const next = new Set(expandedIds);
+    focus.pair.forEach((id) => next.add(id));
+    return next;
+  }, [figureMode, graph, expandedIds]);
+
   const { nodes, edges } = useMemo(() => {
     const tm = tileMetricsFor(figureMode);
-    const layout = layoutBeadGraph(graph, expandedIds, tm);
+    const layout = layoutBeadGraph(graph, effectiveExpandedIds, tm);
     const beadById = new Map(graph.beads.map((b) => [b.id, b]));
 
     // Resolve every bead id to the node id it should currently render as: the
@@ -1005,7 +1176,7 @@ function BeadGraphView({
           label: (
             <div style={{ textAlign: 'left', lineHeight: 1.3 }}>
               <div style={{ fontWeight: 600, fontSize: '11px' }}>{beadTypeLabel(root.type)}</div>
-              <div style={{ fontSize: '10px' }}>{truncate(root.summary, 40)}</div>
+              <div style={{ fontSize: '10px' }}>{truncate(displaySummary(root), 40)}</div>
               <div style={{ fontSize: '9px', opacity: 0.7 }}>{formatLocalDate(root.timestamp)}</div>
             </div>
           ),
@@ -1033,7 +1204,7 @@ function BeadGraphView({
       const { encounter, children, counts, islands } = chapter;
       const pos = layout.positions[encounter.id];
       const isSelected = selectedBeadId === encounter.id;
-      const isExpanded = expandedIds.has(encounter.id);
+      const isExpanded = effectiveExpandedIds.has(encounter.id);
       const status = normalizeStatus(encounter.status);
       const statusStyle = STATUS_STYLE[status];
 
@@ -1069,7 +1240,7 @@ function BeadGraphView({
                   </span>
                 )}
               </div>
-              <div style={{ fontSize: '10px', opacity: 0.85 }}>{truncate(encounter.summary, 44)}</div>
+              <div style={{ fontSize: '10px', opacity: 0.85 }}>{truncate(displaySummary(encounter), 44)}</div>
               <div style={{ marginTop: 2 }}>
                 <CountBadges counts={counts} />
               </div>
@@ -1240,6 +1411,17 @@ function BeadGraphView({
       const sourceNodeId = renderNodeIdFor(link.bead_a);
       const targetNodeId = renderNodeIdFor(link.bead_b);
       if (!sourceNodeId || !targetNodeId || sourceNodeId === targetNodeId) return;
+      // Figure mode draws only arcs whose BOTH endpoints land on a visible
+      // Bead — i.e. both endpoint Beads live in an expanded encounter, so the
+      // arc resolves to the Bead itself rather than being collapsed onto its
+      // owning encounter card. Without this, every one of the patient's links
+      // (483 for the reference patient, of which only a handful touch the
+      // expanded encounters) is still drawn onto collapsed cards, burying the
+      // arcs a reader is meant to trace in a hairball. The interactive default
+      // keeps drawing all of them — collapsed arcs are useful for *browsing*
+      // ("this encounter relates to that one"), but useless for a printed
+      // figure, which must show which specific Beads a relationship joins.
+      if (figureMode && (sourceNodeId !== link.bead_a || targetNodeId !== link.bead_b)) return;
       // Two links between the same pair of (collapsed) encounter cards would
       // draw duplicate overlapping arcs — dedupe by resolved node pair,
       // keeping the first (links are not pre-sorted by severity, but this
@@ -1265,7 +1447,7 @@ function BeadGraphView({
     });
 
     return { nodes, edges };
-  }, [graph, selectedBeadId, expandedIds, toggleExpanded, figureMode]);
+  }, [graph, selectedBeadId, effectiveExpandedIds, toggleExpanded, figureMode]);
 
   const handleNodeClick = useCallback(
     (_: React.MouseEvent, node: Node) => {
@@ -1275,6 +1457,82 @@ function BeadGraphView({
     [graph, onBeadClick],
   );
 
+  // Requirement 2 (continued): once the auto-focus pair (see the effect
+  // above) has actually been expanded into real nodes — i.e. `nodes` has
+  // been rebuilt by the useMemo above and contains their child tiles — pan/
+  // zoom so both focus encounter cards and the specific linked bead tiles
+  // are visible together, which is what puts both endpoints of the arcs
+  // between them inside the frame. Deliberately does NOT fit to the whole
+  // 542-bead spine: that would zoom out far enough that arc labels/tile text
+  // become illegible again, defeating requirement 1 (see the focusNodeIds
+  // comment below for the two tighter alternatives that were also tried and
+  // rejected). Only runs in figure mode — the interactive view keeps its
+  // pinned top-left defaultViewport (see the ReactFlow props below)
+  // untouched.
+  useEffect(() => {
+    if (!figureMode) return;
+    const focus = findFigureFocusPair(graph);
+    if (!focus) return;
+    const { linkedBeadIds } = focus;
+    // Fit to ONLY the specific bead tiles the clinical_links actually
+    // connect (linkedBeadIds) — deliberately NOT the two encounter cards
+    // themselves. Three things were tried and rejected first, all verified
+    // with a Playwright capture + real DOM node positions read back from the
+    // page:
+    //   - fitting to just the two encounter cards: crops out the tiles
+    //     entirely, since an expanded island renders well to the right of
+    //     its card (layoutBeadGraph's `islandX = encounterCardWidth +
+    //     islandGap`).
+    //   - fitting to the two cards + EVERY child in both islands: bloats the
+    //     bounding box enough that fitView zooms out to the point tile text
+    //     is illegible (defeats requirement 1).
+    //   - fitting to the two cards + only the linked tiles: still too wide,
+    //     because the linked tiles' own island (e.g. medicationrequest) can
+    //     sit ~2000px right of the card at x:0 simply because several OTHER
+    //     islands (condition/observation/diagnosticreport/procedure) are
+    //     laid out before it in TYPE_ORDER — the cards being pinned at x:0
+    //     forces the same wide bounding box regardless of which children are
+    //     selected. The task's actual requirement is "arcs land inside the
+    //     frame with both endpoints on identifiable Beads", not "the
+    //     originating encounter card must also be in frame" — the card is
+    //     still one click away and its date/type is visible in the tile
+    //     data itself, so dropping it from the FIT target (it still renders,
+    //     just outside this frame) is what actually satisfies the
+    //     requirement instead of fighting the existing island layout.
+    const focusNodeIds = linkedBeadIds.map((id) => ({ id }));
+
+    // Only attempt once the useMemo above has actually produced nodes for
+    // the focus pair's linked tiles (guards the first render, where `nodes`
+    // may still reflect the pre-expand state before effectiveExpandedIds
+    // includes them).
+    const ready = linkedBeadIds.every((id) => nodes.some((n) => n.id === id));
+    if (!ready) return;
+
+    // ReactFlow's fitView() silently no-ops (returns false, per its
+    // `getNodes().every(n => n.width && n.height)` guard — see
+    // @reactflow/core's fitView in store/utils) until the just-mounted
+    // island/tile DOM nodes have been measured by its internal
+    // ResizeObserver, which happens asynchronously after this effect's
+    // nodes/edges update commits — a single requestAnimationFrame is too
+    // early (verified: a Playwright capture showed the viewport transform
+    // never leaving its defaultViewport value after only one rAF attempt).
+    // Poll for a handful of frames instead of guessing a fixed delay, so
+    // this fires on the very first frame where measurement is actually
+    // done rather than either racing it or padding with an arbitrary
+    // timeout.
+    let attempts = 0;
+    let rafId: number;
+    const tryFit = () => {
+      const didFit = fitView({ nodes: focusNodeIds, padding: 0.3, maxZoom: 0.9, duration: 0 });
+      attempts += 1;
+      if (!didFit && attempts < 30) {
+        rafId = requestAnimationFrame(tryFit);
+      }
+    };
+    rafId = requestAnimationFrame(tryFit);
+    return () => cancelAnimationFrame(rafId);
+  }, [figureMode, graph, nodes, fitView]);
+
   return (
     <ReactFlow
       className="bead-graph-spine"
@@ -1283,14 +1541,20 @@ function BeadGraphView({
       nodeTypes={nodeTypes}
       edgeTypes={spineEdgeTypes}
       onNodeClick={handleNodeClick}
-      // No fitView: fitView computes a bounding-box fit over the WHOLE graph
-      // (spine + any expanded islands to the right), so the root/first
-      // chapter card can end up anywhere in the viewport depending on
-      // aspect ratio — not reliably top-left. Instead pin the initial
-      // viewport a small fixed margin from the content origin (roots and
-      // encounter chapters are laid out starting at x:0,y:0 in
+      // No declarative `fitView` prop: it computes a bounding-box fit over
+      // the WHOLE graph (spine + any expanded islands to the right), so the
+      // root/first chapter card can end up anywhere in the viewport
+      // depending on aspect ratio — not reliably top-left. Instead pin the
+      // initial viewport a small fixed margin from the content origin (roots
+      // and encounter chapters are laid out starting at x:0,y:0 in
       // layoutBeadGraph), so patient_registration / the newest encounter is
-      // always the first thing in view, at the top-left, at 1:1 zoom.
+      // always the first thing in view, at the top-left, at 1:1 zoom. Figure
+      // mode overrides this afterward via the imperative `fitView()` effect
+      // above, which re-pans/zooms to the two auto-focused encounters
+      // specifically (not the whole graph) — this defaultViewport is simply
+      // what is on screen for the one/two frames before that effect fires,
+      // and is exactly what stays in effect for the (unaffected) interactive
+      // view.
       defaultViewport={{ x: spineViewportMargin, y: spineViewportMargin, zoom: 1 }}
       minZoom={0.05}
       maxZoom={2}
