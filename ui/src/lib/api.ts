@@ -4,17 +4,9 @@ import axios from 'axios';
 // For local development: set VITE_API_BASE_URL=http://localhost:8080
 // For Docker: uses /api/core (proxied by Nginx)
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/core';
-const AI_API_BASE_URL = import.meta.env.VITE_AI_API_BASE_URL || '/api/ai';
 
 export const api = axios.create({
   baseURL: API_BASE_URL,
-  headers: {
-    'Content-Type': 'application/json',
-  },
-});
-
-export const aiApi = axios.create({
-  baseURL: AI_API_BASE_URL,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -90,10 +82,33 @@ export const getViewerRoles = (): ViewerRole[] => {
   return currentViewerRoles;
 };
 
-// Helper to add viewer roles header to requests
-const getViewerHeaders = () => ({
-  'X-Viewer-Roles': currentViewerRoles.join(','),
-});
+// The acting user's identity. The server REQUIRES `X-User-ID` on clearance
+// mutations (POST/DELETE /clearance return 401 without it — see
+// createClearanceHandler / deleteClearanceHandler in internal/rest/handlers.go)
+// because it writes the value into clearance_rules.created_by and into the
+// clearance_audit ledger: an access-policy change must name who made it.
+// Reads (GET /clearance) do not require it.
+//
+// There is no auth flow in this UI yet, so this is a settable module global
+// rather than a token-derived identity. It is deliberately NOT sent on read
+// requests, so it cannot leak into ordinary retrieval telemetry.
+let currentUserID = 'ui-operator';
+
+export const setUserID = (userID: string) => {
+  currentUserID = userID;
+};
+
+// Helper to add viewer roles header to requests. Pass includeUserID for the
+// clearance mutations, which the server rejects without it.
+const getViewerHeaders = (includeUserID = false) => {
+  const headers: Record<string, string> = {
+    'X-Viewer-Roles': currentViewerRoles.join(','),
+  };
+  if (includeUserID) {
+    headers['X-User-ID'] = currentUserID;
+  }
+  return headers;
+};
 
 // --- Type Definitions ---
 
@@ -178,6 +193,10 @@ export interface GraphLink {
   severity: GraphLinkSeverity;
   evidence_basis: GraphLinkEvidenceBasis;
   rule_version: string; // rule bead id, or '' if not rule-derived
+  // The projection run that produced this row. Optional because the server
+  // only started returning it in the projection-provenance change; an older
+  // binary omits it, and the UI must degrade rather than crash.
+  projection_run_id?: string;
 }
 
 export interface PatientGraph {
@@ -490,24 +509,10 @@ function mapBeadContentToTimelineItem(bead: Bead): Omit<TimelineItem, 'restricte
   return null;
 }
 
-export interface BeadUsed {
-  id: string;
-  type: string;
-  timestamp: string;
-  description: string;
-}
-
-export interface AIInsightResponse {
-  insight: string;
-  beads_used: BeadUsed[];
-}
-
-export const fetchAIInsight = async (targetBeadId: string): Promise<AIInsightResponse> => {
-  const response = await aiApi.post<AIInsightResponse>('/ai/insight', {
-    target_bead_id: targetBeadId
-  });
-  return response.data;
-};
+// The AI-insight path (a separate Python/Gemini service at POST /api/ai/insight)
+// was removed in v3. No such service exists in this repo and the route is absent
+// from the Go server's route table, so the button it powered could only ever
+// render an error string. See specs/UI_design_p2.md.
 
 // --- Clearance API Functions ---
 
@@ -528,8 +533,11 @@ export interface CreateClearanceRequest {
 }
 
 export const createClearanceRule = async (request: CreateClearanceRequest): Promise<ClearanceRule> => {
+  // X-User-ID is mandatory here: the server 401s without it, because an
+  // access-policy change is written into clearance_rules.created_by and the
+  // clearance_audit ledger.
   const response = await api.post<ClearanceRule>('/clearance', request, {
-    headers: getViewerHeaders(),
+    headers: getViewerHeaders(true),
   });
   return response.data;
 };
@@ -537,7 +545,7 @@ export const createClearanceRule = async (request: CreateClearanceRequest): Prom
 export const deleteClearanceRule = async (ruleId: string): Promise<void> => {
   await api.delete('/clearance', {
     params: { id: ruleId },
-    headers: getViewerHeaders(),
+    headers: getViewerHeaders(true),
   });
 };
 

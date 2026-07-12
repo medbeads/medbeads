@@ -333,7 +333,7 @@ function App() {
                 // wideView (user-toggled via the header bar's expand/collapse
                 // button — independent of viewMode, useful for both list and
                 // graph) drops to 1 column so the view body gets full width;
-                // Details & AI Insights renders as a floating overlay instead
+                // The detail panel renders as a floating overlay instead
                 // of a permanent 2nd column — only shown once a Bead/item is
                 // actually selected, and dismissible so it never permanently
                 // eats the reclaimed width.
@@ -341,7 +341,7 @@ function App() {
                   <div className="absolute top-0 right-0 h-full w-full max-w-md z-20 p-3">
                     <div className="bg-white rounded-xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col h-full">
                       <div className="flex-none bg-gradient-to-r from-cyan-700 to-cyan-600 px-6 py-4 flex items-center justify-between">
-                        <h2 className="text-xl font-bold text-white">Details & AI Insights</h2>
+                        <h2 className="text-xl font-bold text-white">Details</h2>
                         <button
                           onClick={() => setSelectedItem(null)}
                           className="text-white/80 hover:text-white text-sm font-medium"
@@ -359,7 +359,7 @@ function App() {
               ) : (
                 <div className="bg-white rounded-xl shadow-lg border border-slate-200 overflow-hidden flex flex-col">
                   <div className="flex-none bg-gradient-to-r from-cyan-700 to-cyan-600 px-6 py-4">
-                    <h2 className="text-xl font-bold text-white">Details & AI Insights</h2>
+                    <h2 className="text-xl font-bold text-white">Details</h2>
                   </div>
                   <div className="flex-1 overflow-y-auto">
                     {selectedItem ? (

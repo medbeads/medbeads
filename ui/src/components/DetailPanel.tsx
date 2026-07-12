@@ -1,9 +1,9 @@
 import { useState, useEffect, type ReactNode } from 'react';
-import { Sparkles, Info, AlertTriangle, Code, ChevronDown, ChevronRight, ShieldX } from 'lucide-react';
+import { Info, Code, ChevronDown, ChevronRight, ShieldX, Fingerprint } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
-import { fetchAIInsight, getViewerRoles } from '../lib/api';
+import { getViewerRoles } from '../lib/api';
 import type { TimelineItem, Patient } from '../lib/api';
-import type { BeadUsed } from '../lib/api';
+import { ClearanceEditor } from './ClearanceEditor';
 
 interface DetailPanelProps {
   selectedItem: TimelineItem | null;
@@ -16,9 +16,6 @@ interface DetailPanelProps {
 }
 
 export function DetailPanel({ selectedItem, restrictedIds = new Set() }: DetailPanelProps) {
-  const [insight, setInsight] = useState<string | null>(null);
-  const [beadsUsed, setBeadsUsed] = useState<BeadUsed[]>([]);
-  const [loadingInsight, setLoadingInsight] = useState(false);
   const [showRaw, setShowRaw] = useState(false);
 
   const viewerRoles = getViewerRoles();
@@ -26,38 +23,8 @@ export function DetailPanel({ selectedItem, restrictedIds = new Set() }: DetailP
   const isRestricted = !!beadId && restrictedIds.has(beadId);
 
   useEffect(() => {
-    setInsight(null);
-    setBeadsUsed([]);
-    setLoadingInsight(false);
     setShowRaw(false);
   }, [selectedItem?.data?.id]);
-
-  const loadInsight = async () => {
-    if (!selectedItem?.data?.id) return;
-
-    try {
-      setLoadingInsight(true);
-      const result = await fetchAIInsight(selectedItem.data.id);
-      setInsight(result.insight);
-      setBeadsUsed(result.beads_used || []);
-    } catch (e: any) {
-      console.error('Failed to fetch insight:', e);
-      // Check if it's a network error or API error
-      if (e?.response?.data?.detail) {
-        // API returned an error message
-        setInsight(`⚠️ ${e.response.data.detail}`);
-      } else if (e?.message?.includes('Network Error') || e?.code === 'ERR_NETWORK') {
-        // Network/connection error
-        setInsight('⚠️ AI API is not reachable. Please ensure the API server is running on port 8000.');
-      } else {
-        // Generic error with setup hint
-        setInsight('⚠️ AI機能を使用するには、GEMINI_API_KEY の設定が必要です。\n\n1. `api/.env` ファイルを作成\n2. `GEMINI_API_KEY=your_key_here` を設定\n3. Docker を再起動');
-      }
-      setBeadsUsed([]);
-    } finally {
-      setLoadingInsight(false);
-    }
-  };
 
   if (!selectedItem) {
     return (
@@ -221,20 +188,10 @@ export function DetailPanel({ selectedItem, restrictedIds = new Set() }: DetailP
     <div className="p-6 space-y-6">
       <div className="bg-white border-2 border-slate-200 rounded-xl p-6">
         <h3 className="text-lg font-bold text-slate-900 mb-6">Details</h3>
-        
-        {/* Search Snippet Highlight */}
-        {selectedItem.snippet && (
-            <div className="mb-6 bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-                <div className="flex items-center gap-2 mb-2 text-yellow-800 font-semibold text-sm">
-                    <Sparkles className="w-4 h-4" />
-                    <span>Search Match Context</span>
-                </div>
-                <div 
-                    className="text-sm text-slate-700 leading-relaxed font-serif"
-                    dangerouslySetInnerHTML={{ __html: selectedItem.snippet }}
-                />
-            </div>
-        )}
+
+        {/* The search-snippet block that used to sit here rendered
+            `content._snippet`, which the v3 server no longer returns (snippets
+            were dropped from the search response), so it could never display. */}
 
         {renderDetailContent()}
 
@@ -267,68 +224,55 @@ export function DetailPanel({ selectedItem, restrictedIds = new Set() }: DetailP
         </div>
       </div>
 
-      <div className="bg-gradient-to-br from-cyan-50 to-blue-50 border-2 border-cyan-200 rounded-xl p-6">
-        <div className="flex items-center gap-3 mb-4">
-          <div className="w-10 h-10 bg-gradient-to-br from-cyan-500 to-blue-600 rounded-lg flex items-center justify-center">
-            <Sparkles className="w-6 h-6 text-white" />
-          </div>
-          <h3 className="text-lg font-bold text-slate-900">AI Medical Insight</h3>
+      {/* Provenance. The paper's central claim is Bead ID = SHA-256(canonical
+          content), so the hash gets a labelled home of its own here —
+          renderObjectFields deliberately skips the `id` key, so until now the
+          hash was visible only inside the raw-JSON expander. */}
+      <div className="bg-white border border-slate-200 rounded-xl p-6">
+        <div className="flex items-center gap-2 mb-4">
+          <Fingerprint className="w-5 h-5 text-slate-600" />
+          <h3 className="text-lg font-bold text-slate-900">Provenance</h3>
         </div>
-        
-        {!insight && !loadingInsight && (
-          <div className="mt-2">
-            <p className="text-slate-600 mb-4">
-              Get contextual analysis and clinical insights related to this record using AI.
-            </p>
-            <button
-              onClick={loadInsight}
-              className="px-4 py-2 bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700 text-white font-semibold rounded-lg shadow-md transition-all flex items-center gap-2"
-            >
-              <Sparkles className="w-4 h-4" />
-              Generate Analysis
-            </button>
-          </div>
-        )}
 
-        {loadingInsight && (
-          <div className="flex items-center gap-2 text-slate-500 animate-pulse mt-4">
-            <Sparkles className="w-4 h-4" /> Generating insight...
-          </div>
-        )}
-
-        {insight && (
-          <div className="mt-4 animate-fadeIn">
-            <div className="prose prose-sm prose-slate max-w-none text-slate-700 leading-relaxed bg-white/50 p-4 rounded-lg border border-blue-100">
-                <ReactMarkdown>{insight}</ReactMarkdown>
+        <div className="space-y-3">
+          <div>
+            <div className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">
+              Bead ID{' '}
+              <span className="normal-case font-normal text-slate-400">
+                (SHA-256 of canonical content)
+              </span>
             </div>
+            <div className="font-mono text-xs bg-slate-50 border border-slate-200 rounded px-3 py-2 break-all text-slate-800">
+              {beadId ?? '—'}
+            </div>
+          </div>
 
-            {/* Beads Used Section */}
-            {beadsUsed.length > 0 && (
-              <div className="mt-4 p-3 bg-slate-50 rounded-lg border border-slate-200">
-                <h5 className="text-xs font-semibold text-slate-600 mb-2">Context Beads Used ({beadsUsed.length})</h5>
-                <div className="max-h-32 overflow-y-auto space-y-1">
-                  {beadsUsed.map((bead, idx) => (
-                    <div key={bead.id || idx} className="flex items-center gap-2 text-xs text-slate-600 py-1 border-b border-slate-100 last:border-0">
-                      <span className="px-1.5 py-0.5 bg-slate-200 text-slate-700 rounded font-mono text-[10px]">
-                        {bead.type.replace('fhir_', '')}
-                      </span>
-                      <span className="flex-1 truncate">{bead.description}</span>
-                      <span className="text-slate-400 text-[10px]">{bead.timestamp?.substring(0, 10)}</span>
-                    </div>
-                  ))}
-                </div>
+          {Array.isArray(selectedItem.data?.parents) && selectedItem.data.parents.length > 0 && (
+            <div>
+              <div className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">
+                Parents{' '}
+                <span className="normal-case font-normal text-slate-400">(causal DAG)</span>
               </div>
-            )}
-
-            <div className="mt-4 flex items-start gap-2 p-3 bg-blue-100/50 rounded-lg">
-              <AlertTriangle className="w-5 h-5 text-blue-700 flex-shrink-0 mt-0.5" />
-              <p className="text-sm text-blue-900">
-                This is an AI-generated analysis and is not a substitute for professional medical advice. Always consult a healthcare professional.
-              </p>
+              <div className="space-y-1">
+                {selectedItem.data.parents.map((parentID: string) => (
+                  <div
+                    key={parentID}
+                    className="font-mono text-xs bg-slate-50 border border-slate-200 rounded px-3 py-2 break-all text-slate-600"
+                  >
+                    {parentID}
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
+
+      {/* Clearance rules for this Bead. ClearanceEditor was fully implemented but
+          imported nowhere, so there was no way to create a rule from the running
+          UI — which left the viewer-role selector visibly inert against a store
+          with no clearance rules in it. */}
+      {beadId && <ClearanceEditor beadId={beadId} beadType={selectedItem.type} />}
     </div>
   );
 }

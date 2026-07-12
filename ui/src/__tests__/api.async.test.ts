@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   api,
-  aiApi,
   fetchAllPatients,
   searchPatients,
   fetchPatientTimeline,
@@ -9,7 +8,6 @@ import {
   fetchClearanceRules,
   createClearanceRule,
   checkAccess,
-  fetchAIInsight,
   setViewerRoles,
   type Bead,
   type PatientGraph,
@@ -147,13 +145,15 @@ describe('clearance API', () => {
   });
 });
 
-describe('fetchAIInsight', () => {
-  it('posts the target bead id to the AI API', async () => {
-    const post = vi.spyOn(aiApi, 'post').mockResolvedValue({
-      data: { insight: 'ok', beads_used: [] },
-    });
-    const res = await fetchAIInsight('target-1');
-    expect(res.insight).toBe('ok');
-    expect(post.mock.calls[0][1]).toEqual({ target_bead_id: 'target-1' });
+describe('createClearanceRule', () => {
+  it('sends X-User-ID, which the server requires on clearance mutations', async () => {
+    const post = vi.spyOn(api, 'post').mockResolvedValue({ data: {} });
+    await createClearanceRule({
+      bead_id: 'bead-1',
+      denied_roles: ['family'],
+      reason: 'sensitive',
+    } as never);
+    const config = post.mock.calls[0][2] as { headers: Record<string, string> };
+    expect(config.headers['X-User-ID']).toBeTruthy();
   });
 });
