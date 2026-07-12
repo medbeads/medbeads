@@ -180,6 +180,12 @@ type graphLinkView struct {
 	Severity      string `json:"severity"`
 	EvidenceBasis string `json:"evidence_basis"`
 	RuleVersion   string `json:"rule_version"`
+	// ProjectionRunID completes the provenance chain on the wire: a viewer
+	// holding a rendered arc can resolve run -> projection_manifest -> the
+	// knowledge Bead IDs that produced this generation of links. Widening this
+	// view is safe — /patients/{root}/graph is the R7 endpoint, not part of the
+	// frozen v2 beadView contract.
+	ProjectionRunID string `json:"projection_run_id"`
 }
 
 // graphResponse is R7a's full GET /patients/{root}/graph response shape,

@@ -682,14 +682,15 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		linkViews = append(linkViews, graphLinkView{
-			LinkID:        l.LinkID,
-			BeadA:         beadA,
-			BeadB:         beadB,
-			Relation:      l.Relation,
-			MatchedTag:    l.MatchedTag,
-			Severity:      l.Severity,
-			EvidenceBasis: l.EvidenceBasis,
-			RuleVersion:   l.RuleVersion,
+			LinkID:          l.LinkID,
+			BeadA:           beadA,
+			BeadB:           beadB,
+			Relation:        l.Relation,
+			MatchedTag:      l.MatchedTag,
+			Severity:        l.Severity,
+			EvidenceBasis:   l.EvidenceBasis,
+			RuleVersion:     l.RuleVersion,
+			ProjectionRunID: l.ProjectionRunID,
 		})
 	}
 

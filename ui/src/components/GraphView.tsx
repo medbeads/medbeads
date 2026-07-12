@@ -181,6 +181,12 @@ interface ClinicalLinkEdgeData {
   matchedTag: string;
   severity: GraphLinkSeverity;
   evidenceBasis: string;
+  // Provenance: the rule Bead that asserted this relationship, and the
+  // projection run that wrote the row. Together they are the whole audit
+  // claim — a rendered arc resolves to the immutable, content-addressed
+  // knowledge Bead that produced it, via the run's projection_manifest entry.
+  ruleVersion: string;
+  projectionRunID: string;
   // Threaded through edge data (rather than component props) because
   // ArcLinkEdge is registered once in the static `spineEdgeTypes` map and
   // instantiated per-edge by ReactFlow itself — data is the only per-edge
@@ -861,16 +867,17 @@ function ArcLinkEdge({ id, sourceX, sourceY, targetX, targetY, data, markerEnd }
         }}
       />
       <EdgeLabelRenderer>
+        {/* `group` + `group-hover` keeps the provenance card CSS-only. It must
+            NOT be React state: this file documents an infinite flicker loop
+            caused by feeding hover state back into the nodes/edges useMemo,
+            which recreated the very DOM elements hover-detection depends on. */}
         <div
-          className="nodrag nopan"
+          className="nodrag nopan group"
           style={{
             position: 'absolute',
             transform: `translate(0, -50%) translate(${labelX}px,${labelY}px)`,
             pointerEvents: 'all',
           }}
-          title={`${data?.relation ?? ''} (${data?.evidenceBasis ?? ''}, ${data?.severity ?? ''})${
-            data?.matchedTag ? ` — ${data.matchedTag}` : ''
-          }`}
         >
           <span
             className={figureMode ? 'text-[10px] font-semibold px-1.5 py-0.5 rounded bg-white border shadow-sm whitespace-nowrap' : 'text-[9px] font-medium px-1 py-0.5 rounded bg-white/90 border shadow-sm whitespace-nowrap'}
@@ -885,6 +892,52 @@ function ArcLinkEdge({ id, sourceX, sourceY, targetX, targetY, data, markerEnd }
                 Falls back to `relation` if a link has no matched_tag. */}
             {figureMode ? data?.matchedTag || data?.relation : data?.relation}
           </span>
+
+          {/* Provenance card. This is the on-screen form of the paper's audit
+              claim: a rendered relationship names the projection run that wrote
+              it, and that run's manifest names the immutable, content-addressed
+              knowledge Bead (rule_version) that asserted it. Hidden until hover
+              so the graph stays readable at rest. */}
+          <div className="hidden group-hover:block absolute left-0 top-full mt-1 z-50 w-80 rounded-lg border border-slate-300 bg-white p-3 shadow-xl text-left">
+            <div className="mb-2 flex items-center gap-2">
+              <span
+                className="px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide"
+                style={{ backgroundColor: strokeStyle.stroke, color: '#fff' }}
+              >
+                {data?.severity ?? 'info'}
+              </span>
+              <span className="text-xs font-semibold text-slate-800">{data?.relation}</span>
+            </div>
+
+            <dl className="space-y-1 text-[11px]">
+              <div className="flex gap-2">
+                <dt className="w-28 shrink-0 text-slate-500">matched tag</dt>
+                <dd className="font-mono text-slate-800 break-all">{data?.matchedTag || '—'}</dd>
+              </div>
+              <div className="flex gap-2">
+                <dt className="w-28 shrink-0 text-slate-500">evidence basis</dt>
+                <dd className="text-slate-800">{data?.evidenceBasis || '—'}</dd>
+              </div>
+              <div className="flex gap-2">
+                <dt className="w-28 shrink-0 text-slate-500">rule Bead</dt>
+                <dd className="font-mono text-slate-800 break-all">
+                  {data?.ruleVersion ? `${data.ruleVersion.slice(0, 16)}…` : '—'}
+                </dd>
+              </div>
+              <div className="flex gap-2">
+                <dt className="w-28 shrink-0 text-slate-500">projection run</dt>
+                <dd className="font-mono text-slate-800 break-all">
+                  {data?.projectionRunID ? `${data.projectionRunID.slice(0, 16)}…` : '—'}
+                </dd>
+              </div>
+            </dl>
+
+            <p className="mt-2 border-t border-slate-100 pt-2 text-[10px] leading-snug text-slate-500">
+              Derived, not stored: this relationship is a projection. The run resolves through
+              <span className="font-mono"> projection_manifest </span>
+              to the immutable rule Bead that asserted it.
+            </p>
+          </div>
         </div>
       </EdgeLabelRenderer>
     </>
@@ -1441,6 +1494,8 @@ function BeadGraphView({
           matchedTag: link.matched_tag,
           severity: link.severity,
           evidenceBasis: link.evidence_basis,
+          ruleVersion: link.rule_version ?? '',
+          projectionRunID: link.projection_run_id ?? '',
           figureMode,
         },
       });

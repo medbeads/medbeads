@@ -492,6 +492,14 @@ type PatientLinkRow struct {
 	EvidenceBeadIDs string // canonical JSON array, stored/returned verbatim (see migrations/0006's comment on this column)
 	RuleID          string
 	RuleVersion     string
+	// ProjectionRunID identifies the projection run that wrote this row. It is
+	// the far end of the provenance chain the two-layer design promises: a row
+	// names its run, projection_manifest names that run's frozen inputs (the
+	// knowledge Bead IDs, code version, config hash), and those knowledge Beads
+	// are themselves immutable, content-addressed facts. Without it, an
+	// interpretation cannot be traced back to the knowledge that produced it,
+	// which is the whole claim.
+	ProjectionRunID string
 	CreatedAt       string
 }
 
@@ -510,7 +518,8 @@ func (d *DB) GetClinicalLinksForPatient(patientRoot string) ([]PatientLinkRow, e
 	rows, err := d.sqlDB.Query(`
 		SELECT link_id, bead_a, bead_b, relation, matched_tag,
 		       severity, evidence_basis, evidence_bead_ids,
-		       COALESCE(rule_id, ''), COALESCE(rule_version, ''), created_at
+		       COALESCE(rule_id, ''), COALESCE(rule_version, ''),
+		       COALESCE(projection_run_id, ''), created_at
 		FROM clinical_links
 		WHERE patient_root = ?
 		ORDER BY created_at, matched_tag`, patientRoot)
@@ -524,7 +533,7 @@ func (d *DB) GetClinicalLinksForPatient(patientRoot string) ([]PatientLinkRow, e
 		var r PatientLinkRow
 		if err := rows.Scan(&r.LinkID, &r.BeadA, &r.BeadB, &r.Relation, &r.MatchedTag,
 			&r.Severity, &r.EvidenceBasis, &r.EvidenceBeadIDs,
-			&r.RuleID, &r.RuleVersion, &r.CreatedAt); err != nil {
+			&r.RuleID, &r.RuleVersion, &r.ProjectionRunID, &r.CreatedAt); err != nil {
 			return nil, fmt.Errorf("index: get clinical links for patient %s: scan: %w", patientRoot, err)
 		}
 		out = append(out, r)
