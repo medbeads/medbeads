@@ -28,6 +28,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -62,6 +63,7 @@ func runReproject(args []string, stdout, stderr *os.File) int {
 	dataDir := fs.String("data", "", "MedBeads data directory (contains pods/, dict/, index.db)")
 	codeVersion := fs.String("code-version", "dev", "opaque code_version string recorded in projection_manifest (e.g. a git SHA)")
 	recordState := fs.Bool("record-state", false, "also run U4b's record_state projector (bead_status/active_conditions/active_medications)")
+	ruleFile := fs.String("rule-file", "", "JSON file of curated link rules to publish as knowledge Beads before projecting")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -82,9 +84,28 @@ func runReproject(args []string, stdout, stderr *os.File) int {
 		fmt.Fprintf(stderr, "medbeadsd reproject: seed link_rule: %v\n", err)
 		return 1
 	}
+	knowledgeBeadIDs := []string{ruleID}
+
+	// Publishing curated knowledge is an ordinary Bead write: the rule becomes an
+	// immutable, content-addressed fact. Re-running with the same file is a no-op
+	// (Ingest early-returns on an already-present content hash), and REVISING a
+	// rule means publishing a NEW Bead — the old one is never rewritten, so a
+	// warning already in the store keeps naming the exact rule text that
+	// justified it.
+	if *ruleFile != "" {
+		curatedIDs, err := publishCuratedRules(eng, *ruleFile)
+		if err != nil {
+			fmt.Fprintf(stderr, "medbeadsd reproject: publish curated rules: %v\n", err)
+			return 1
+		}
+		for _, id := range curatedIDs {
+			fmt.Fprintf(stdout, "medbeadsd reproject: curated rule Bead %s\n", id)
+		}
+		knowledgeBeadIDs = append(knowledgeBeadIDs, curatedIDs...)
+	}
 
 	builtAt := time.Now().UTC().Format(time.RFC3339)
-	res, err := projector.Reproject(eng.Index(), reprojectEngineReader{eng}, []string{ruleID}, *codeVersion, builtAt)
+	res, err := projector.Reproject(eng.Index(), reprojectEngineReader{eng}, knowledgeBeadIDs, *codeVersion, builtAt)
 	if err != nil {
 		fmt.Fprintf(stderr, "medbeadsd reproject: %v\n", err)
 		return 1
@@ -151,6 +172,78 @@ func runReproject(args []string, stdout, stderr *os.File) int {
 // independent fresh-store bootstraps mint the byte-identical rule Bead ID —
 // see BuildCooccurrenceRuleBead's own doc comment on why a knowledge Bead's
 // ID must not depend on when it happened to be seeded.
+// curatedRuleFile is the on-disk shape of `-rule-file`: curated pair rules to
+// publish as knowledge Beads.
+//
+//	{
+//	  "rules": [
+//	    {
+//	      "rule_id":   "ddi-warfarin-nsaid-v1",
+//	      "relation":  "drug_drug_interaction",
+//	      "severity":  "warning",
+//	      "tag_pairs": [["atc:b01aa03", "atc:m01ae01"]],
+//	      "timestamp": "2026-01-01T00:00:00Z"
+//	    }
+//	  ]
+//	}
+//
+// timestamp is caller-supplied rather than time.Now() for the reason every
+// Bead-minting path in this codebase demands it: a knowledge Bead's ID must
+// depend only on its content, so publishing the same rule twice — from a script,
+// a re-run, a second operator — collapses onto the same content-addressed Bead
+// instead of littering the fact layer with duplicates of the same knowledge.
+type curatedRuleFile struct {
+	Rules []struct {
+		RuleID    string      `json:"rule_id"`
+		Relation  string      `json:"relation"`
+		Severity  string      `json:"severity"`
+		TagPairs  [][2]string `json:"tag_pairs"`
+		Timestamp string      `json:"timestamp"`
+	} `json:"rules"`
+}
+
+// publishCuratedRules reads path, mints a link_rule Bead per declared rule,
+// ingests it, and returns the resulting Bead IDs — the rule_versions the
+// projector stamps on every warning it derives from them.
+//
+// The severity floor is deliberately NOT re-checked here: it is enforced by
+// clinical_links' CHECK constraint at INSERT time. A rule declaring a severity
+// above `info` produces links naming this Bead as their evidence, and the
+// database accepts them precisely because they can name it. Duplicating that rule
+// in the CLI would only create a second place for the two to disagree.
+func publishCuratedRules(eng *engine.Engine, path string) ([]string, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+
+	var file curatedRuleFile
+	if err := json.Unmarshal(raw, &file); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", path, err)
+	}
+	if len(file.Rules) == 0 {
+		return nil, fmt.Errorf("parse %s: no rules declared", path)
+	}
+
+	ids := make([]string, 0, len(file.Rules))
+	for i, r := range file.Rules {
+		if r.RuleID == "" || r.Relation == "" || r.Severity == "" || len(r.TagPairs) == 0 {
+			return nil, fmt.Errorf("rule[%d]: rule_id, relation, severity and tag_pairs are all required", i)
+		}
+		if r.Timestamp == "" {
+			return nil, fmt.Errorf("rule[%d] (%s): timestamp is required — a knowledge Bead's ID must not depend on when it happened to be minted", i, r.RuleID)
+		}
+
+		ruleBead := projector.BuildCuratedPairRuleBead(r.RuleID, r.Relation, r.Severity, r.TagPairs, r.Timestamp)
+		saved, err := eng.Ingest(ruleBead)
+		if err != nil {
+			return nil, fmt.Errorf("ingest rule %s: %w", r.RuleID, err)
+		}
+		ids = append(ids, saved.ID)
+	}
+	return ids, nil
+}
+
 func ensureCooccurrenceRule(eng *engine.Engine) (string, error) {
 	ruleBead := projector.BuildCooccurrenceRuleBead("2026-01-01T00:00:00Z")
 	saved, err := eng.Ingest(ruleBead)

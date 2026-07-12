@@ -41,6 +41,27 @@ const relationClinicalCorrelation = "clinical_correlation"
 const (
 	severityInfo              = "info"
 	evidenceBasisCooccurrence = "cooccurrence"
+
+	// evidenceBasisCuratedKnowledge is what a curated_pair rule stamps on the
+	// links it produces. clinical_links' CHECK constraint accepts a severity
+	// above `info` only for this basis (or 'guideline'), and only when the row
+	// also names a rule_version and a non-empty evidence_bead_ids — so a
+	// clinical warning structurally cannot exist without naming the knowledge
+	// that justifies it.
+	evidenceBasisCuratedKnowledge = "curated_knowledge"
+)
+
+// rule_family values. The family decides how a link_rule Bead's trigger is
+// interpreted, and therefore which projector runs it:
+//
+//   - cooccurrence: two Beads share a tag in a trigger namespace. Statistical,
+//     capped at severity=info.
+//   - curated_pair: two Beads carry the two tags of a hand-curated pair. This
+//     is a clinical claim, and may carry severity above info precisely because
+//     it names the knowledge Bead that asserts it.
+const (
+	ruleFamilyCooccurrence = "cooccurrence"
+	ruleFamilyCuratedPair  = "curated_pair"
 )
 
 // triggerNamespaces is the ordered set of bead_tags namespace prefixes (see
@@ -96,6 +117,35 @@ type LinkRule struct {
 	EvidenceBasis              string
 }
 
+// CuratedPairRule is the decoded form of a rule_family="curated_pair"
+// link_rule Bead: a hand-curated statement that two specific clinical concepts,
+// each named by a tag, are related — a drug-drug interaction, a
+// contraindication — with a severity above `info`.
+//
+// This is the other half of the severity story. A cooccurrence rule can only
+// ever assert `info`, because "these two records appeared together" is a
+// statistical observation, not a clinical claim. clinical_links' CHECK
+// constraint (migrations/0006_projection_v31.sql) enforces exactly that: any
+// severity above info REQUIRES evidence_basis IN
+// ('curated_knowledge','guideline') AND a non-null rule_version AND a non-empty
+// evidence_bead_ids. So a warning cannot be written unless it can name the
+// knowledge Bead that justifies it — escalation must be earned. A CuratedPairRule
+// is how that knowledge is expressed, and because it is itself a
+// content-addressed Bead, the warning it produces is auditable back to the exact
+// text of the rule that asserted it.
+//
+// TagPairs holds ordered [tagA, tagB] couples. The projector links two Beads in
+// the same patient when one carries tagA and the other tagB (in either
+// direction — the pair is a set, not a direction).
+type CuratedPairRule struct {
+	RuleVersion   string
+	RuleID        string
+	TagPairs      [][2]string
+	Relation      string
+	Severity      string
+	EvidenceBasis string
+}
+
 // BuildCooccurrenceRuleBead returns the unsaved, ID-less link_rule Bead for
 // this package's one built-in cooccurrence rule (specs/U3_link_projector.md's
 // worked example content). Content is fully canonicalized (sorted
@@ -128,7 +178,7 @@ func BuildCooccurrenceRuleBead(timestamp string) bead.Bead {
 	content := map[string]any{
 		"schema":         linkRuleSchema,
 		"rule_id":        CooccurrenceRuleID,
-		"rule_family":    "cooccurrence",
+		"rule_family":    ruleFamilyCooccurrence,
 		"trigger":        trigger,
 		"relation":       relationClinicalCorrelation,
 		"severity":       severityInfo,
@@ -141,6 +191,205 @@ func BuildCooccurrenceRuleBead(timestamp string) bead.Bead {
 		Author:    "projector_seed",
 		Content:   content,
 	}
+}
+
+// BuildCuratedPairRuleBead returns the unsaved, ID-less link_rule Bead for a
+// curated pair rule. Like BuildCooccurrenceRuleBead, content is fully
+// canonical (sorted, no map iteration order reaching the hash payload) and the
+// timestamp is caller-supplied, so the same rule content always mints the same
+// Bead ID — publishing the same knowledge twice is idempotent, and the
+// resulting rule_version is reproducible from the content alone.
+//
+// tagPairs is normalized (each pair sorted, then the list sorted) so that
+// declaring {A,B} and {B,A} produce the byte-identical Bead. The pair is a set:
+// the projector matches it in either direction.
+func BuildCuratedPairRuleBead(ruleID, relation, severity string, tagPairs [][2]string, timestamp string) bead.Bead {
+	normalized := make([][2]string, 0, len(tagPairs))
+	for _, p := range tagPairs {
+		a, b := p[0], p[1]
+		if b < a {
+			a, b = b, a
+		}
+		normalized = append(normalized, [2]string{a, b})
+	}
+	sort.Slice(normalized, func(i, j int) bool {
+		if normalized[i][0] != normalized[j][0] {
+			return normalized[i][0] < normalized[j][0]
+		}
+		return normalized[i][1] < normalized[j][1]
+	})
+
+	pairs := make([]any, 0, len(normalized))
+	for _, p := range normalized {
+		pairs = append(pairs, []any{p[0], p[1]})
+	}
+
+	content := map[string]any{
+		"schema":      linkRuleSchema,
+		"rule_id":     ruleID,
+		"rule_family": ruleFamilyCuratedPair,
+		"trigger": map[string]any{
+			"tag_pairs": pairs,
+		},
+		"relation": relation,
+		"severity": severity,
+		// A curated rule is, by definition, curated knowledge. This value is
+		// what lets clinical_links' CHECK constraint accept a severity above
+		// info at all — and the rule Bead's own ID lands in evidence_bead_ids,
+		// so the warning names its justification.
+		"evidence_basis": evidenceBasisCuratedKnowledge,
+	}
+	return bead.Bead{
+		Type:      linkRuleType,
+		Timestamp: timestamp,
+		Author:    "projector_seed",
+		Content:   content,
+	}
+}
+
+// LoadCuratedPairRules returns every rule_family="curated_pair" link_rule Bead
+// in idx's shared Pod, decoded, in deterministic (Bead ID) order.
+//
+// knowledgeBeadIDs, when non-empty, restricts the set exactly as it does for
+// LoadActiveCooccurrenceRule: only Beads the caller explicitly named are
+// considered. This is what makes a projection's inputs a closed, declared set
+// rather than "whatever happens to be in the store" — the projection_manifest
+// records those IDs, so a projection generation can always be reproduced from
+// the same facts plus the same named knowledge.
+//
+// Unlike the cooccurrence rule (of which exactly one is active), curated rules
+// are additive: a store may carry many, and every one of them contributes links.
+// Returning an empty slice is not an error — a store with no curated knowledge
+// simply produces no links above `info`.
+func LoadCuratedPairRules(idx *index.DB, getContent func(id string) (map[string]any, error), knowledgeBeadIDs ...string) ([]CuratedPairRule, error) {
+	refs, err := idx.ListSharedBeads()
+	if err != nil {
+		return nil, fmt.Errorf("projector: load curated_pair rules: %w", err)
+	}
+
+	var allowed map[string]bool
+	if len(knowledgeBeadIDs) > 0 {
+		allowed = make(map[string]bool, len(knowledgeBeadIDs))
+		for _, id := range knowledgeBeadIDs {
+			allowed[id] = true
+		}
+	}
+
+	var ids []string
+	contents := make(map[string]map[string]any)
+	for _, ref := range refs {
+		if ref.Type != linkRuleType {
+			continue
+		}
+		if allowed != nil && !allowed[ref.ID] {
+			continue
+		}
+		content, err := getContent(ref.ID)
+		if err != nil {
+			return nil, fmt.Errorf("projector: load curated_pair rule %s: %w", ref.ID, err)
+		}
+		if schema, _ := content["schema"].(string); schema != linkRuleSchema {
+			continue
+		}
+		if family, _ := content["rule_family"].(string); family != ruleFamilyCuratedPair {
+			continue
+		}
+		ids = append(ids, ref.ID)
+		contents[ref.ID] = content
+	}
+
+	// Deterministic order: the projector's output must not depend on the order
+	// ListSharedBeads happened to return.
+	sort.Strings(ids)
+
+	out := make([]CuratedPairRule, 0, len(ids))
+	for _, id := range ids {
+		rule, err := decodeCuratedPairRule(id, contents[id])
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, rule)
+	}
+	return out, nil
+}
+
+// decodeCuratedPairRule extracts a CuratedPairRule from a link_rule Bead's
+// content, tolerating both the in-process shape ([][2]string built here) and
+// the []any-of-[]any shape a Bead round-tripped through a Pod frame carries —
+// the same duality decodeLinkRule handles for tag_namespaces.
+func decodeCuratedPairRule(ruleBeadID string, content map[string]any) (CuratedPairRule, error) {
+	ruleID, _ := content["rule_id"].(string)
+	relation, _ := content["relation"].(string)
+	severity, _ := content["severity"].(string)
+	evidenceBasis, _ := content["evidence_basis"].(string)
+
+	trigger, ok := content["trigger"].(map[string]any)
+	if !ok {
+		return CuratedPairRule{}, fmt.Errorf("projector: decode curated_pair rule %s: content.trigger missing or malformed", ruleBeadID)
+	}
+
+	pairs, err := decodeTagPairs(trigger["tag_pairs"])
+	if err != nil {
+		return CuratedPairRule{}, fmt.Errorf("projector: decode curated_pair rule %s: trigger.tag_pairs: %w", ruleBeadID, err)
+	}
+	if len(pairs) == 0 {
+		return CuratedPairRule{}, fmt.Errorf("projector: decode curated_pair rule %s: trigger.tag_pairs is empty", ruleBeadID)
+	}
+
+	return CuratedPairRule{
+		RuleVersion:   ruleBeadID,
+		RuleID:        ruleID,
+		TagPairs:      pairs,
+		Relation:      relation,
+		Severity:      severity,
+		EvidenceBasis: evidenceBasis,
+	}, nil
+}
+
+// decodeTagPairs accepts [][2]string (in-process) or []any of 2-element []any
+// (Pod round-trip). Each pair is normalized to sorted order so a rule declaring
+// {B,A} behaves identically to one declaring {A,B}.
+func decodeTagPairs(raw any) ([][2]string, error) {
+	var out [][2]string
+
+	appendPair := func(a, b string) {
+		if b < a {
+			a, b = b, a
+		}
+		out = append(out, [2]string{a, b})
+	}
+
+	switch v := raw.(type) {
+	case nil:
+		return nil, nil
+	case [][2]string:
+		for _, p := range v {
+			appendPair(p[0], p[1])
+		}
+	case []any:
+		for _, elem := range v {
+			pair, ok := elem.([]any)
+			if !ok || len(pair) != 2 {
+				return nil, fmt.Errorf("each pair must be a 2-element array, got %v", elem)
+			}
+			a, aok := pair[0].(string)
+			b, bok := pair[1].(string)
+			if !aok || !bok {
+				return nil, fmt.Errorf("each pair must hold two strings, got %v", pair)
+			}
+			appendPair(a, b)
+		}
+	default:
+		return nil, fmt.Errorf("unsupported shape %T", raw)
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		if out[i][0] != out[j][0] {
+			return out[i][0] < out[j][0]
+		}
+		return out[i][1] < out[j][1]
+	})
+	return out, nil
 }
 
 // LoadActiveCooccurrenceRule finds the link_rule Bead (type="link_rule",

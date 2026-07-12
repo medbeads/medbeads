@@ -826,15 +826,25 @@ func (s *Server) deleteClearanceHandler(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Authorize BEFORE mutating. Deleting a clearance rule is an access-policy
+	// change and must be attributable, exactly as creating one is
+	// (createClearanceHandler 401s without this header). Two defects lived here:
+	// the handler fell back to userID="unknown", writing an unattributed entry
+	// into the clearance_audit ledger — the weaker half of the guarantee, since
+	// removing a restriction is at least as sensitive as adding one — and the
+	// identity check sat AFTER clearance.DeleteRule, so rejecting a request
+	// would have left the rule already deleted with no record of who did it.
+	userID := r.Header.Get("X-User-ID")
+	if userID == "" {
+		http.Error(w, "X-User-ID header is required to delete a clearance rule", http.StatusUnauthorized)
+		return
+	}
+
 	if err := clearance.DeleteRule(s.eng.Index(), ruleID); err != nil {
 		http.Error(w, fmt.Sprintf("Failed to delete clearance rule: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	userID := r.Header.Get("X-User-ID")
-	if userID == "" {
-		userID = "unknown"
-	}
 	viewerRoles := s.parseViewerRoles(r)
 	if err := clearance.LogAction(s.eng.Index(), ruleID, "deleted", userID, viewerRoles, "Rule deleted", time.Now().Format(time.RFC3339)); err != nil {
 		http.Error(w, fmt.Sprintf("Failed to log clearance action: %v", err), http.StatusInternalServerError)

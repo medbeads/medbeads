@@ -554,8 +554,11 @@ func TestHandleClearance_CRUDRoundTrip(t *testing.T) {
 		t.Fatalf("rules after create = %v, want [%v]", rules, created)
 	}
 
-	// DELETE removes it.
+	// DELETE removes it. X-User-ID is required here for the same reason POST
+	// requires it: removing an access restriction is an access-policy change and
+	// the clearance_audit ledger must be able to name who made it.
 	delR := httptest.NewRequest(http.MethodDelete, "/clearance?id="+created.ID, nil)
+	delR.Header.Set("X-User-ID", "dr-smith")
 	delW := httptest.NewRecorder()
 	s.handleClearance(delW, delR)
 	if delW.Code != http.StatusNoContent {
@@ -568,6 +571,57 @@ func TestHandleClearance_CRUDRoundTrip(t *testing.T) {
 	s.handleClearance(getW3, getR3)
 	if got := getW3.Body.String(); got != "null\n" {
 		t.Errorf("body after delete = %q, want %q", got, "null\n")
+	}
+}
+
+// TestHandleClearance_DeleteRequiresUserIDAndDoesNotMutate pins two properties
+// of DELETE /clearance that a naive implementation gets wrong, and that this
+// handler got wrong until it was fixed:
+//
+//  1. It must 401 without X-User-ID. Removing a restriction is at least as
+//     sensitive as adding one, and the clearance_audit ledger has to be able to
+//     name who did it. The handler used to fall back to userID="unknown",
+//     writing an unattributed entry — an audit ledger that cannot attribute the
+//     most sensitive action in it is not an audit ledger.
+//
+//  2. A rejected DELETE must leave the rule INTACT. The identity check used to
+//     sit *after* clearance.DeleteRule, so an unauthorized request still deleted
+//     the rule and then returned 401 — the worst of both worlds: the restriction
+//     was gone and nothing recorded who removed it. Asserting only the status
+//     code would not catch that; this test re-reads the rule afterwards.
+func TestHandleClearance_DeleteRequiresUserIDAndDoesNotMutate(t *testing.T) {
+	e := openT(t)
+	s := newServerT(t, e)
+	patient := seedPatient(t, e, "Patient")
+
+	postR := httptest.NewRequest(http.MethodPost, "/clearance",
+		bytes.NewBufferString(`{"bead_id":"`+patient.ID+`","denied_roles":["insurance"],"reason":"test"}`))
+	postR.Header.Set("X-User-ID", "dr-smith")
+	postW := httptest.NewRecorder()
+	s.handleClearance(postW, postR)
+	if postW.Code != http.StatusCreated {
+		t.Fatalf("POST status = %d, want 201", postW.Code)
+	}
+	var created clearanceRuleView
+	decodeJSON(t, postW, &created)
+
+	// DELETE without X-User-ID must be rejected.
+	delR := httptest.NewRequest(http.MethodDelete, "/clearance?id="+created.ID, nil)
+	delW := httptest.NewRecorder()
+	s.handleClearance(delW, delR)
+	if delW.Code != http.StatusUnauthorized {
+		t.Fatalf("DELETE without X-User-ID: status = %d, want 401", delW.Code)
+	}
+
+	// ...and must NOT have deleted the rule. This is the assertion that catches
+	// an authorize-after-mutate ordering bug, which the status code alone hides.
+	getR := httptest.NewRequest(http.MethodGet, "/clearance?bead_id="+patient.ID, nil)
+	getW := httptest.NewRecorder()
+	s.handleClearance(getW, getR)
+	var rules []clearanceRuleView
+	decodeJSON(t, getW, &rules)
+	if len(rules) != 1 || rules[0].ID != created.ID {
+		t.Fatalf("after a rejected DELETE the rule must survive; got %d rule(s): %v", len(rules), rules)
 	}
 }
 

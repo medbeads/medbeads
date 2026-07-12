@@ -271,6 +271,124 @@ func projectPatientLinks(rule LinkRule, patientRoot string, tags []patientTag) [
 	return out
 }
 
+// projectCuratedPairLinks computes the clinical_links rows one CuratedPairRule
+// triggers for one patient: for each declared tag pair {tagA, tagB}, link every
+// Bead carrying tagA to every Bead carrying tagB.
+//
+// This is what makes a severity above `info` reachable at all. Every row it
+// produces carries evidence_basis=curated_knowledge, the rule Bead's ID as
+// rule_version, AND that same ID inside evidence_bead_ids — precisely the triple
+// clinical_links' CHECK constraint demands before it will accept a warning
+// (migrations/0006_projection_v31.sql). A clinical warning that cannot name its
+// own justification is not merely discouraged: the database refuses to store it.
+//
+// Determinism comes from the same discipline projectPatientLinks learned the
+// hard way — never let map iteration order reach the *selection*. rule.TagPairs
+// is already normalized and sorted (decodeCuratedPairRule), and each tag's Bead
+// list is sorted before pairing. The final sort orders the slice for the
+// caller; it does not, and must not be relied on to, make the selected set
+// stable.
+//
+// No per-Bead cap applies here, deliberately. The cooccurrence rule needs one
+// because it generates combinatorially many statistical links; a curated rule
+// fires only on hand-declared pairs, and silently dropping a clinical warning
+// because some Bead already had "too many" links would be exactly the wrong
+// failure mode.
+func projectCuratedPairLinks(rule CuratedPairRule, patientRoot string, tags []patientTag) []clinicalLink {
+	beadsByTag := make(map[string]map[string]bool)
+	beadTimestamp := make(map[string]string)
+	for _, pt := range tags {
+		if beadsByTag[pt.Tag] == nil {
+			beadsByTag[pt.Tag] = make(map[string]bool)
+		}
+		beadsByTag[pt.Tag][pt.BeadID] = true
+		beadTimestamp[pt.BeadID] = pt.Timestamp
+	}
+
+	sortedBeads := func(tag string) []string {
+		set := beadsByTag[tag]
+		if len(set) == 0 {
+			return nil
+		}
+		ids := make([]string, 0, len(set))
+		for id := range set {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		return ids
+	}
+
+	type pairKey struct{ a, b, tag string }
+	seen := make(map[pairKey]bool)
+
+	var out []clinicalLink
+	for _, pair := range rule.TagPairs {
+		tagA, tagB := pair[0], pair[1]
+		beadsA := sortedBeads(tagA)
+		beadsB := sortedBeads(tagB)
+		if len(beadsA) == 0 || len(beadsB) == 0 {
+			continue // this patient does not exhibit the pair
+		}
+
+		// matched_tag names BOTH sides of the curated claim, so a reader of the
+		// row can see the actual clinical assertion ("these two concepts
+		// interact"), not just one half of it.
+		matchedTag := tagA + "+" + tagB
+
+		for _, ba := range beadsA {
+			for _, bb := range beadsB {
+				if ba == bb {
+					continue // a Bead carrying both tags does not interact with itself
+				}
+				a, b := ba, bb
+				if b < a {
+					a, b = b, a // clinical_links CHECK: bead_a < bead_b
+				}
+				key := pairKey{a, b, matchedTag}
+				if seen[key] {
+					continue
+				}
+				seen[key] = true
+
+				link := clinicalLink{
+					BeadA:         a,
+					BeadB:         b,
+					PatientRoot:   patientRoot,
+					Relation:      rule.Relation,
+					MatchedTag:    matchedTag,
+					Severity:      rule.Severity,
+					EvidenceBasis: rule.EvidenceBasis,
+					// The rule Bead IS the evidence. This is the field the CHECK
+					// constraint tests for non-emptiness before allowing any
+					// severity above info.
+					EvidenceBeadIDs: []string{rule.RuleVersion},
+					ScoreBreakdown: map[string]any{
+						"matched_pair": []any{tagA, tagB},
+						"rule_family":  ruleFamilyCuratedPair,
+					},
+					RuleID:      rule.RuleID,
+					RuleVersion: rule.RuleVersion,
+					CreatedAt:   linkCreatedAt(beadTimestamp[a], beadTimestamp[b]),
+				}
+				link.LinkID = computeLinkID(a, b, rule.Relation, matchedTag, rule.RuleVersion)
+				out = append(out, link)
+			}
+		}
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].BeadA != out[j].BeadA {
+			return out[i].BeadA < out[j].BeadA
+		}
+		if out[i].BeadB != out[j].BeadB {
+			return out[i].BeadB < out[j].BeadB
+		}
+		return out[i].MatchedTag < out[j].MatchedTag
+	})
+
+	return out
+}
+
 // hasTriggerNamespace reports whether tag's namespace prefix ("ns:" up to
 // and including the first ':') is one of the rule's trigger namespaces.
 func hasTriggerNamespace(tag string, trigger map[string]bool) bool {

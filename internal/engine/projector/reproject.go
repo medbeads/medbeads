@@ -124,6 +124,17 @@ func Reproject(idx *index.DB, reader beadReader, knowledgeBeadIDs []string, code
 		return Result{}, fmt.Errorf("projector: reproject: %w", err)
 	}
 
+	// Curated rules are additive and optional: a store with none simply produces
+	// no links above `info`, which is the correct and safe default. Loading them
+	// through the same knowledgeBeadIDs filter keeps a projection's inputs a
+	// closed, declared set — the projection_manifest names every knowledge Bead
+	// consumed, so a generation of links is always reproducible from the same
+	// facts plus the same named knowledge.
+	curated, err := loadCuratedRules(idx, reader, knowledgeBeadIDs)
+	if err != nil {
+		return Result{}, fmt.Errorf("projector: reproject: %w", err)
+	}
+
 	configHash, err := computeConfigHash(knowledgeBeadIDs, codeVersion)
 	if err != nil {
 		return Result{}, fmt.Errorf("projector: reproject: %w", err)
@@ -149,7 +160,7 @@ func Reproject(idx *index.DB, reader beadReader, knowledgeBeadIDs []string, code
 	var res Result
 	res.RunID = runID
 	for _, p := range patients {
-		written, err := reprojectPatient(idx.SQLDB(), rule, p.ID, runID)
+		written, err := reprojectPatient(idx.SQLDB(), rule, curated, p.ID, runID)
 		if err != nil {
 			return res, fmt.Errorf("projector: reproject: patient %s: %w", p.ID, err)
 		}
@@ -196,12 +207,35 @@ func loadRule(idx *index.DB, reader beadReader, knowledgeBeadIDs []string) (Link
 // newly-computed set, in a single transaction: DELETE the old run's rows for
 // this patient, then INSERT every newly-computed row stamped with runID.
 // Returns how many rows were written (inserted) for this patient.
-func reprojectPatient(sqlDB *sql.DB, rule LinkRule, patientRoot, runID string) (int, error) {
+// loadCuratedRules resolves every curated_pair link_rule Bead the caller named
+// (or every one in the store, when knowledgeBeadIDs is empty), decoding each
+// through the same reader callback loadRule uses. Unlike the cooccurrence rule,
+// finding none is not an error: curated knowledge is optional, and a store
+// without it simply has no links above `info`.
+func loadCuratedRules(idx *index.DB, reader beadReader, knowledgeBeadIDs []string) ([]CuratedPairRule, error) {
+	return LoadCuratedPairRules(idx, func(id string) (map[string]any, error) {
+		b, err := reader.GetBead(id)
+		if err != nil {
+			return nil, err
+		}
+		return b.Content, nil
+	}, knowledgeBeadIDs...)
+}
+
+func reprojectPatient(sqlDB *sql.DB, rule LinkRule, curated []CuratedPairRule, patientRoot, runID string) (int, error) {
 	tags, err := queryPatientTags(sqlDB, patientRoot)
 	if err != nil {
 		return 0, err
 	}
 	links := projectPatientLinks(rule, patientRoot, tags)
+
+	// Curated links are appended to the statistical ones and written in the SAME
+	// transaction, so a patient's interpretation is replaced atomically: a reader
+	// never sees a half-applied generation where the warnings landed but the
+	// co-occurrence links did not, or vice versa.
+	for _, cr := range curated {
+		links = append(links, projectCuratedPairLinks(cr, patientRoot, tags)...)
+	}
 
 	tx, err := sqlDB.Begin()
 	if err != nil {
