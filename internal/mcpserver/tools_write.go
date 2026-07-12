@@ -40,6 +40,28 @@ type createBeadOut struct {
 	Bead beadView `json:"bead"`
 }
 
+// requiresAuthor reports whether this Bead is a CORRECTION — one that changes
+// what an earlier record means, rather than merely recording a new clinical fact.
+//
+// Three shapes qualify:
+//   - an amendment (Amends non-empty): supersedes an earlier record
+//   - a retraction (Retracts non-empty, or type "retraction"): withdraws one as
+//     entered-in-error
+//   - an attestation (type "attestation"): the clinician sign-off that decides
+//     whether an amendment becomes current at all (projector/resolve.go)
+//
+// An ordinary observation is deliberately NOT covered: the Synthea-imported facts
+// in this store have no author, and demanding one would be a false claim of
+// provenance about bulk-imported data. The line is drawn at corrections, because
+// that is precisely where accountability is the point.
+func requiresAuthor(beadType string, amends, retracts []string) bool {
+	switch beadType {
+	case "attestation", "retraction":
+		return true
+	}
+	return len(amends) > 0 || len(retracts) > 0
+}
+
 // createBead builds a bead.Bead from in, assigns its content-hash ID via
 // bead.WithID (delegated to engine.Ingest, which calls this internally for
 // an ID-less Bead — see verifyOrAssignID), and ingests it via engine.Ingest.
@@ -52,6 +74,35 @@ func (s *Server) createBead(_ context.Context, _ *mcp.CallToolRequest, in create
 	}
 	if in.Timestamp == "" {
 		res, jerr := toolError("create_bead", fmt.Errorf("timestamp must not be empty"))
+		return res, createBeadOut{}, jerr
+	}
+	// A correction must name who made it.
+	//
+	// An attestation with an empty author asserts that NOBODY approved the record
+	// it gates — and resolvePatientState honours it anyway, because it reads only
+	// content.verdict. That turns "unattested -> attested", the one transition in
+	// this system carrying clinical accountability, into a rubber stamp. The same
+	// holds for a retraction (withdrawing a record as entered-in-error) and for
+	// any Bead amending another: the question an institution actually asks is
+	// "who changed this, and who signed off?", and a fact layer that cannot
+	// answer it is not auditable, however immutable it is.
+	//
+	// Author is inside the content hash (bead.hashPayload), so it is part of the
+	// Bead's identity and can never be back-filled or altered — which is exactly
+	// why it has to be right at write time.
+	//
+	// TRUST BOUNDARY: Author is an assertion by a caller this server already
+	// trusts (create_bead is registered only under -role system). It is
+	// ATTRIBUTABLE, not AUTHENTICATED — the same trust model as X-User-ID on
+	// POST /clearance. bead.Bead.Signature, which sits OUTSIDE the hash, is where
+	// a future DID/JWS binding belongs. Requiring a non-empty Author does not make
+	// the claim authenticated; it makes an unattributable correction impossible,
+	// which is a strictly weaker but real property.
+	if requiresAuthor(in.Type, in.Amends, in.Retracts) && in.Author == "" {
+		res, jerr := toolError("create_bead", fmt.Errorf(
+			"author must not be empty for a correction Bead (type=%q, amends=%d, retracts=%d): "+
+				"an amendment, retraction or attestation that cannot name who made it is not auditable",
+			in.Type, len(in.Amends), len(in.Retracts)))
 		return res, createBeadOut{}, jerr
 	}
 

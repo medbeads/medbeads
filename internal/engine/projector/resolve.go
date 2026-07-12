@@ -127,6 +127,20 @@ func resolvePatientState(beads []resolveBead) map[string]beadState {
 		if a.Bead.Type != "attestation" {
 			continue
 		}
+		// NOTE ON AUTHORSHIP: an attestation SHOULD name its attester — an approval
+		// nobody signed is not an approval — and create_bead now REFUSES to write a
+		// correction Bead with an empty Author for exactly that reason (see
+		// mcpserver/tools_write.go's requiresAuthor).
+		//
+		// That check deliberately lives at the WRITE boundary, not here. The fact
+		// layer is append-only: a Bead already in a Pod cannot be edited or
+		// withdrawn. If this projection began rejecting authorless attestations,
+		// every approval written before the rule existed would silently evaporate on
+		// the next reproject — a record a clinician really did approve would revert
+		// to `unattested`, and the interpretation layer would be rewriting the
+		// meaning of history instead of deriving it. Enforcing at the write boundary
+		// keeps new corrections accountable while leaving the past faithfully
+		// readable, which is the entire point of an immutable fact layer.
 		verdict, _ := a.Bead.Content["verdict"].(string)
 		for _, targetID := range a.Bead.Parents {
 			if _, known := byID[targetID]; !known {
