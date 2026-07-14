@@ -7,7 +7,7 @@ import (
 
 // TestOpen_0007_SchemaVersionAndTablesExist checks that a freshly opened
 // index.db applies migration 0007 (specs/U4_state_derivation.md) and ends up
-// at SchemaVersion 7, with bead_status.patient_root added and the new
+// at SchemaVersion >= 7, with bead_status.patient_root added and the new
 // active_conditions/active_medications tables present and queryable (empty
 // is expected -- U4a is schema-only, U4b's record_state projector is what
 // populates them).
@@ -25,8 +25,8 @@ func TestOpen_0007_SchemaVersionAndTablesExist(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SchemaVersion: %v", err)
 	}
-	if got != 7 {
-		t.Errorf("SchemaVersion = %d, want 7", got)
+	if got < 7 {
+		t.Errorf("SchemaVersion = %d, want >= 7", got)
 	}
 
 	// bead_status.patient_root column must exist.
@@ -138,8 +138,8 @@ func TestOpen_0007_SchemaVersionAndTablesExist(t *testing.T) {
 }
 
 // TestOpen_0007_ReOpenIsIdempotent verifies re-opening an already-migrated
-// (version 7) index.db a second time does not error and keeps SchemaVersion
-// at 7, per applyMigrations' idempotency contract.
+// (version 7 or later) index.db a second time does not error and keeps
+// SchemaVersion stable, per applyMigrations' idempotency contract.
 func TestOpen_0007_ReOpenIsIdempotent(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "index.db")
@@ -166,7 +166,7 @@ func TestOpen_0007_ReOpenIsIdempotent(t *testing.T) {
 		t.Fatalf("SchemaVersion (second): %v", err)
 	}
 
-	if v1 != 7 || v2 != 7 {
-		t.Errorf("schema version across re-Open: first=%d second=%d, want both 7", v1, v2)
+	if v1 < 7 || v2 != v1 {
+		t.Errorf("schema version across re-Open: first=%d second=%d, want first >= 7 and second unchanged", v1, v2)
 	}
 }

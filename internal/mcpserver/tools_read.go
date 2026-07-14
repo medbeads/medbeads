@@ -71,12 +71,15 @@ func (s *Server) registerReadTools() {
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name: "retrieve",
 		Description: "Single-round-trip agent retrieval: FTS/structured (tags/types/date_range) " +
-			"(+ optional L2 semantic vector) anchor -> patient resolution -> graph expansion -> " +
+			"(+ optional L2 semantic vector) anchor -> patient resolution -> vertical DAG plus bounded " +
+			"clinical_links expansion -> " +
 			"token-budgeted context bundle with provenance. By default excludes retracted Beads, " +
 			"replaces an amended Bead with its current_bead_id, and excludes unattested Beads (set " +
 			"include_unattested=true to see them, marked not_for_clinical_action). semantic=true requires " +
 			"this server to have an embedder configured (serve's -embedder flag), or it is a tool-level " +
-			"error.",
+			"error. Linked endpoints are included by default at link_depth=1 (maximum 3), ordered by " +
+			"severity/evidence and capped by max_linked_beads (default 20, maximum 100); set " +
+			"include_links=false to disable both expansion and the link sidecar.",
 	}, s.retrieve)
 
 	mcp.AddTool(s.mcp, &mcp.Tool{
@@ -343,6 +346,7 @@ type clinicalLinkView struct {
 	EvidenceBeadIDs []string `json:"evidence_bead_ids,omitempty"`
 	RuleID          string   `json:"rule_id,omitempty"`
 	RuleVersion     string   `json:"rule_version,omitempty"`
+	ProjectionRunID string   `json:"projection_run_id,omitempty"`
 	CreatedAt       string   `json:"created_at"`
 }
 
@@ -446,6 +450,7 @@ func (s *Server) getLinks(_ context.Context, _ *mcp.CallToolRequest, in getLinks
 			EvidenceBeadIDs: evidenceIDs,
 			RuleID:          r.row.RuleID,
 			RuleVersion:     r.row.RuleVersion,
+			ProjectionRunID: r.row.ProjectionRunID,
 			CreatedAt:       r.row.CreatedAt,
 		})
 	}

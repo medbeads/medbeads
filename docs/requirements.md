@@ -53,30 +53,41 @@ v2 からの変更: 目的を「MICCAI 2027 実験」から**「MedBeads 自体�
 | N4 | 状態導出: 訂正チェーン解決(決定論)、アクティブ問題・現行処方、未承認の既定除外、クリアランス継承 | U4 |
 | N5 | API 語彙標準化: tags / get_links、retrieve 既定挙動(retracted 除外・amended 置換) | U5 |
 | N6 | 再 ingest + clinical_note 取り込み(Synthea DocumentReference)+ bench 軸再定義 | U6 |
+| N7 | 追記時の患者単位自動投影: index + clinical_links + record_state + watermarkを同一commit、起動時患者限定回復 | R10 |
+| N8 | link_rule v2 + 知識更新の患者優先ローリング投影: 新規データ即時、最近受診→長期未受診→死亡hint | R11 |
+| N9 | 組織/記載者/署名者分離、Ed25519 signature_attestation、署名済みknowledge release | R12 |
+| N10 | FHIRサーバ差分同期、source snapshot、version/delete/Provenance、quarantine | R13(設計済み・実装予定) |
 
 ### 3.3 臨床品質(v3.1 実装後の次フェーズ)
 
-- **Q1** FHIR 対応 flattener(summary =「メロペネム 1g 点滴静注 8時間毎」型。
-  現状の内部 ID 出力を全廃)
+- **Q1（実装済み）** FHIR 対応 flattener(summary =「メロペネム 1g 点滴静注 8時間毎」型)+
+  L0 deterministic JSON rendering（数値検査値・bool を欠落させない）
 - **Q2** `brief(patient_id, token_budget)` ツール(UC1 の入口 — anchor 不要の定型バンドル)
 - **Q3** 詰め込み優先度(新しい順 + 異常フラグ/重症度。現状の「古い順に詰める」を廃止)
 - **Q4** タグ辞書の拡充(RxNorm→ATC 公開クロスウォーク、LOINC→organ/risk —
   「eGFR低下↔腎排泄薬」の看板ユースケースを成立させる)
 - **Q5** clearance の withheld_count(秘匿の存在をエージェントに通知)
+- **Q6（実装済み）** projection-link expansion。状態・clearance 適用済み clinical_links を
+  患者内 bounded BFS で retrieve Items に展開（specs/R9_projection_link_expansion.md）
+- **Q7（実装済み）** 患者単位の自動増分投影。通常追記で全患者再構築を行わず、知識/コード世代変更は
+  患者優先ローリングqueue（specs/R10_incremental_patient_projection.md、R11_prioritized_rule_rollout.md）
 
 ### 3.4 将来(凍結・未着手を明示)
 
 - AI 起草 → 医師承認ワークフローの実装(器 = 型定義は N1 で完了)
 - LLM 比較実験(4アーム、H200 サーバー。ハーネスは commit 78b6ed3 で凍結保全)
-- DID 署名 / 多施設分散 / 1万患者スケール / EMR-CSV 取込 / migrate CLI
+- KMS/HSM・DID鍵解決 / 多施設patient identity・同意 / FHIR server connector / EMR-CSV 取込 / migrate CLI
 
 ## 4. 非機能要件
 
 - **PHI**: 実患者情報をコード・テスト・ログ・コミットに一切含めない(Synthea のみ)
 - **性能**: M1 実測値を回帰基準線とする(バンドル <10ms / FTS <50ms / retrieve p95 <500ms)。
-  **増分性**: 1患者の日次追加処理 <1s、辞書更新後の全投影再構築 <15m(104万 Bead 規模)
+  **増分性**: 1患者の日次追加処理 <1s、知識更新は新規データ患者を即時更新し、残りをrate-limit可能な
+  患者単位queueで処理（10万〜100万患者の実測SLOは今後のscale benchで確定）
 - **完全性**: verify で全データの暗号学的検証、reindex で投影の完全再構築、
   訂正チェーン解決の決定論(同一正本 + 同一知識世代 → 同一状態)
+- **真正性**: content hashだけを作成者証明とみなさない。署名必須運用ではoperator管理のtrust policy、
+  鍵用途/失効、knowledge releaseを検証し、未承認ruleをactiveにしない
 - **テスト**: 全ユニットで `-race` + reviewer 検証を経てから commit(従来ループ維持)
 - **Python は uv 必須**(pip / poetry / conda 禁止)
 

@@ -30,11 +30,12 @@ import (
 //     reason — see bead.Bead's doc comment on why an amends/retracts cycle
 //     is impossible by construction, not merely rejected here.
 //
-//     Before the parent-existence check, a "retraction"/"attestation" typed
-//     Bead is additionally required to name its subject in Parents (see
+//     Before the parent-existence check, a retraction, clinical attestation,
+//     or signature_attestation Bead is additionally required to name its
+//     subject in Parents (see
 //     requireSubjectInParents, specs/U4_state_derivation.md's "穴1" fix):
 //     resolvePatientRoot below falls back to the shared Pod ("") when
-//     Parents is empty, so a retraction/attestation Bead that pointed at its
+//     Parents is empty, so one of these Beads that pointed at its
 //     subject only via Retracts/(a future attestation target field) — never
 //     via Parents — would silently land in the shared Pod, escaping its
 //     subject's per-patient Pod entirely. That would make it invisible to
@@ -64,8 +65,12 @@ import (
 //
 //  5. Append to the resolved Pod (fsync included) via this Engine's per-path
 //     Writer, then IndexBead in one transaction — "正本が常に先、インデックス
-//     は追いつける": if the process crashes between these two steps, the next
-//     Open's CatchUp recovers it (see open.go).
+//     は追いつける". When OpenWithOptions enabled automatic projection, that
+//     same transaction also replaces this patient's clinical_links, updates
+//     record_state, and advances patient_projection_state. If the process
+//     crashes after the Pod append, the next automatic Open runs CatchUp and
+//     reprojects only the patient whose watermark is behind (see open.go and
+//     specs/R10_incremental_patient_projection.md).
 //
 //  6. Idempotent replay: if b.ID is already indexed, Ingest returns success
 //     without writing anything a second time. A caller retrying a network
@@ -76,6 +81,9 @@ import (
 //     sound specifically because Bead IDs are content hashes: two Ingest
 //     calls with the same ID are, by construction, the same Bead content.
 func (e *Engine) Ingest(b bead.Bead) (bead.Bead, error) {
+	e.ingestMu.Lock()
+	defer e.ingestMu.Unlock()
+
 	b, err := verifyOrAssignID(b)
 	if err != nil {
 		return bead.Bead{}, fmt.Errorf("engine: ingest: %w", err)
@@ -168,8 +176,18 @@ func (e *Engine) Ingest(b bead.Bead) (bead.Bead, error) {
 	if err := index.IndexBead(tx, normalized, loc, e.flattener); err != nil {
 		return bead.Bead{}, fmt.Errorf("engine: ingest %s: index: %w", b.ID, err)
 	}
+	if err := e.projectAppendedPatientBead(
+		tx,
+		normalized,
+		patientRoot,
+		relPodPath,
+		res.Offset+res.Length,
+		meta.WrittenAt,
+	); err != nil {
+		return bead.Bead{}, fmt.Errorf("engine: ingest %s: project patient: %w", b.ID, err)
+	}
 	if err := tx.Commit(); err != nil {
-		return bead.Bead{}, fmt.Errorf("engine: ingest %s: commit index: %w", b.ID, err)
+		return bead.Bead{}, fmt.Errorf("engine: ingest %s: commit index and projection: %w", b.ID, err)
 	}
 
 	return normalized, nil
@@ -192,20 +210,20 @@ func verifyOrAssignID(b bead.Bead) (bead.Bead, error) {
 	return b, nil
 }
 
-// requireSubjectInParents rejects a "retraction" or "attestation" typed Bead
-// whose Parents is empty (specs/U4_state_derivation.md's "穴1" fix — see
-// Ingest's doc comment on step 2 for why): both types name their subject
+// requireSubjectInParents rejects a retraction, clinical attestation, or
+// cryptographic signature_attestation whose Parents is empty
+// (specs/U4_state_derivation.md's "穴1" fix — see
+// Ingest's doc comment on step 2 for why): these types name their subject
 // (the Bead being retracted/attested) so a caller can always supply it in
 // Parents too, and doing so is what keeps resolvePatientRoot from falling
 // back to the shared Pod for a Bead that structurally belongs to one
 // patient. This is a shape check only (Parents non-empty); it does not by
 // itself confirm the named parent is the same Bead as Retracts[0] or an
-// attestation's target — Ingest's existing requireSamePatientRoot check
-// (already run on Retracts, mirrored for a future attestation-target field)
-// is what confirms the parent and the target share a patient_root, which is
-// the property that actually matters for correct patient-scoping.
+// attestation's signed/clinical target. The clinical state projector and
+// trust verifier perform those type-specific equality checks; this generic
+// ingest gate guarantees that the Bead is stored in its parent's patient Pod.
 func requireSubjectInParents(b bead.Bead) error {
-	if b.Type != "retraction" && b.Type != "attestation" {
+	if b.Type != "retraction" && b.Type != "attestation" && b.Type != "signature_attestation" {
 		return nil
 	}
 	if len(b.Parents) == 0 {

@@ -16,6 +16,7 @@ import (
 
 	"github.com/medbeads/medbeads/internal/engine"
 	"github.com/medbeads/medbeads/internal/engine/embedder"
+	"github.com/medbeads/medbeads/internal/engine/trust"
 	"github.com/medbeads/medbeads/internal/mcpserver"
 	"github.com/medbeads/medbeads/internal/rest"
 )
@@ -59,6 +60,17 @@ func runServe(args []string, stdout, stderr *os.File) int {
 		"query: task-prefix instead of the passage: one -embed-model gets (e.g. -embed-model e5-passage "+
 		"-embed-model-query e5-query). Unset (default): reuses -embed-model's value and its Client instance "+
 		"for query embedding too — today's original single-model-string behavior, unchanged.")
+	projectionCodeVersion := fs.String("projection-code-version", engine.DefaultProjectionCodeVersion(),
+		"code/build version recorded for automatic patient-local projections; changing it starts a prioritized rolling reproject")
+	recordStateCodeVersion := fs.String("record-state-code-version", engine.DefaultRecordStateProjectionCodeVersion(),
+		"record_state algorithm contract version; change only when correction-state semantics require a full status rebuild")
+	linkReprojectBatch := fs.Int("link-reproject-batch", 25,
+		"patients updated per background rolling-link batch; 0 disables background draining (new patient data is still projected immediately)")
+	linkReprojectInterval := fs.Duration("link-reproject-interval", 30*time.Second,
+		"interval between background rolling-link batches")
+	linkInactiveAfter := fs.Duration("link-inactive-after", engine.DefaultReprojectionInactiveAfter,
+		"patients without an encounter in this window are processed after recent patients")
+	trustPolicyPath := fs.String("trust-policy", "", "public trust policy JSON; require_knowledge_release=true rejects unsigned link-rule generations")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -67,7 +79,22 @@ func runServe(args []string, stdout, stderr *os.File) int {
 		return 2
 	}
 
-	eng, err := engine.Open(*dataDir)
+	var trustPolicy *trust.Policy
+	if *trustPolicyPath != "" {
+		loadedPolicy, err := trust.LoadPolicy(*trustPolicyPath)
+		if err != nil {
+			fmt.Fprintf(stderr, "medbeadsd serve: %v\n", err)
+			return 1
+		}
+		trustPolicy = loadedPolicy
+	}
+
+	eng, err := engine.OpenWithOptions(*dataDir, engine.OpenOptions{
+		AutoProject:                  true,
+		ProjectionCodeVersion:        *projectionCodeVersion,
+		RecordStateProjectionVersion: *recordStateCodeVersion,
+		TrustPolicy:                  trustPolicy,
+	})
 	if err != nil {
 		fmt.Fprintf(stderr, "medbeadsd serve: open engine: %v\n", err)
 		return 1
@@ -75,7 +102,19 @@ func runServe(args []string, stdout, stderr *os.File) int {
 	defer eng.Close() //nolint:errcheck // best-effort unwind; process is exiting either way
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
+	noWorker := make(chan struct{})
+	close(noWorker)
+	var workerDone <-chan struct{} = noWorker
+	if *linkReprojectBatch > 0 {
+		workerDone = startLinkReprojectionWorker(
+			ctx, eng, *linkReprojectBatch, *linkReprojectInterval,
+			*linkInactiveAfter, stderr,
+		)
+	}
+	defer func() {
+		stop()
+		<-workerDone
+	}()
 
 	// R4.2: an embedder is opt-in via -embedder. When unset, mcpCfg.Embedder
 	// stays nil (mcpserver.Config's own "no embedder configured" default —
@@ -130,6 +169,41 @@ func runServe(args []string, stdout, stderr *os.File) int {
 	}
 
 	return runServeHTTP(ctx, srv, restSrv, *httpAddr, stdout, stderr)
+}
+
+// startLinkReprojectionWorker drains only a bounded patient batch per tick.
+// ProcessLinkReprojectionQueue releases Engine's ingest mutex between patients,
+// so ordinary writes can enter between maintenance transactions. The first
+// batch runs immediately; subsequent batches are deliberately rate-limited.
+func startLinkReprojectionWorker(ctx context.Context, eng *engine.Engine, batchSize int, interval, inactiveAfter time.Duration, stderr *os.File) <-chan struct{} {
+	done := make(chan struct{})
+	if batchSize <= 0 {
+		close(done)
+		return done
+	}
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			result, err := eng.ProcessLinkReprojectionQueue(batchSize, time.Now().UTC(), inactiveAfter)
+			if err != nil {
+				fmt.Fprintf(stderr, "medbeadsd serve: rolling link reprojection: %v\n", err)
+			} else if result.Projected > 0 || result.Failed > 0 {
+				fmt.Fprintf(stderr, "medbeadsd serve: rolling link reprojection: projected=%d recent=%d inactive=%d deceased=%d failed=%d remaining=%d\n",
+					result.Projected, result.Recent, result.Inactive, result.Deceased, result.Failed, result.Remaining)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+	return done
 }
 
 // buildEmbedClients builds the (up to) two embedder.Client values runServe

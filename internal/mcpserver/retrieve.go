@@ -33,8 +33,12 @@ const semanticAnchorK = 50
 // reaches grandparents, matching a typical encounter -> observation/
 // medication -> patient_registration chain depth in the FHIR ingest shape).
 const (
-	defaultTokenBudget = 4000
-	defaultChainDepth  = 3
+	defaultTokenBudget    = 4000
+	defaultChainDepth     = 3
+	defaultLinkDepth      = 1
+	defaultMaxLinkedBeads = 20
+	maxLinkDepth          = 3
+	maxLinkedBeadsLimit   = 100
 )
 
 // retrieveIn is the MCP-facing shape of R6.2's unified retrieve tool:
@@ -51,17 +55,11 @@ type retrieveIn struct {
 	Semantic    bool         `json:"semantic,omitempty" jsonschema:"also run L2 vector search (sqlite-vec) over query and merge hits into the anchor set; requires this server to have an embedder configured, or it is a tool-level error"`
 	ChainDepth  int          `json:"chain_depth,omitempty" jsonschema:"ancestor/descendant BFS depth from each anchor (default 3)"`
 	TokenBudget int          `json:"token_budget,omitempty" jsonschema:"greedy packing budget in estimated tokens (default 4000)"`
-	// IncludeLinks gates only retrieveOut.ClinicalLinks (the clinical_links
-	// sidecar): U5a (specs/U5_api_retrieve.md) removed package apc and
-	// graph's sibling tiers entirely — graph.BuildContext no longer has an
-	// explicit/implicit sibling tier to toggle, so this field's
-	// context-bundle-shaping effect is gone; U5b renamed it from
-	// include_siblings, keeping the *bool/nil-default-true JSON shape (see
-	// retrieveIncludeLinks below). Per specs/U5_api_retrieve.md's
-	// "include_links の意味" section, this deliberately stays a sidecar
-	// toggle only — it does not pull a link's other endpoint into Items
-	// (near-neighborhood expansion is a distinct, not-yet-built feature).
-	IncludeLinks *bool `json:"include_links,omitempty" jsonschema:"include the clinical_links sidecar in the response (default true); set false to omit it"`
+	// IncludeLinks enables both the clinical_links sidecar and bounded
+	// projection-link expansion into Items. false is the explicit opt-out.
+	IncludeLinks   *bool `json:"include_links,omitempty" jsonschema:"include clinical_links and expand linked Beads into the context bundle (default true); set false to disable both"`
+	LinkDepth      int   `json:"link_depth,omitempty" jsonschema:"clinical_links BFS depth (default 1, maximum 3); include_links=false disables expansion"`
+	MaxLinkedBeads int   `json:"max_linked_beads,omitempty" jsonschema:"maximum linked Beads promoted into context (default 20, maximum 100); truncation is reported"`
 	// IncludeUnattested opts in to seeing an unattested Bead (one whose
 	// required attestation is missing or was rejected — resolve.go's §2
 	// attestation gate) in Items/TruncatedRefs/AnchorIDs, which are excluded
@@ -79,14 +77,34 @@ type retrieveIn struct {
 // "explicitly false" are distinguishable at the JSON layer (a plain bool
 // field would make both cases decode to the Go zero value, false, making the
 // R6.2 default impossible to express without breaking every existing caller
-// that never sets the field). Since U5a, this only gates
-// retrieveOut.ClinicalLinks (see retrieve's own call site) — it no longer
-// affects Items/TruncatedRefs' context-bundle shape at all.
+// that never sets the field). It gates both projection-link expansion and
+// retrieveOut.ClinicalLinks, preserving one explicit opt-out.
 func retrieveIncludeLinks(in retrieveIn) bool {
 	if in.IncludeLinks == nil {
 		return true
 	}
 	return *in.IncludeLinks
+}
+
+func retrieveLinkLimits(in retrieveIn) (depth, maxBeads int, err error) {
+	if !retrieveIncludeLinks(in) {
+		return 0, 0, nil
+	}
+	depth = in.LinkDepth
+	if depth == 0 {
+		depth = defaultLinkDepth
+	}
+	if depth < 0 || depth > maxLinkDepth {
+		return 0, 0, fmt.Errorf("link_depth must be between 1 and %d", maxLinkDepth)
+	}
+	maxBeads = in.MaxLinkedBeads
+	if maxBeads == 0 {
+		maxBeads = defaultMaxLinkedBeads
+	}
+	if maxBeads < 1 || maxBeads > maxLinkedBeadsLimit {
+		return 0, 0, fmt.Errorf("max_linked_beads must be between 1 and %d", maxLinkedBeadsLimit)
+	}
+	return depth, maxBeads, nil
 }
 
 // retrieveIncludeUnattested resolves retrieveIn.IncludeUnattested's documented
@@ -146,19 +164,23 @@ type retrieveOut struct {
 	TruncatedRefs []contextItemView `json:"truncated_refs"`
 	BudgetTokens  int               `json:"budget_tokens"`
 	UsedTokens    int               `json:"used_tokens"`
-	// ClinicalLinks surfaces the U3b-projected clinical_links rows for every
-	// Bead that made it into Items (U3c's "retrieve を clinical_links 読取に対応
-	// させる" scope) — the interpretation-layer link projector, and (since
-	// U5a deleted package apc and graph's sibling tiers) the sole link
-	// mechanism this response surfaces at all. This is deliberately an
-	// additive sidecar field rather than a context-bundle expansion: a link's
-	// other endpoint is surfaced as relation/severity/evidence metadata here,
-	// not pulled into Items itself (see include_links' future "近傍展開" design
-	// note in specs/U5_api_retrieve.md if that ever changes). Gated by the
-	// IncludeSiblings flag (retrieveIn's doc comment: renamed to include_links
-	// in U5b), and clearance-filtered exactly like get_links (a link whose
-	// other endpoint is inaccessible is dropped, never masked).
+	// ClinicalLinks surfaces the same patient-scoped, status/clearance-filtered
+	// projection snapshot used to expand linked endpoints into Items. Keeping
+	// the edge sidecar lets consumers audit relation, severity, evidence and
+	// projection generation instead of trusting expanded content alone.
 	ClinicalLinks []retrievedLinkView `json:"clinical_links,omitempty"`
+	LinkExpansion *linkExpansionView  `json:"link_expansion,omitempty"`
+}
+
+// linkExpansionView makes policy truncation distinct from token truncation.
+// ExpandedBeadIDs are context candidates; any that do not fit the token
+// budget still appear in TruncatedRefs with provenance=clinical_link.
+type linkExpansionView struct {
+	RequestedDepth  int      `json:"requested_depth"`
+	MaxLinkedBeads  int      `json:"max_linked_beads"`
+	CandidateCount  int      `json:"candidate_count"`
+	ExpandedBeadIDs []string `json:"expanded_bead_ids"`
+	Truncated       bool     `json:"truncated"`
 }
 
 // retrievedLinkView is retrieve's own clinical_links provenance entry: which
@@ -220,6 +242,11 @@ func (s *Server) retrieve(ctx context.Context, _ *mcp.CallToolRequest, in retrie
 	}
 	if in.Query == "" && len(in.Tags) == 0 {
 		res, jerr := toolError("retrieve", fmt.Errorf("at least one of query or tags must be set"))
+		return res, retrieveOut{}, jerr
+	}
+	linkDepth, maxLinkedBeads, err := retrieveLinkLimits(in)
+	if err != nil {
+		res, jerr := toolError("retrieve", err)
 		return res, retrieveOut{}, jerr
 	}
 
@@ -288,9 +315,41 @@ func (s *Server) retrieve(ctx context.Context, _ *mcp.CallToolRequest, in retrie
 		return res, retrieveOut{}, jerr
 	}
 
-	bundle := graph.BuildContext(bd, scopedIDs, tokenBudget, chainDepth, chainDepth)
+	var (
+		patientLinks  []accessiblePatientLink
+		linkedAnchors []graph.LinkedAnchor
+		linkExpansion *linkExpansionView
+	)
+	if retrieveIncludeLinks(in) {
+		seedIDs := verticalCandidateIDs(bd, scopedIDs, chainDepth)
+		var normalizedSeeds []string
+		patientLinks, normalizedSeeds, err = s.loadAccessiblePatientLinks(
+			bd, root, seedIDs, retrieveIncludeUnattested(in),
+		)
+		if err != nil {
+			res, jerr := toolError("retrieve: load clinical links", err)
+			return res, retrieveOut{}, jerr
+		}
+		candidateCount := 0
+		linkedAnchors, candidateCount = expandClinicalLinks(normalizedSeeds, patientLinks, linkDepth, maxLinkedBeads)
+		expandedIDs := make([]string, len(linkedAnchors))
+		for i, linked := range linkedAnchors {
+			expandedIDs[i] = bead.FormatID(linked.ID)
+		}
+		linkExpansion = &linkExpansionView{
+			RequestedDepth:  linkDepth,
+			MaxLinkedBeads:  maxLinkedBeads,
+			CandidateCount:  candidateCount,
+			ExpandedBeadIDs: expandedIDs,
+			Truncated:       candidateCount > len(linkedAnchors),
+		}
+	}
 
-	items, truncated, err := s.filterContextBundle(bundle, scopedProvenance, retrieveIncludeUnattested(in))
+	bundle := graph.BuildContextWithClinicalLinks(
+		bd, scopedIDs, linkedAnchors, tokenBudget, chainDepth, chainDepth,
+	)
+
+	items, truncated, usedTokens, err := s.filterContextBundle(bundle, scopedProvenance, retrieveIncludeUnattested(in))
 	if err != nil {
 		res, jerr := toolError("retrieve: filter", err)
 		return res, retrieveOut{}, jerr
@@ -315,7 +374,7 @@ func (s *Server) retrieve(ctx context.Context, _ *mcp.CallToolRequest, in retrie
 
 	var clinicalLinks []retrievedLinkView
 	if retrieveIncludeLinks(in) {
-		clinicalLinks, err = s.retrieveClinicalLinks(items)
+		clinicalLinks, err = retrieveClinicalLinksFromPatient(items, patientLinks)
 		if err != nil {
 			res, jerr := toolError("retrieve: clinical links", err)
 			return res, retrieveOut{}, jerr
@@ -327,99 +386,10 @@ func (s *Server) retrieve(ctx context.Context, _ *mcp.CallToolRequest, in retrie
 		Items:         items,
 		TruncatedRefs: truncated,
 		BudgetTokens:  bundle.BudgetTokens,
-		UsedTokens:    bundle.UsedTokens,
+		UsedTokens:    usedTokens,
 		ClinicalLinks: clinicalLinks,
+		LinkExpansion: linkExpansion,
 	}, nil
-}
-
-// retrieveClinicalLinks resolves the clinical_links rows for every Bead in
-// items (retrieve's already-clearance-filtered context items), applying the
-// identical clearance-inheritance drop discipline as get_links (getLinks in
-// tools_read.go): a link whose other endpoint is inaccessible to this
-// session's role is dropped entirely, never masked. It also applies U5b's
-// status normalization to the other endpoint (specs/U5_api_retrieve.md's
-// "合意点" #10: get_links/retrieveClinicalLinks must see status, not just
-// clearance) via the shared statusNormalizeLinkEndpoints helper: a link whose
-// other endpoint is retracted or (by default) unattested is dropped, and one
-// whose other endpoint is amended has OtherBeadID substituted to
-// current_bead_id — exactly the ordering must-fix (status -> GetBead ->
-// clearance) applied to a link row's endpoint instead of a context item.
-// Links are deduplicated by LinkID across items (the same clinical_links row
-// can be reached from either endpoint if both endpoints are in Items),
-// keeping the first-seen BeadID attribution.
-func (s *Server) retrieveClinicalLinks(items []provenanceView) ([]retrievedLinkView, error) {
-	if len(items) == 0 {
-		return nil, nil
-	}
-
-	seen := make(map[string]bool)
-	var out []retrievedLinkView
-	for _, item := range items {
-		id, err := bead.ParseID(item.ID)
-		if err != nil {
-			return nil, fmt.Errorf("parse item id %s: %w", item.ID, err)
-		}
-		rows, err := s.eng.Index().GetClinicalLinks(id)
-		if err != nil {
-			return nil, fmt.Errorf("get clinical links %s: %w", id, err)
-		}
-		if len(rows) == 0 {
-			continue
-		}
-
-		resolved, err := s.statusNormalizeLinkEndpoints(rows, false)
-		if err != nil {
-			return nil, fmt.Errorf("status normalize clinical links %s: %w", id, err)
-		}
-		if len(resolved) == 0 {
-			continue
-		}
-
-		otherBeads := make([]bead.Bead, len(resolved))
-		for i, r := range resolved {
-			b, err := s.eng.GetBead(r.otherBeadID)
-			if err != nil {
-				return nil, fmt.Errorf("get bead %s: %w", r.otherBeadID, err)
-			}
-			otherBeads[i] = b
-		}
-		filtered, err := clearance.FilterByAccess(s.eng.Index(), otherBeads, s.viewerRoles())
-		if err != nil {
-			return nil, fmt.Errorf("filter clinical links for %s: %w", id, err)
-		}
-
-		for i, r := range resolved {
-			if !accessible(filtered[i]) {
-				continue
-			}
-			if seen[r.row.LinkID] {
-				continue
-			}
-			seen[r.row.LinkID] = true
-
-			evidenceIDs, err := decodeEvidenceBeadIDs(r.row.EvidenceBeadIDs)
-			if err != nil {
-				return nil, fmt.Errorf("decode evidence_bead_ids for %s: %w", r.row.LinkID, err)
-			}
-
-			out = append(out, retrievedLinkView{
-				BeadID: item.ID,
-				clinicalLinkView: clinicalLinkView{
-					LinkID:          bead.FormatID(r.row.LinkID),
-					OtherBeadID:     bead.FormatID(r.otherBeadID),
-					Relation:        r.row.Relation,
-					MatchedTag:      r.row.MatchedTag,
-					Severity:        r.row.Severity,
-					EvidenceBasis:   r.row.EvidenceBasis,
-					EvidenceBeadIDs: evidenceIDs,
-					RuleID:          r.row.RuleID,
-					RuleVersion:     r.row.RuleVersion,
-					CreatedAt:       r.row.CreatedAt,
-				},
-			})
-		}
-	}
-	return out, nil
 }
 
 // anchorRef is one candidate anchor Bead surfaced by retrieveAnchors, tagged
@@ -666,7 +636,7 @@ func matchingTags(db interface {
 // the item stage" specs/U5_api_retrieve.md's U5b section calls for,
 // distinct from the anchor-stage batch retrieve's own doc comment
 // describes.
-func (s *Server) filterContextBundle(bundle graph.ContextBundle, provenance map[string]anchorProvenance, includeUnattested bool) ([]provenanceView, []contextItemView, error) {
+func (s *Server) filterContextBundle(bundle graph.ContextBundle, provenance map[string]anchorProvenance, includeUnattested bool) ([]provenanceView, []contextItemView, int, error) {
 	allIDs := make([]string, 0, len(bundle.Items)+len(bundle.TruncatedRefs))
 	for _, item := range bundle.Items {
 		allIDs = append(allIDs, item.ID)
@@ -676,10 +646,13 @@ func (s *Server) filterContextBundle(bundle graph.ContextBundle, provenance map[
 	}
 	statuses, err := s.resolveBeadStatuses(allIDs)
 	if err != nil {
-		return nil, nil, fmt.Errorf("status normalize context bundle: %w", err)
+		return nil, nil, 0, fmt.Errorf("status normalize context bundle: %w", err)
 	}
 
-	normalizedItems, unattestedItems := statusNormalizeContextItems(bundle.Items, statuses, includeUnattested)
+	normalizedItems, unattestedItems, err := s.statusNormalizeContextItems(bundle.Items, statuses, includeUnattested)
+	if err != nil {
+		return nil, nil, 0, err
+	}
 	// contextItemView (TruncatedRefs' own view type) carries no
 	// not_for_clinical_action field — a truncated ref is already just a bare
 	// L2 reference (id/type/timestamp), and the marker's purpose (an agent
@@ -687,17 +660,68 @@ func (s *Server) filterContextBundle(bundle graph.ContextBundle, provenance map[
 	// only meaningful for an item whose actual Text made it into the
 	// response — so the second return value here is intentionally discarded
 	// rather than plumbed further.
-	normalizedRefs, _ := statusNormalizeContextItems(bundle.TruncatedRefs, statuses, includeUnattested)
+	normalizedRefs, _, err := s.statusNormalizeContextItems(bundle.TruncatedRefs, statuses, includeUnattested)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	// Amendment substitution can collapse an Item and a TruncatedRef that
+	// originally had different IDs onto the same current_bead_id. Items win;
+	// preserve BuildContext's global no-duplicate invariant after status.
+	seenNormalized := make(map[string]bool, len(normalizedItems)+len(normalizedRefs))
+	for _, item := range normalizedItems {
+		seenNormalized[item.ID] = true
+	}
+	dedupedRefs := normalizedRefs[:0]
+	for _, ref := range normalizedRefs {
+		if seenNormalized[ref.ID] {
+			continue
+		}
+		seenNormalized[ref.ID] = true
+		dedupedRefs = append(dedupedRefs, ref)
+	}
+	normalizedRefs = dedupedRefs
+	normalizedItems, normalizedRefs = fitNormalizedContext(normalizedItems, normalizedRefs, bundle.BudgetTokens)
 
 	items, err := s.filterItems(normalizedItems, provenance, unattestedItems)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 	truncated, err := s.filterRefs(normalizedRefs)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
-	return items, truncated, nil
+	usedTokens := 0
+	for _, item := range items {
+		usedTokens += item.EstimatedTokens
+	}
+	return items, truncated, usedTokens, nil
+}
+
+// fitNormalizedContext re-applies the budget after amendment substitution.
+// A corrected Bead can be larger than the stale version BuildContext packed;
+// without this pass UsedTokens could exceed BudgetTokens. Existing priority
+// order is preserved and an oversized item is demoted to L2 before becoming
+// a truncated reference.
+func fitNormalizedContext(items, refs []graph.ContextItem, budget int) ([]graph.ContextItem, []graph.ContextItem) {
+	remaining := budget
+	fitted := make([]graph.ContextItem, 0, len(items))
+	outRefs := make([]graph.ContextItem, 0, len(refs))
+	for _, item := range items {
+		if item.EstimatedTokens <= remaining {
+			fitted = append(fitted, item)
+			remaining -= item.EstimatedTokens
+			continue
+		}
+		ref := graph.AsL2Reference(item)
+		if ref.EstimatedTokens <= remaining {
+			fitted = append(fitted, ref)
+			remaining -= ref.EstimatedTokens
+			continue
+		}
+		outRefs = append(outRefs, ref)
+	}
+	outRefs = append(outRefs, refs...)
+	return fitted, outRefs
 }
 
 func (s *Server) filterItems(items []graph.ContextItem, provenance map[string]anchorProvenance, unattested map[string]bool) ([]provenanceView, error) {
@@ -815,33 +839,51 @@ var loggedEmptyBeadStatusOnce sync.Once
 // BeadStatusFor's own doc comment) — so no special-case substitution is
 // needed here at all, only a one-time diagnostic note so an operator can
 // tell "no bead_status rows" apart from "every Bead happens to be active".
-// The stricter case the spec also names — bead_status has rows for OTHER
-// Beads, but a specific requested id here is individually absent (reproject
-// ran but is inconsistent for this one id) — is deliberately NOT
-// distinguished from the empty-table case for U5b: both collapse to the
-// same "absent = active" rule (JUDGMENT CALL, stated explicitly per the
-// task's instructions) rather than the spec's stricter "controlled error on
-// partial gap", which is noted as a future hardening, not implemented here.
+// If the table has any rows but one requested ID is absent, the projection is
+// partially stale/inconsistent and this function returns a controlled error.
+// Treating such a new amendment as active before record-state reprojection
+// could surface an unapproved correction, so only the entirely-empty
+// development-store case is allowed to fail open.
 func (s *Server) resolveBeadStatuses(ids []string) (map[string]index.BeadStatusRow, error) {
 	if len(ids) == 0 {
 		return map[string]index.BeadStatusRow{}, nil
 	}
-	statuses, err := s.eng.Index().BeadStatusFor(ids)
+	uniqueIDs := make([]string, 0, len(ids))
+	seen := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		if id != "" && !seen[id] {
+			seen[id] = true
+			uniqueIDs = append(uniqueIDs, id)
+		}
+	}
+	statuses, err := s.eng.Index().BeadStatusFor(uniqueIDs)
 	if err != nil {
-		return nil, fmt.Errorf("bead status for %d ids: %w", len(ids), err)
+		return nil, fmt.Errorf("bead status for %d ids: %w", len(uniqueIDs), err)
 	}
-	if len(statuses) == 0 {
-		empty, emptyErr := s.eng.Index().BeadStatusTableEmpty()
-		if emptyErr != nil {
-			return nil, fmt.Errorf("bead status table empty check: %w", emptyErr)
-		}
-		if empty {
-			loggedEmptyBeadStatusOnce.Do(func() {
-				log.Printf("retrieve: record_state projection missing (bead_status is empty) — treating every Bead as active; run reproject -record-state to populate it")
-			})
+	if len(statuses) == len(uniqueIDs) {
+		return statuses, nil
+	}
+
+	empty, emptyErr := s.eng.Index().BeadStatusTableEmpty()
+	if emptyErr != nil {
+		return nil, fmt.Errorf("bead status table empty check: %w", emptyErr)
+	}
+	if empty {
+		loggedEmptyBeadStatusOnce.Do(func() {
+			log.Printf("retrieve: record_state projection missing (bead_status is empty) — treating every Bead as active; run reproject -record-state to populate it")
+		})
+		return statuses, nil
+	}
+
+	missing := make([]string, 0, len(uniqueIDs)-len(statuses))
+	for _, id := range uniqueIDs {
+		if _, ok := statuses[id]; !ok {
+			missing = append(missing, id)
 		}
 	}
-	return statuses, nil
+	sort.Strings(missing)
+	return nil, fmt.Errorf("record_state projection is incomplete: %d of %d requested Beads are missing status (first missing: %s); run reproject -record-state",
+		len(missing), len(uniqueIDs), missing[0])
 }
 
 // resolveStatusDecision is one Bead ID's §2 outcome as retrieve/get_links'
@@ -940,14 +982,15 @@ func (s *Server) statusNormalizeAnchors(ids []string, provenance map[string]anch
 // TruncatedRefs into one shared BeadStatusFor call, so this function itself
 // makes no DB call). An amended item is rewritten in place to reference
 // current_bead_id (Provenance/Granularity/tier bookkeeping is preserved from
-// the original item — only ID/Type/Timestamp/Text/EstimatedTokens change,
-// resolved fresh via GetBead by the caller downstream exactly as any other
-// item ID is). The returned map flags which (post-substitution) IDs are
+// the original item — ID/Type/Timestamp/Text/EstimatedTokens are re-rendered
+// immediately from the current Bead, preventing stale original text from
+// being mislabeled with current_bead_id). The returned map flags which
+// (post-substitution) IDs are
 // unattested-and-explicitly-surfaced, for provenanceView's
 // NotForClinicalAction field.
-func statusNormalizeContextItems(items []graph.ContextItem, statuses map[string]index.BeadStatusRow, includeUnattested bool) ([]graph.ContextItem, map[string]bool) {
+func (s *Server) statusNormalizeContextItems(items []graph.ContextItem, statuses map[string]index.BeadStatusRow, includeUnattested bool) ([]graph.ContextItem, map[string]bool, error) {
 	if len(items) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	out := make([]graph.ContextItem, 0, len(items))
 	unattested := make(map[string]bool)
@@ -963,13 +1006,19 @@ func statusNormalizeContextItems(items []graph.ContextItem, statuses map[string]
 		}
 		seen[decision.resolvedID] = true
 		normalized := item
-		normalized.ID = decision.resolvedID
+		if decision.resolvedID != item.ID {
+			replacement, err := s.eng.GetBead(decision.resolvedID)
+			if err != nil {
+				return nil, nil, fmt.Errorf("get current amendment %s for %s: %w", decision.resolvedID, item.ID, err)
+			}
+			normalized = graph.RefreshContextItem(item, replacement)
+		}
 		out = append(out, normalized)
 		if decision.notForClinicalAction {
 			unattested[decision.resolvedID] = true
 		}
 	}
-	return out, unattested
+	return out, unattested, nil
 }
 
 // resolvedLinkEndpoint is one clinical_links row after U5b status

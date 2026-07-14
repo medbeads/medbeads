@@ -174,6 +174,8 @@ class MedBeadsClient:
         token_budget: int | None = None,
         semantic: bool | None = None,
         include_links: bool | None = None,
+        link_depth: int | None = None,
+        max_linked_beads: int | None = None,
         chain_depth: int | None = None,
         tags: list[str] | None = None,
         types: list[str] | None = None,
@@ -185,7 +187,7 @@ class MedBeadsClient:
         (docs/requirements.md §7), and by bench.retrieval's dag arm (R8.2),
         which sets semantic=True.
 
-        semantic/include_links/chain_depth/tags/types are additive, opt-in
+        semantic/include_links/link_depth/max_linked_beads/chain_depth/tags/types are additive, opt-in
         parameters (omitting them reproduces exactly the args this method
         has always sent). U5b (specs/U5_api_retrieve.md) renamed
         include_siblings -> include_links and antigens -> tags as a clean
@@ -193,10 +195,10 @@ class MedBeadsClient:
         not merely accepted-and-ignored). include_links maps to retrieveIn's
         `include_links` *bool field (internal/mcpserver/retrieve.go), whose
         Go-side default (True) is used whenever this Python method's own
-        default (None) is passed through unset; since U5a it only gates the
-        clinical_links sidecar in the response, not Items/TruncatedRefs'
-        context-bundle shape (sibling tiers were removed entirely — see
-        bench.retrieval.dag's docstring).
+        default (None) is passed through unset. R9 makes it gate both the
+        clinical_links sidecar and bounded linked-Bead context expansion;
+        link_depth/max_linked_beads expose that policy when a benchmark needs
+        non-default limits.
         """
         args: dict[str, Any] = {}
         if query:
@@ -209,6 +211,10 @@ class MedBeadsClient:
             args["semantic"] = semantic
         if include_links is not None:
             args["include_links"] = include_links
+        if link_depth is not None:
+            args["link_depth"] = link_depth
+        if max_linked_beads is not None:
+            args["max_linked_beads"] = max_linked_beads
         if chain_depth is not None:
             args["chain_depth"] = chain_depth
         if tags:

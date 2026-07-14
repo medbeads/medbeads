@@ -2,16 +2,23 @@ package projector
 
 import (
 	"fmt"
+	"math"
 	"sort"
 
 	"github.com/medbeads/medbeads/internal/engine/bead"
 	"github.com/medbeads/medbeads/internal/engine/index"
 )
 
-// linkRuleSchema is the content.schema value every link_rule Bead this
-// package writes or reads must carry (specs/U3_link_projector.md's U3 前の
-// 仕様修正 section, "link_rule Bead content スキーマ確定").
-const linkRuleSchema = "medbeads.link_rule.v1"
+// New rules are written as v2. The v1 decoder remains supported because old
+// knowledge Beads are immutable and must stay reproducible after an upgrade.
+const (
+	linkRuleSchemaV1 = "medbeads.link_rule.v1"
+	linkRuleSchema   = "medbeads.link_rule.v2"
+)
+
+func supportedLinkRuleSchema(schema string) bool {
+	return schema == linkRuleSchemaV1 || schema == linkRuleSchema
+}
 
 // linkRuleType is the Bead.Type value a link_rule Bead is ingested as. It is
 // ordinary Bead content (not hash-excluded), content-addressed like any
@@ -115,6 +122,9 @@ type LinkRule struct {
 	Relation                   string
 	Severity                   string
 	EvidenceBasis              string
+	FrequencyThreshold         float64
+	MaxLinksPerBead            int
+	SharedTagWeight            float64
 }
 
 // CuratedPairRule is the decoded form of a rule_family="curated_pair"
@@ -138,12 +148,16 @@ type LinkRule struct {
 // the same patient when one carries tagA and the other tagB (in either
 // direction — the pair is a set, not a direction).
 type CuratedPairRule struct {
-	RuleVersion   string
-	RuleID        string
-	TagPairs      [][2]string
-	Relation      string
-	Severity      string
-	EvidenceBasis string
+	RuleVersion     string
+	RuleID          string
+	RevisionLabel   string
+	TagPairs        [][2]string
+	Relation        string
+	Severity        string
+	EvidenceBasis   string
+	EvidenceBeadIDs []string
+	EffectiveFrom   string
+	EffectiveTo     string
 }
 
 // BuildCooccurrenceRuleBead returns the unsaved, ID-less link_rule Bead for
@@ -184,6 +198,10 @@ func BuildCooccurrenceRuleBead(timestamp string) bead.Bead {
 		"severity":       severityInfo,
 		"evidence_basis": evidenceBasisCooccurrence,
 		"score_model":    scoreModel,
+		"execution": map[string]any{
+			"frequency_threshold": frequencyThreshold,
+			"max_links_per_bead":  maxLinksPerBead,
+		},
 	}
 	return bead.Bead{
 		Type:      linkRuleType,
@@ -288,7 +306,7 @@ func LoadCuratedPairRules(idx *index.DB, getContent func(id string) (map[string]
 		if err != nil {
 			return nil, fmt.Errorf("projector: load curated_pair rule %s: %w", ref.ID, err)
 		}
-		if schema, _ := content["schema"].(string); schema != linkRuleSchema {
+		if schema, _ := content["schema"].(string); !supportedLinkRuleSchema(schema) {
 			continue
 		}
 		if family, _ := content["rule_family"].(string); family != ruleFamilyCuratedPair {
@@ -308,6 +326,11 @@ func LoadCuratedPairRules(idx *index.DB, getContent func(id string) (map[string]
 		if err != nil {
 			return nil, err
 		}
+		for _, evidenceID := range rule.EvidenceBeadIDs {
+			if _, err := getContent(evidenceID); err != nil {
+				return nil, fmt.Errorf("projector: curated_pair rule %s evidence Bead %s is unavailable: %w", id, evidenceID, err)
+			}
+		}
 		out = append(out, rule)
 	}
 	return out, nil
@@ -319,6 +342,7 @@ func LoadCuratedPairRules(idx *index.DB, getContent func(id string) (map[string]
 // the same duality decodeLinkRule handles for tag_namespaces.
 func decodeCuratedPairRule(ruleBeadID string, content map[string]any) (CuratedPairRule, error) {
 	ruleID, _ := content["rule_id"].(string)
+	revisionLabel, _ := content["revision_label"].(string)
 	relation, _ := content["relation"].(string)
 	severity, _ := content["severity"].(string)
 	evidenceBasis, _ := content["evidence_basis"].(string)
@@ -335,15 +359,63 @@ func decodeCuratedPairRule(ruleBeadID string, content map[string]any) (CuratedPa
 	if len(pairs) == 0 {
 		return CuratedPairRule{}, fmt.Errorf("projector: decode curated_pair rule %s: trigger.tag_pairs is empty", ruleBeadID)
 	}
+	if ruleID == "" {
+		return CuratedPairRule{}, fmt.Errorf("projector: decode curated_pair rule %s: content.rule_id is required", ruleBeadID)
+	}
+	if relation == "" {
+		return CuratedPairRule{}, fmt.Errorf("projector: decode curated_pair rule %s: content.relation is required", ruleBeadID)
+	}
+	if severity != "info" && severity != "warning" && severity != "alert" && severity != "critical" {
+		return CuratedPairRule{}, fmt.Errorf("projector: decode curated_pair rule %s: unsupported severity %q", ruleBeadID, severity)
+	}
+	if evidenceBasis != evidenceBasisCuratedKnowledge && evidenceBasis != "guideline" {
+		return CuratedPairRule{}, fmt.Errorf("projector: decode curated_pair rule %s: unsupported evidence_basis %q", ruleBeadID, evidenceBasis)
+	}
+	for _, pair := range pairs {
+		if pair[0] == "" || pair[1] == "" || pair[0] == pair[1] {
+			return CuratedPairRule{}, fmt.Errorf("projector: decode curated_pair rule %s: invalid tag pair %q/%q", ruleBeadID, pair[0], pair[1])
+		}
+	}
+	evidenceIDs, err := decodeStringSlice(content["evidence_bead_ids"])
+	if err != nil {
+		return CuratedPairRule{}, fmt.Errorf("projector: decode curated_pair rule %s: evidence_bead_ids: %w", ruleBeadID, err)
+	}
+	sort.Strings(evidenceIDs)
+	evidenceIDs = deduplicateSortedStrings(evidenceIDs)
+	var effectiveFrom, effectiveTo string
+	if period, ok := content["effective_period"].(map[string]any); ok {
+		effectiveFrom, _ = period["from"].(string)
+		effectiveTo, _ = period["to"].(string)
+		if effectiveFrom != "" && effectiveTo != "" && effectiveTo < effectiveFrom {
+			return CuratedPairRule{}, fmt.Errorf("projector: decode curated_pair rule %s: effective_period.to precedes from", ruleBeadID)
+		}
+	}
 
 	return CuratedPairRule{
-		RuleVersion:   ruleBeadID,
-		RuleID:        ruleID,
-		TagPairs:      pairs,
-		Relation:      relation,
-		Severity:      severity,
-		EvidenceBasis: evidenceBasis,
+		RuleVersion:     ruleBeadID,
+		RuleID:          ruleID,
+		RevisionLabel:   revisionLabel,
+		TagPairs:        pairs,
+		Relation:        relation,
+		Severity:        severity,
+		EvidenceBasis:   evidenceBasis,
+		EvidenceBeadIDs: evidenceIDs,
+		EffectiveFrom:   effectiveFrom,
+		EffectiveTo:     effectiveTo,
 	}, nil
+}
+
+func deduplicateSortedStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := values[:1]
+	for _, value := range values[1:] {
+		if value != out[len(out)-1] {
+			out = append(out, value)
+		}
+	}
+	return out
 }
 
 // decodeTagPairs accepts [][2]string (in-process) or []any of 2-element []any
@@ -444,7 +516,7 @@ func LoadActiveCooccurrenceRule(idx *index.DB, getContent func(id string) (map[s
 			return LinkRule{}, fmt.Errorf("projector: load link_rule %s: %w", ref.ID, err)
 		}
 		schema, _ := content["schema"].(string)
-		if schema != linkRuleSchema {
+		if !supportedLinkRuleSchema(schema) {
 			continue
 		}
 		ruleID, _ := content["rule_id"].(string)
@@ -489,6 +561,9 @@ func decodeLinkRule(ruleBeadID string, content map[string]any) (LinkRule, error)
 	if err != nil {
 		return LinkRule{}, fmt.Errorf("projector: decode link_rule %s: trigger.min_shared: %w", ruleBeadID, err)
 	}
+	if minShared == 0 {
+		minShared = 1 // v1 compatibility
+	}
 
 	var excludedSameCode []string
 	if excludes, ok := trigger["excludes"].(map[string]any); ok {
@@ -509,6 +584,54 @@ func decodeLinkRule(ruleBeadID string, content map[string]any) (LinkRule, error)
 	// it is harmless (kept for readability/reproducible logging only).
 	sort.Strings(excludedSameCode)
 
+	frequency := frequencyThreshold
+	maxLinks := maxLinksPerBead
+	if execution, ok := content["execution"].(map[string]any); ok {
+		if raw, exists := execution["frequency_threshold"]; exists {
+			frequency, err = decodeFloat(raw)
+			if err != nil {
+				return LinkRule{}, fmt.Errorf("projector: decode link_rule %s: execution.frequency_threshold: %w", ruleBeadID, err)
+			}
+		}
+		if raw, exists := execution["max_links_per_bead"]; exists {
+			maxLinks, err = decodeInt(raw)
+			if err != nil {
+				return LinkRule{}, fmt.Errorf("projector: decode link_rule %s: execution.max_links_per_bead: %w", ruleBeadID, err)
+			}
+		}
+	}
+
+	sharedTagWeight := 1.0
+	if scoreModel, ok := content["score_model"].(map[string]any); ok {
+		if weights, ok := scoreModel["weights"].(map[string]any); ok {
+			if raw, exists := weights["shared_tag"]; exists {
+				sharedTagWeight, err = decodeFloat(raw)
+				if err != nil {
+					return LinkRule{}, fmt.Errorf("projector: decode link_rule %s: score_model.weights.shared_tag: %w", ruleBeadID, err)
+				}
+			}
+		}
+	}
+
+	if ruleID == "" || relation == "" || len(namespaces) == 0 {
+		return LinkRule{}, fmt.Errorf("projector: decode link_rule %s: rule_id, relation and trigger.tag_namespaces are required", ruleBeadID)
+	}
+	if minShared < 1 {
+		return LinkRule{}, fmt.Errorf("projector: decode link_rule %s: trigger.min_shared must be >= 1", ruleBeadID)
+	}
+	if severity != severityInfo || evidenceBasis != evidenceBasisCooccurrence {
+		return LinkRule{}, fmt.Errorf("projector: decode link_rule %s: cooccurrence rules require severity=info and evidence_basis=cooccurrence", ruleBeadID)
+	}
+	if frequency <= 0 || frequency > 1 {
+		return LinkRule{}, fmt.Errorf("projector: decode link_rule %s: execution.frequency_threshold must be in (0,1]", ruleBeadID)
+	}
+	if maxLinks < 1 || maxLinks > 10000 {
+		return LinkRule{}, fmt.Errorf("projector: decode link_rule %s: execution.max_links_per_bead must be in [1,10000]", ruleBeadID)
+	}
+	if sharedTagWeight <= 0 {
+		return LinkRule{}, fmt.Errorf("projector: decode link_rule %s: shared_tag weight must be > 0", ruleBeadID)
+	}
+
 	return LinkRule{
 		RuleVersion:                ruleBeadID,
 		RuleID:                     ruleID,
@@ -518,6 +641,9 @@ func decodeLinkRule(ruleBeadID string, content map[string]any) (LinkRule, error)
 		Relation:                   relation,
 		Severity:                   severity,
 		EvidenceBasis:              evidenceBasis,
+		FrequencyThreshold:         frequency,
+		MaxLinksPerBead:            maxLinks,
+		SharedTagWeight:            sharedTagWeight,
 	}, nil
 }
 
@@ -555,7 +681,21 @@ func decodeInt(raw any) (int, error) {
 	case int:
 		return v, nil
 	case float64:
+		if math.Trunc(v) != v {
+			return 0, fmt.Errorf("must be an integer, got %v", v)
+		}
 		return int(v), nil
+	default:
+		return 0, fmt.Errorf("unsupported shape %T", raw)
+	}
+}
+
+func decodeFloat(raw any) (float64, error) {
+	switch v := raw.(type) {
+	case int:
+		return float64(v), nil
+	case float64:
+		return v, nil
 	default:
 		return 0, fmt.Errorf("unsupported shape %T", raw)
 	}

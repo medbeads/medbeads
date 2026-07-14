@@ -2,7 +2,6 @@ package projector
 
 import (
 	"crypto/sha256"
-	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -12,7 +11,7 @@ import (
 	"github.com/gowebpki/jcs"
 )
 
-// maxLinksPerBead caps how many clinical_links rows a single Bead may appear
+// maxLinksPerBead is the v1-compatible default for how many clinical_links rows a single Bead may appear
 // in (as either bead_a or bead_b) within one patient's projection pass — the
 // runaway-prevention guard specs/U3_link_projector.md's U3b section calls
 // for carrying forward ("走らないガード…は投影でも意味があるものは残す"),
@@ -26,7 +25,7 @@ import (
 // combinatorial blow-up through.
 const maxLinksPerBead = 50
 
-// frequencyThreshold is the IDF-style exclusion threshold: a trigger tag
+// frequencyThreshold is the v1-compatible IDF-style exclusion threshold: a trigger tag
 // whose patient-local frequency (distinct tag-bearing Beads carrying it,
 // over the patient's total distinct tag-bearing Beads) is >= this fraction
 // is dropped from the candidate-pairing tag set entirely — the same runaway
@@ -113,6 +112,23 @@ type clinicalLink struct {
 // produces literally zero candidate pairs, not a link that is then
 // discarded.
 func projectPatientLinks(rule LinkRule, patientRoot string, tags []patientTag) []clinicalLink {
+	threshold := rule.FrequencyThreshold
+	if threshold <= 0 {
+		threshold = frequencyThreshold
+	}
+	linkCap := rule.MaxLinksPerBead
+	if linkCap <= 0 {
+		linkCap = maxLinksPerBead
+	}
+	minShared := rule.MinShared
+	if minShared <= 0 {
+		minShared = 1
+	}
+	sharedTagWeight := rule.SharedTagWeight
+	if sharedTagWeight <= 0 {
+		sharedTagWeight = 1
+	}
+
 	trigger := make(map[string]bool, len(rule.TriggerNamespaces))
 	for _, ns := range rule.TriggerNamespaces {
 		trigger[ns] = true
@@ -144,7 +160,7 @@ func projectPatientLinks(rule LinkRule, patientRoot string, tags []patientTag) [
 	frequent := make(map[string]bool)
 	if total > 0 {
 		for tag, beadSet := range tagBeadSet {
-			if float64(len(beadSet))/float64(total) >= frequencyThreshold {
+			if float64(len(beadSet))/float64(total) >= threshold {
 				frequent[tag] = true
 			}
 		}
@@ -212,6 +228,29 @@ func projectPatientLinks(rule LinkRule, patientRoot string, tags []patientTag) [
 		triggerTags = append(triggerTags, nsTags...)
 	}
 
+	// min_shared belongs to the rule Bead and therefore must influence the
+	// selected set, not merely be decoded for display. Count distinct eligible
+	// triggering tags per unordered pair before the capped deterministic pass.
+	// A rule with min_shared=2 emits that pair's per-tag rows only when at least
+	// two different tags support the relationship.
+	type beadPair struct{ a, b string }
+	sharedCounts := make(map[beadPair]int)
+	for _, tag := range triggerTags {
+		if excludedBySameCodeOnly(tag, rule.ExcludedSameCodeNamespaces) {
+			continue
+		}
+		ids := beadsByTag[tag]
+		for i := 0; i < len(ids); i++ {
+			for j := i + 1; j < len(ids); j++ {
+				a, b := ids[i], ids[j]
+				if b < a {
+					a, b = b, a
+				}
+				sharedCounts[beadPair{a: a, b: b}]++
+			}
+		}
+	}
+
 	type pairKey struct{ a, b, tag string }
 	seen := make(map[pairKey]bool)
 	linkCount := make(map[string]int) // bead ID -> how many links it already appears in this pass
@@ -232,7 +271,10 @@ func projectPatientLinks(rule LinkRule, patientRoot string, tags []patientTag) [
 				if seen[key] {
 					continue
 				}
-				if linkCount[a] >= maxLinksPerBead || linkCount[b] >= maxLinksPerBead {
+				if sharedCounts[beadPair{a: a, b: b}] < minShared {
+					continue
+				}
+				if linkCount[a] >= linkCap || linkCount[b] >= linkCap {
 					continue // runaway prevention: per-Bead link cap
 				}
 				seen[key] = true
@@ -246,10 +288,15 @@ func projectPatientLinks(rule LinkRule, patientRoot string, tags []patientTag) [
 					Severity:        rule.Severity,
 					EvidenceBasis:   rule.EvidenceBasis,
 					EvidenceBeadIDs: nil,
-					ScoreBreakdown:  map[string]any{"matched_tag": tag, "namespace": tagNamespace(tag)},
-					RuleID:          rule.RuleID,
-					RuleVersion:     rule.RuleVersion,
-					CreatedAt:       linkCreatedAt(beadTimestamp[a], beadTimestamp[b]),
+					ScoreBreakdown: map[string]any{
+						"matched_tag":      tag,
+						"namespace":        tagNamespace(tag),
+						"shared_tag_count": sharedCounts[beadPair{a: a, b: b}],
+						"weighted_score":   float64(sharedCounts[beadPair{a: a, b: b}]) * sharedTagWeight,
+					},
+					RuleID:      rule.RuleID,
+					RuleVersion: rule.RuleVersion,
+					CreatedAt:   linkCreatedAt(beadTimestamp[a], beadTimestamp[b]),
 				}
 				link.LinkID = computeLinkID(a, b, rule.Relation, tag, rule.RuleVersion)
 				out = append(out, link)
@@ -350,6 +397,9 @@ func projectCuratedPairLinks(rule CuratedPairRule, patientRoot string, tags []pa
 				}
 				seen[key] = true
 
+				evidenceIDs := append([]string{rule.RuleVersion}, rule.EvidenceBeadIDs...)
+				sort.Strings(evidenceIDs)
+				evidenceIDs = deduplicateSortedStrings(evidenceIDs)
 				link := clinicalLink{
 					BeadA:         a,
 					BeadB:         b,
@@ -361,7 +411,7 @@ func projectCuratedPairLinks(rule CuratedPairRule, patientRoot string, tags []pa
 					// The rule Bead IS the evidence. This is the field the CHECK
 					// constraint tests for non-emptiness before allowing any
 					// severity above info.
-					EvidenceBeadIDs: []string{rule.RuleVersion},
+					EvidenceBeadIDs: evidenceIDs,
 					ScoreBreakdown: map[string]any{
 						"matched_pair": []any{tagA, tagB},
 						"rule_family":  ruleFamilyCuratedPair,
@@ -503,8 +553,8 @@ func canonicalJSON(v any) (string, error) {
 // the direct-SQL read this package's own read API does not expose (mirrors
 // package apc's candidateRows/frequentAntigens direct-SQL convention,
 // apc/scanner.go).
-func queryPatientTags(sqlDB *sql.DB, patientRoot string) ([]patientTag, error) {
-	rows, err := sqlDB.Query(`
+func queryPatientTags(q sqlQueryer, patientRoot string) ([]patientTag, error) {
+	rows, err := q.Query(`
 		SELECT bt.tag, bt.bead_id, b.timestamp
 		FROM bead_tags bt
 		JOIN beads b ON b.id = bt.bead_id

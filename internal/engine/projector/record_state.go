@@ -54,6 +54,13 @@ type StatusResult struct {
 	ActiveMedications int
 }
 
+// PatientStateResult summarizes one patient-local record_state update.
+type PatientStateResult struct {
+	BeadStatusWritten int
+	ActiveConditions  int
+	ActiveMedications int
+}
+
 // StatusReproject is U4b's full-reprojection entry point (specs/
 // U4_state_derivation.md's "projector 構造" section): for every patient, it
 // decodes that patient's Beads (via reader's ListPatientBeads-shaped
@@ -192,8 +199,8 @@ type beadLocus struct {
 // treats that as a hard error rather than defaulting the offset to zero: a Bead
 // silently sorted to offset 0 would order as the patient's OLDEST and could lose
 // a correction chain it should win.
-func queryPatientLoci(sqlDB *sql.DB, patientRoot string) (map[string]beadLocus, error) {
-	rows, err := sqlDB.Query(
+func queryPatientLoci(q sqlQueryer, patientRoot string) (map[string]beadLocus, error) {
+	rows, err := q.Query(
 		`SELECT id, offset, recorded_at FROM beads WHERE patient_root = ?`,
 		patientRoot)
 	if err != nil {
@@ -222,9 +229,9 @@ func queryPatientLoci(sqlDB *sql.DB, patientRoot string) (map[string]beadLocus, 
 }
 
 // writePatientState replaces patientRoot's bead_status/active_conditions/
-// active_medications rows (any row not already stamped with runID) with the
-// newly-resolved set, in a single transaction — the same per-patient atomic-
-// replace pattern reprojectPatient (reproject.go) uses for clinical_links.
+// active_medications rows with the newly-resolved set, in a single transaction
+// — the same per-patient atomic-replace pattern reprojectPatient
+// (reproject.go) uses for clinical_links.
 // Returns (bead_status rows written, active_conditions rows written,
 // active_medications rows written).
 func writePatientState(sqlDB *sql.DB, patientRoot, runID string, beads []bead.Bead, states map[string]beadState) (int, int, int, error) {
@@ -234,21 +241,116 @@ func writePatientState(sqlDB *sql.DB, patientRoot, runID string, beads []bead.Be
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback after commit is a no-op
 
+	written, conditions, medications, err := writePatientStateTx(tx, patientRoot, runID, beads, states)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, 0, 0, fmt.Errorf("commit: %w", err)
+	}
+	return written, conditions, medications, nil
+}
+
+// ProjectPatientStateInTx fully resolves and atomically replaces one patient's
+// bead_status/active_* rows inside a transaction already owned by the caller.
+// It is used for correction events and crash recovery, where an appended Bead
+// can change the resolved state of older facts.
+func ProjectPatientStateInTx(tx *sql.Tx, patientRoot, runID string, beads []bead.Bead) (PatientStateResult, error) {
+	loci, err := queryPatientLoci(tx, patientRoot)
+	if err != nil {
+		return PatientStateResult{}, err
+	}
+
+	resolveInput := make([]resolveBead, 0, len(beads))
+	for _, b := range beads {
+		locus, ok := loci[b.ID]
+		if !ok {
+			return PatientStateResult{}, fmt.Errorf("bead %s has no indexed offset; reindex required", b.ID)
+		}
+		resolveInput = append(resolveInput, resolveBead{
+			Bead:            b,
+			Offset:          locus.Offset,
+			RecordedAt:      locus.RecordedAt,
+			RecordedAtValid: locus.RecordedAtValid,
+		})
+	}
+	states := resolvePatientState(resolveInput)
+	written, conditions, medications, err := writePatientStateTx(tx, patientRoot, runID, beads, states)
+	if err != nil {
+		return PatientStateResult{}, err
+	}
+	return PatientStateResult{
+		BeadStatusWritten: written,
+		ActiveConditions:  conditions,
+		ActiveMedications: medications,
+	}, nil
+}
+
+// RequiresFullPatientState reports whether appending b can change an older
+// Bead's resolved status. Retractions and attestations do; an amendment before
+// attestation is only an unattested proposal and therefore changes only its own
+// new row. This distinction keeps ordinary high-volume ingest O(1) for
+// record_state while retaining exact full-chain resolution for the rare events
+// that can alter history.
+func RequiresFullPatientState(b bead.Bead) bool {
+	return b.Type == "attestation" || len(b.Retracts) > 0
+}
+
+// ProjectNewPatientBeadStateInTx appends only b's own record_state rows for a
+// Bead that RequiresFullPatientState says is local-only.
+func ProjectNewPatientBeadStateInTx(tx *sql.Tx, patientRoot, runID string, b bead.Bead) (PatientStateResult, error) {
+	if RequiresFullPatientState(b) {
+		return PatientStateResult{}, fmt.Errorf("bead %s (%s) requires full patient state projection", b.ID, b.Type)
+	}
+
+	st := beadState{Status: "active", CurrentBeadID: b.ID}
+	if len(b.Amends) > 0 || b.Type == "assessment" {
+		st.Status = "unattested"
+	}
+	if err := insertBeadStatusRow(tx, b.ID, patientRoot, runID, st); err != nil {
+		return PatientStateResult{}, fmt.Errorf("insert bead_status %s: %w", b.ID, err)
+	}
+
+	res := PatientStateResult{BeadStatusWritten: 1}
+	if st.Status != "active" {
+		return res, nil
+	}
+	switch b.Type {
+	case fhirConditionType:
+		wrote, err := insertActiveConditionRow(tx, b, patientRoot, runID, b.ID)
+		if err != nil {
+			return PatientStateResult{}, fmt.Errorf("insert active_conditions %s: %w", b.ID, err)
+		}
+		if wrote {
+			res.ActiveConditions = 1
+		}
+	case fhirMedicationRequestType:
+		wrote, err := insertActiveMedicationRow(tx, b, patientRoot, runID, b.ID)
+		if err != nil {
+			return PatientStateResult{}, fmt.Errorf("insert active_medications %s: %w", b.ID, err)
+		}
+		if wrote {
+			res.ActiveMedications = 1
+		}
+	}
+	return res, nil
+}
+
+func writePatientStateTx(tx *sql.Tx, patientRoot, runID string, beads []bead.Bead, states map[string]beadState) (int, int, int, error) {
+
 	if _, err := tx.Exec(
-		`DELETE FROM bead_status WHERE patient_root = ? AND (projection_run_id IS NULL OR projection_run_id <> ?)`,
-		patientRoot, runID,
+		`DELETE FROM bead_status WHERE patient_root = ?`, patientRoot,
 	); err != nil {
 		return 0, 0, 0, fmt.Errorf("delete stale bead_status for %s: %w", patientRoot, err)
 	}
 	if _, err := tx.Exec(
-		`DELETE FROM active_conditions WHERE patient_root = ? AND (projection_run_id IS NULL OR projection_run_id <> ?)`,
-		patientRoot, runID,
+		`DELETE FROM active_conditions WHERE patient_root = ?`, patientRoot,
 	); err != nil {
 		return 0, 0, 0, fmt.Errorf("delete stale active_conditions for %s: %w", patientRoot, err)
 	}
 	if _, err := tx.Exec(
-		`DELETE FROM active_medications WHERE patient_root = ? AND (projection_run_id IS NULL OR projection_run_id <> ?)`,
-		patientRoot, runID,
+		`DELETE FROM active_medications WHERE patient_root = ?`, patientRoot,
 	); err != nil {
 		return 0, 0, 0, fmt.Errorf("delete stale active_medications for %s: %w", patientRoot, err)
 	}
@@ -291,9 +393,6 @@ func writePatientState(sqlDB *sql.DB, patientRoot, runID string, beads []bead.Be
 		}
 	}
 
-	if err := tx.Commit(); err != nil {
-		return 0, 0, 0, fmt.Errorf("commit: %w", err)
-	}
 	return statusWritten, conditionsWritten, medicationsWritten, nil
 }
 

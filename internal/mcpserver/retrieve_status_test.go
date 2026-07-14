@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/medbeads/medbeads/internal/engine/bead"
@@ -129,6 +130,45 @@ func TestRetrieve_AmendedAnchorSubstitutedWithCurrent(t *testing.T) {
 			t.Errorf("Items surfaced the stale original %s", originalView)
 		}
 	}
+}
+
+func TestRetrieve_AmendedAncestorRendersCurrentContent(t *testing.T) {
+	e := openT(t)
+	root := seedPatient(t, e, "Amended Ancestor Patient")
+	original := ingestT(t, e, bead.Bead{
+		Type: "fhir_condition", Timestamp: nextTimestamp(), Author: "did:medbeads:doctor:1",
+		Parents: []string{root.ID}, Content: map[string]any{"note": "stale ancestor text"},
+	})
+	seedChildBead(t, e, original, "fhir_observation", nil, map[string]any{"note": "ancestorrefreshmarker anchor"})
+	amendment := ingestT(t, e, bead.Bead{
+		Type: "fhir_condition", Timestamp: nextTimestamp(), Author: "did:medbeads:doctor:1",
+		Parents: []string{root.ID}, Amends: []string{original.ID},
+		Content: map[string]any{"note": "corrected ancestor text"},
+	})
+	ingestT(t, e, bead.Bead{
+		Type: "attestation", Timestamp: nextTimestamp(), Author: "did:medbeads:doctor:2",
+		Parents: []string{amendment.ID, root.ID}, Content: map[string]any{"verdict": "approved"},
+	})
+	if _, err := projector.StatusReproject(e.Index(), e, "test-code-v1", "2026-07-13T00:00:00Z"); err != nil {
+		t.Fatalf("StatusReproject: %v", err)
+	}
+
+	s := newServerT(t, e, SystemRole)
+	_, out, err := s.retrieve(context.Background(), nil, retrieveIn{Query: "ancestorrefreshmarker", TokenBudget: 4000, ChainDepth: 5})
+	if err != nil {
+		t.Fatalf("retrieve: %v", err)
+	}
+	amendmentView := bead.FormatID(amendment.ID)
+	for _, item := range out.Items {
+		if item.ID != amendmentView {
+			continue
+		}
+		if !strings.Contains(item.Text, "corrected ancestor text") || strings.Contains(item.Text, "stale ancestor text") {
+			t.Fatalf("amended ancestor used stale content under current ID: %+v", item)
+		}
+		return
+	}
+	t.Fatalf("current amendment %s missing from Items: %+v", amendmentView, out.Items)
 }
 
 // TestRetrieve_AmendedWithNullCurrent_Dropped is DONE MEANS (b), second half
@@ -406,5 +446,24 @@ func TestRetrieve_EmptyBeadStatus_ReturnsNormalRetrieve(t *testing.T) {
 	}
 	if !foundAnchor {
 		t.Fatalf("retrieve on a store with empty bead_status returned no matching AnchorIDs: %v", out.AnchorIDs)
+	}
+}
+
+// A populated record_state projection with a missing newly-ingested Bead is
+// not the empty-development-store fallback. Failing closed prevents an
+// unprojected amendment from being treated as active clinical truth.
+func TestResolveBeadStatuses_PartialProjectionGapIsControlledError(t *testing.T) {
+	e := openT(t)
+	root := seedPatient(t, e, "Partial Status Patient")
+	seedChildBead(t, e, root, "fhir_observation", nil, map[string]any{"note": "projected fact"})
+	if _, err := projector.StatusReproject(e.Index(), e, "test-code-v1", "2026-07-13T00:00:00Z"); err != nil {
+		t.Fatalf("StatusReproject: %v", err)
+	}
+	newFact := seedChildBead(t, e, root, "fhir_observation", nil, map[string]any{"note": "not projected yet"})
+
+	s := newServerT(t, e, SystemRole)
+	_, err := s.resolveBeadStatuses([]string{newFact.ID})
+	if err == nil || !strings.Contains(err.Error(), "record_state projection is incomplete") {
+		t.Fatalf("resolveBeadStatuses partial gap error = %v, want controlled incomplete-projection error", err)
 	}
 }

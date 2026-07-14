@@ -140,7 +140,10 @@ func (c *correctCommon) validate(stderr *os.File) (targetID, timestamp string, o
 // operator a precise error ("no such Bead") rather than a validation failure
 // buried in an append path — and it does so before anything is written.
 func openAndCheckTarget(dataDir, targetID string, stderr *os.File) (*engine.Engine, bead.Bead, bool) {
-	eng, err := engine.Open(dataDir)
+	eng, err := engine.OpenWithOptions(dataDir, engine.OpenOptions{
+		AutoProject:           true,
+		ProjectionCodeVersion: engine.DefaultProjectionCodeVersion(),
+	})
 	if err != nil {
 		fmt.Fprintf(stderr, "medbeadsd correct: open engine: %v\n", err)
 		return nil, bead.Bead{}, false
@@ -155,13 +158,12 @@ func openAndCheckTarget(dataDir, targetID string, stderr *os.File) (*engine.Engi
 	return eng, target, true
 }
 
-// reportWritten prints the new Bead and the reprojection the operator must run.
-// bead_status is a PROJECTION: writing the correction Bead does not by itself
-// change what the record resolves to.
-func reportWritten(stdout *os.File, action string, saved bead.Bead, dataDir string) {
+// reportWritten prints the new Bead. Automatic patient-local projection is
+// committed together with the correction's index row, so no operator-triggered
+// full-store reprojection is required.
+func reportWritten(stdout *os.File, action string, saved bead.Bead) {
 	fmt.Fprintf(stdout, "medbeadsd correct %s: wrote Bead %s (author=%s)\n", action, saved.ID, saved.Author)
-	fmt.Fprintf(stdout, "  the fact is durable. To re-derive record status, run:\n")
-	fmt.Fprintf(stdout, "    medbeadsd reproject -data %s -record-state\n", dataDir)
+	fmt.Fprintf(stdout, "  the fact and this patient's derived links/status are committed.\n")
 }
 
 // runCorrectAmend writes a Bead superseding -target with corrected content.
@@ -228,7 +230,7 @@ func runCorrectAmend(args []string, stdout, stderr *os.File) int {
 		return 1
 	}
 
-	reportWritten(stdout, "amend", saved, c.dataDir)
+	reportWritten(stdout, "amend", saved)
 	fmt.Fprintf(stdout, "  this amendment is UNATTESTED: it does not supersede %s until approved:\n", targetID)
 	fmt.Fprintf(stdout, "    medbeadsd correct attest -data %s -target %s -author <clinician> -verdict approved\n",
 		c.dataDir, saved.ID)
@@ -281,7 +283,7 @@ func runCorrectRetract(args []string, stdout, stderr *os.File) int {
 		return 1
 	}
 
-	reportWritten(stdout, "retract", saved, c.dataDir)
+	reportWritten(stdout, "retract", saved)
 	fmt.Fprintf(stdout, "  %s is retracted with immediate effect (no attestation required).\n", targetID)
 	return 0
 }
@@ -336,7 +338,7 @@ func runCorrectAttest(args []string, stdout, stderr *os.File) int {
 		return 1
 	}
 
-	reportWritten(stdout, "attest", saved, c.dataDir)
+	reportWritten(stdout, "attest", saved)
 	if *verdict == "approved" {
 		fmt.Fprintf(stdout, "  %s is APPROVED: after reprojection it becomes the current version of what it amends.\n", targetID)
 	} else {

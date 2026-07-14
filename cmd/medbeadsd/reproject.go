@@ -1,7 +1,6 @@
-// runReproject implements `medbeadsd reproject`: a minimal CLI entry point
-// for internal/engine/projector's U3b Reproject (specs/U3_link_projector.md's
-// U3b section) — the full-reprojection of clinical_links from the
-// already-indexed bead_tags/beads plus the cooccurrence link_rule Bead,
+// runReproject implements `medbeadsd reproject`: the rolling CLI entry point
+// for rebuilding clinical_links from already-indexed bead_tags/beads plus
+// explicitly selected link_rule Beads,
 // distinct from `reindex` (which rebuilds index.db from Pod files;
 // Reproject never touches Pods — see projector.Reproject's own doc comment).
 //
@@ -16,7 +15,7 @@
 //
 // With -record-state, it additionally runs U4b's record_state projector
 // (projector.StatusReproject, specs/U4_state_derivation.md) after
-// clinical_links Reproject completes — bead_status/active_conditions/
+// the selected clinical_links batch completes — bead_status/active_conditions/
 // active_medications, a separate manifest lineage (StatusProjectionName)
 // from clinical_links' own, so the two runs' manifest flips are independent
 // (a failure in one does not roll back the other; see StatusReproject's own
@@ -35,35 +34,30 @@ import (
 	"time"
 
 	"github.com/medbeads/medbeads/internal/engine"
+	"github.com/medbeads/medbeads/internal/engine/bead"
 	"github.com/medbeads/medbeads/internal/engine/projector"
+	"github.com/medbeads/medbeads/internal/engine/trust"
 )
-
-// reprojectEngineReader adapts *engine.Engine to projector's unexported
-// beadReader interface (Go structural typing satisfies it via this
-// package's own GetBead-returning-BeadContent method).
-type reprojectEngineReader struct{ e *engine.Engine }
-
-func (r reprojectEngineReader) GetBead(id string) (projector.BeadContent, error) {
-	b, err := r.e.GetBead(id)
-	if err != nil {
-		return projector.BeadContent{}, err
-	}
-	return projector.BeadContent{Content: b.Content}, nil
-}
 
 // runReproject implements `medbeadsd reproject -data <dir> [-code-version <v>]
 // [-record-state]`.
 //
 // Exit codes follow this package's existing convention (verify/reindex/
-// apc/embed): 0 (Reproject, and record_state if requested, ran to
+// embed): 0 (activation/batch, and record_state if requested, ran to
 // completion), 1 (engine/projector error), 2 (usage error).
 func runReproject(args []string, stdout, stderr *os.File) int {
 	fs := flag.NewFlagSet("reproject", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	dataDir := fs.String("data", "", "MedBeads data directory (contains pods/, dict/, index.db)")
-	codeVersion := fs.String("code-version", "dev", "opaque code_version string recorded in projection_manifest (e.g. a git SHA)")
+	codeVersion := fs.String("code-version", engine.DefaultProjectionCodeVersion(), "opaque code_version string recorded in projection_manifest (e.g. a git SHA)")
+	recordStateCodeVersion := fs.String("record-state-code-version", engine.DefaultRecordStateProjectionCodeVersion(), "record_state algorithm contract version")
 	recordState := fs.Bool("record-state", false, "also run U4b's record_state projector (bead_status/active_conditions/active_medications)")
 	ruleFile := fs.String("rule-file", "", "JSON file of curated link rules to publish as knowledge Beads before projecting")
+	trustPolicyPath := fs.String("trust-policy", "", "public trust policy JSON; when require_knowledge_release=true only a verified release can become active")
+	knowledgeIDsRaw := fs.String("knowledge-ids", "", "comma-separated closed set from 'medbeadsd trust release' (link_rule + knowledge_release + signature_attestation IDs)")
+	batchSize := fs.Int("batch-size", 100, "maximum patients to update now; 0 only activates and queues the generation")
+	inactiveAfter := fs.Duration("inactive-after", engine.DefaultReprojectionInactiveAfter, "patients without an encounter in this window are processed after recent patients")
+	drain := fs.Bool("drain", false, "continue prioritized batches until the current link queue is empty")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -71,20 +65,54 @@ func runReproject(args []string, stdout, stderr *os.File) int {
 		fmt.Fprintln(stderr, "medbeadsd reproject: -data <dir> is required")
 		return 2
 	}
+	knowledgeIDs, err := parseCSVBeadIDs(*knowledgeIDsRaw)
+	if err != nil {
+		fmt.Fprintf(stderr, "medbeadsd reproject: -knowledge-ids: %v\n", err)
+		return 2
+	}
+	var trustPolicy *trust.Policy
+	if *trustPolicyPath != "" {
+		trustPolicy, err = trust.LoadPolicy(*trustPolicyPath)
+		if err != nil {
+			fmt.Fprintf(stderr, "medbeadsd reproject: %v\n", err)
+			return 1
+		}
+		if trustPolicy.RequireKnowledgeRelease && len(knowledgeIDs) == 0 {
+			fmt.Fprintln(stderr, "medbeadsd reproject: -knowledge-ids is required by this trust policy")
+			return 2
+		}
+	}
+	if len(knowledgeIDs) > 0 && trustPolicy == nil {
+		fmt.Fprintln(stderr, "medbeadsd reproject: -knowledge-ids requires -trust-policy")
+		return 2
+	}
+	if len(knowledgeIDs) > 0 && *ruleFile != "" {
+		fmt.Fprintln(stderr, "medbeadsd reproject: publish rules first, then sign them; -rule-file and -knowledge-ids cannot be combined")
+		return 2
+	}
 
-	eng, err := engine.Open(*dataDir)
+	eng, err := engine.OpenWithOptions(*dataDir, engine.OpenOptions{
+		AutoProject:                  true,
+		ProjectionCodeVersion:        *codeVersion,
+		RecordStateProjectionVersion: *recordStateCodeVersion,
+		TrustPolicy:                  trustPolicy,
+		InitialKnowledgeBeadIDs:      knowledgeIDs,
+	})
 	if err != nil {
 		fmt.Fprintf(stderr, "medbeadsd reproject: open engine: %v\n", err)
 		return 1
 	}
 	defer eng.Close() //nolint:errcheck // best-effort unwind; process is exiting either way
 
-	ruleID, err := ensureCooccurrenceRule(eng)
-	if err != nil {
-		fmt.Fprintf(stderr, "medbeadsd reproject: seed link_rule: %v\n", err)
-		return 1
+	knowledgeBeadIDs := append([]string(nil), knowledgeIDs...)
+	if len(knowledgeBeadIDs) == 0 {
+		ruleID, err := ensureCooccurrenceRule(eng)
+		if err != nil {
+			fmt.Fprintf(stderr, "medbeadsd reproject: seed link_rule: %v\n", err)
+			return 1
+		}
+		knowledgeBeadIDs = []string{ruleID}
 	}
-	knowledgeBeadIDs := []string{ruleID}
 
 	// Publishing curated knowledge is an ordinary Bead write: the rule becomes an
 	// immutable, content-addressed fact. Re-running with the same file is a no-op
@@ -104,15 +132,46 @@ func runReproject(args []string, stdout, stderr *os.File) int {
 		knowledgeBeadIDs = append(knowledgeBeadIDs, curatedIDs...)
 	}
 
-	builtAt := time.Now().UTC().Format(time.RFC3339)
-	res, err := projector.Reproject(eng.Index(), reprojectEngineReader{eng}, knowledgeBeadIDs, *codeVersion, builtAt)
-	if err != nil {
-		fmt.Fprintf(stderr, "medbeadsd reproject: %v\n", err)
-		return 1
+	builtAt := time.Now().UTC().Format(time.RFC3339Nano)
+	var activation engine.RollingActivation
+	if trustPolicy != nil && len(knowledgeIDs) > 0 {
+		trustedActivation, err := eng.ActivateKnowledgeRelease(knowledgeBeadIDs, *codeVersion, builtAt, time.Now().UTC())
+		if err != nil {
+			fmt.Fprintf(stderr, "medbeadsd reproject: %v\n", err)
+			return 1
+		}
+		activation = trustedActivation.Rolling
+		fmt.Fprintf(stdout, "medbeadsd reproject: verified release %s: organization=%s approvals=%d rules=%d\n",
+			trustedActivation.Validation.ReleaseBeadID,
+			trustedActivation.Validation.OrganizationID,
+			len(trustedActivation.Validation.ValidApprovalActors),
+			len(trustedActivation.Validation.RuleBeadIDs))
+	} else {
+		activation, err = eng.ActivateLinkKnowledge(knowledgeBeadIDs, *codeVersion, builtAt)
+		if err != nil {
+			fmt.Fprintf(stderr, "medbeadsd reproject: %v\n", err)
+			return 1
+		}
 	}
+	fmt.Fprintf(stdout, "medbeadsd reproject: rolling run %s: %d patient(s) queued (already_active=%t)\n",
+		activation.RunID, activation.QueuedPatients, activation.AlreadyActive)
 
-	fmt.Fprintf(stdout, "medbeadsd reproject: run %s: %d patient(s) projected, %d clinical_link(s) written\n",
-		res.RunID, res.PatientsProjected, res.LinksWritten)
+	limit := *batchSize
+	if *drain && limit <= 0 {
+		limit = 100
+	}
+	for {
+		batch, err := eng.ProcessLinkReprojectionQueue(limit, time.Now().UTC(), *inactiveAfter)
+		if err != nil {
+			fmt.Fprintf(stderr, "medbeadsd reproject: process queue: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "medbeadsd reproject: batch projected=%d (recent=%d inactive=%d deceased=%d failed=%d), remaining=%d\n",
+			batch.Projected, batch.Recent, batch.Inactive, batch.Deceased, batch.Failed, batch.Remaining)
+		if !*drain || batch.Remaining == 0 || batch.Projected == 0 {
+			break
+		}
+	}
 
 	if *recordState {
 		// A fresh builtAt (not the same string as the clinical_links run
@@ -121,9 +180,16 @@ func runReproject(args []string, stdout, stderr *os.File) int {
 		// discipline (projector/reproject.go) expects a real caller to supply
 		// a fresh value per actual invocation.
 		statusBuiltAt := time.Now().UTC().Format(time.RFC3339)
-		statusRes, err := projector.StatusReproject(eng.Index(), eng, *codeVersion, statusBuiltAt)
+		statusRes, err := projector.StatusReproject(eng.Index(), eng, *recordStateCodeVersion, statusBuiltAt)
 		if err != nil {
 			fmt.Fprintf(stderr, "medbeadsd reproject: record_state: %v\n", err)
+			return 1
+		}
+		if _, err := eng.Index().SQLDB().Exec(`
+			UPDATE patient_projection_state
+			SET record_state_run_id=?, projected_at=?`,
+			statusRes.RunID, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			fmt.Fprintf(stderr, "medbeadsd reproject: update record_state checkpoints: %v\n", err)
 			return 1
 		}
 		fmt.Fprintf(stdout, "medbeadsd reproject: record_state run %s: %d patient(s) projected, "+
@@ -182,7 +248,8 @@ func runReproject(args []string, stdout, stderr *os.File) int {
 //	      "relation":  "drug_drug_interaction",
 //	      "severity":  "warning",
 //	      "tag_pairs": [["atc:b01aa03", "atc:m01ae01"]],
-//	      "timestamp": "2026-01-01T00:00:00Z"
+//	      "timestamp": "2026-01-01T00:00:00Z",
+//	      "author": "did:medbeads:pharmacist:123"
 //	    }
 //	  ]
 //	}
@@ -194,11 +261,18 @@ func runReproject(args []string, stdout, stderr *os.File) int {
 // instead of littering the fact layer with duplicates of the same knowledge.
 type curatedRuleFile struct {
 	Rules []struct {
-		RuleID    string      `json:"rule_id"`
-		Relation  string      `json:"relation"`
-		Severity  string      `json:"severity"`
-		TagPairs  [][2]string `json:"tag_pairs"`
-		Timestamp string      `json:"timestamp"`
+		RuleID          string      `json:"rule_id"`
+		RevisionLabel   string      `json:"revision_label"`
+		Relation        string      `json:"relation"`
+		Severity        string      `json:"severity"`
+		EvidenceBasis   string      `json:"evidence_basis"`
+		EvidenceBeadIDs []string    `json:"evidence_bead_ids"`
+		TagPairs        [][2]string `json:"tag_pairs"`
+		Timestamp       string      `json:"timestamp"`
+		EffectiveFrom   string      `json:"effective_from"`
+		EffectiveTo     string      `json:"effective_to"`
+		Author          string      `json:"author"`
+		Signature       string      `json:"signature"`
 	} `json:"rules"`
 }
 
@@ -233,8 +307,47 @@ func publishCuratedRules(eng *engine.Engine, path string) ([]string, error) {
 		if r.Timestamp == "" {
 			return nil, fmt.Errorf("rule[%d] (%s): timestamp is required — a knowledge Bead's ID must not depend on when it happened to be minted", i, r.RuleID)
 		}
+		if r.Author == "" {
+			return nil, fmt.Errorf("rule[%d] (%s): author DID/identifier is required", i, r.RuleID)
+		}
+		if r.Signature != "" {
+			return nil, fmt.Errorf("rule[%d] (%s): inline signature is not a trusted signature; publish the rule, then use 'medbeadsd trust release'", i, r.RuleID)
+		}
+		if err := validateEffectivePeriod(r.EffectiveFrom, r.EffectiveTo); err != nil {
+			return nil, fmt.Errorf("rule[%d] (%s): %w", i, r.RuleID, err)
+		}
+		evidenceIDs := make([]string, 0, len(r.EvidenceBeadIDs))
+		for _, externalID := range r.EvidenceBeadIDs {
+			id, err := bead.ParseID(externalID)
+			if err != nil {
+				return nil, fmt.Errorf("rule[%d] (%s): evidence_bead_id %q: %w", i, r.RuleID, externalID, err)
+			}
+			if _, err := eng.GetBead(id); err != nil {
+				return nil, fmt.Errorf("rule[%d] (%s): evidence Bead %s is not available: %w", i, r.RuleID, id, err)
+			}
+			evidenceIDs = append(evidenceIDs, id)
+		}
+		if r.EvidenceBasis == "guideline" && len(evidenceIDs) == 0 {
+			return nil, fmt.Errorf("rule[%d] (%s): guideline rules require at least one evidence_bead_id", i, r.RuleID)
+		}
 
 		ruleBead := projector.BuildCuratedPairRuleBead(r.RuleID, r.Relation, r.Severity, r.TagPairs, r.Timestamp)
+		ruleBead.Author = r.Author
+		if r.RevisionLabel != "" {
+			ruleBead.Content["revision_label"] = r.RevisionLabel
+		}
+		if r.EvidenceBasis != "" {
+			ruleBead.Content["evidence_basis"] = r.EvidenceBasis
+		}
+		if len(evidenceIDs) > 0 {
+			ruleBead.Content["evidence_bead_ids"] = evidenceIDs
+		}
+		if r.EffectiveFrom != "" || r.EffectiveTo != "" {
+			ruleBead.Content["effective_period"] = map[string]any{
+				"from": r.EffectiveFrom,
+				"to":   r.EffectiveTo,
+			}
+		}
 		saved, err := eng.Ingest(ruleBead)
 		if err != nil {
 			return nil, fmt.Errorf("ingest rule %s: %w", r.RuleID, err)
@@ -242,6 +355,32 @@ func publishCuratedRules(eng *engine.Engine, path string) ([]string, error) {
 		ids = append(ids, saved.ID)
 	}
 	return ids, nil
+}
+
+func validateEffectivePeriod(from, to string) error {
+	parse := func(name, value string) (time.Time, error) {
+		if value == "" {
+			return time.Time{}, nil
+		}
+		for _, layout := range []string{time.RFC3339Nano, "2006-01-02"} {
+			if parsed, err := time.Parse(layout, value); err == nil {
+				return parsed, nil
+			}
+		}
+		return time.Time{}, fmt.Errorf("%s must be RFC3339 or YYYY-MM-DD", name)
+	}
+	fromTime, err := parse("effective_from", from)
+	if err != nil {
+		return err
+	}
+	toTime, err := parse("effective_to", to)
+	if err != nil {
+		return err
+	}
+	if !fromTime.IsZero() && !toTime.IsZero() && toTime.Before(fromTime) {
+		return fmt.Errorf("effective_to precedes effective_from")
+	}
+	return nil
 }
 
 func ensureCooccurrenceRule(eng *engine.Engine) (string, error) {

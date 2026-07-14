@@ -133,6 +133,13 @@ async def run_ingest(
         "fhir_dir": str(fhir_dir),
         "data_dir": str(data_dir),
         "limit": limit,
+        # The exact Bundle selection is part of dataset provenance. --limit is
+        # deterministic only together with iter_patient_bundle_files' filename
+        # ordering; recording both makes a 10-patient demo independently
+        # reproducible and auditable without re-deriving that implementation
+        # detail from source code.
+        "selection_order": "filename_ascending",
+        "selected_bundles": [path.name for path in bundle_files],
         "total_patients": summary.total_patients,
         "ok_patients": summary.ok_patients,
         "failed_patients": summary.failed_patients,

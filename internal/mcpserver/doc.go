@@ -13,8 +13,8 @@
 // (specs/U5_api_retrieve.md) removed the old get_siblings/get_sibling_links/
 // apc_status/apc_trigger tools entirely along with package apc, the scanner
 // that produced the sibling_link Beads those tools read — clinical_links
-// (package projector, U3), surfaced via get_links and retrieve's
-// ClinicalLinks sidecar, is now the sole link mechanism.
+// (package projector, U3), surfaced via get_links and retrieve's bounded
+// expansion plus ClinicalLinks sidecar, is now the sole link mechanism.
 //
 // # Clearance: mask-then-drop, not mask-and-forward
 //

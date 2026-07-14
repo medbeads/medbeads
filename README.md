@@ -19,6 +19,9 @@ cd bench && uv run python -m bench.ingest \
   --fhir-dir ../FHIR_sample --data-dir ../demo_data --medbeadsd ../medbeadsd
 cd ..
 
+# To reproducibly choose 10 from the full Synthea output (first 10 by filename):
+# cd bench && uv run python -m bench.ingest --fhir-dir ~/medbeads-synthea/output/fhir --limit 10 --data-dir ../demo_data --medbeadsd ../medbeadsd
+
 # 3. Start the daemon: REST at / and MCP at /mcp on the same port
 ./medbeadsd serve -data ./demo_data -role viewer -http 127.0.0.1:8080
 
@@ -28,13 +31,27 @@ curl http://127.0.0.1:8080/patients          # REST (frozen v2 contract, feeds t
 ./medbeadsd reindex -data ./demo_data         # rebuild index.db from Pods alone
 ```
 
+serve (including the system-role stdio server used by ingest) automatically
+commits the new Bead index, that patient's clinical_links, and correction
+state together. Ordinary appends do not require a manual reproject. Knowledge
+changes use a prioritized rolling patient queue; new patient data bypasses it,
+while recent, inactive, and deceased-hint patients are drained in that order.
+Operators can rate-limit batches or explicitly drain the queue during maintenance.
+
+For signed single-hospital rule governance, `medbeadsd trust init` creates the
+hospital identity and public Ed25519 trust policy, while `trust release` approves
+a closed link-rule set. Production private keys belong in KMS/HSM. Starting with
+`serve -trust-policy <policy.json>` re-verifies the active knowledge release and
+rejects unsigned rule generations. See `specs/R12_signature_attestation_and_release.md`;
+the FHIR server synchronization design is in `specs/R13_fhir_server_sync.md`.
+
 For the React UI: `cd ui && cp .env.example .env && npm ci && npm run dev`
 (the `.env` sets `VITE_API_BASE_URL=http://localhost:8080`; the Python AI API
 referenced in `.env.example` is retired in v3 and can be ignored).
 
 For MCP clients (Claude Desktop / Claude Code), use stdio mode instead:
 `medbeadsd serve -data ./demo_data -role viewer` — add `-role system` to enable
-the write tools (`create_bead`, `apc_trigger`).
+the write tool (`create_bead`).
 
 MedBeads is an **Immutable, Agent-Native Data Infrastructure** designed to address the "Context Mismatch" in medical AI. By restructuring medical records from mutable relational databases into a **Merkle Directed Acyclic Graph (DAG)**, MedBeads provides explicit causal linking, tamper-evidence, and deterministic context retrieval for autonomous agents.
 

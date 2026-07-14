@@ -9,9 +9,8 @@ import (
 
 // TestIntegration_RetrieveOneRoundTrip is this unit's headline M1
 // integration test, updated for U5a (specs/U5_api_retrieve.md removed
-// package apc and graph's sibling tiers entirely — clinical_links, U3, is
-// now the sole link mechanism, surfaced as retrieve's ClinicalLinks sidecar
-// rather than a context-bundle tier):
+// package apc and graph's sibling tiers entirely. R9 later added a bounded,
+// status/clearance-filtered clinical_links tier without reviving APC):
 //
 //  1. Ingest a small Synthea-shaped patient bundle: patient_registration ->
 //     fhir_encounter -> fhir_medicationrequest -> fhir_observation (the

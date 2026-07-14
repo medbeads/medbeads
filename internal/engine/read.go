@@ -1,10 +1,12 @@
 package engine
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 
 	"github.com/medbeads/medbeads/internal/engine/bead"
+	"github.com/medbeads/medbeads/internal/engine/index"
 	"github.com/medbeads/medbeads/internal/engine/pod"
 )
 
@@ -108,7 +110,46 @@ func (e *Engine) ListPatientBeads(patientRoot string) ([]bead.Bead, error) {
 	if err != nil {
 		return nil, fmt.Errorf("engine: list patient beads %s: %w", patientRoot, err)
 	}
+	return e.readPatientBeadRefs(patientRoot, refs)
+}
 
+// listPatientBeadsTx is ListPatientBeads over tx's snapshot. Automatic
+// projection calls it after IndexBead and before commit, so a correction-state
+// rebuild includes the newly appended Bead without opening a second SQLite
+// connection (index.DB intentionally caps its pool at one).
+func (e *Engine) listPatientBeadsTx(tx *sql.Tx, patientRoot string) ([]bead.Bead, error) {
+	rows, err := tx.Query(`
+		SELECT b.id, COALESCE(b.patient_root, ''), b.type, b.timestamp,
+		       p.path, b.offset, b.length, COALESCE(b.summary, '')
+		FROM beads b
+		JOIN pods p ON p.pod_id = b.pod_id
+		WHERE b.patient_root = ?
+		ORDER BY b.timestamp, b.id`, patientRoot)
+	if err != nil {
+		return nil, fmt.Errorf("engine: list patient beads %s in tx: %w", patientRoot, err)
+	}
+
+	var refs []index.BeadRef
+	for rows.Next() {
+		var ref index.BeadRef
+		if err := rows.Scan(&ref.ID, &ref.PatientRoot, &ref.Type, &ref.Timestamp,
+			&ref.PodPath, &ref.Offset, &ref.Length, &ref.Summary); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("engine: list patient beads %s in tx: scan: %w", patientRoot, err)
+		}
+		refs = append(refs, ref)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, fmt.Errorf("engine: list patient beads %s in tx: %w", patientRoot, err)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("engine: list patient beads %s in tx: close rows: %w", patientRoot, err)
+	}
+	return e.readPatientBeadRefs(patientRoot, refs)
+}
+
+func (e *Engine) readPatientBeadRefs(patientRoot string, refs []index.BeadRef) ([]bead.Bead, error) {
 	out := make([]bead.Bead, 0, len(refs))
 	// readers caches one pod.Reader per distinct Pod path within this call,
 	// since every Bead in a single patient's timeline normally lives in that

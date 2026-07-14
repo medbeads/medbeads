@@ -3,9 +3,12 @@ package engine
 import (
 	"fmt"
 	"path/filepath"
+	"runtime/debug"
+	"sync"
 
 	"github.com/medbeads/medbeads/internal/engine/index"
 	"github.com/medbeads/medbeads/internal/engine/pod"
+	"github.com/medbeads/medbeads/internal/engine/trust"
 )
 
 // Engine is the single entry point onto one MedBeads data directory: it
@@ -20,17 +23,96 @@ type Engine struct {
 	writers   *writerRegistry
 	idx       *index.DB
 	flattener index.Flattener
+
+	// ingestMu covers the append -> index/projection commit protocol. The
+	// SQLite pool already serializes transactions, but this wider lock also
+	// prevents two goroutines from both passing the pre-append idempotency
+	// check and guarantees patient-local projection observes appends in order.
+	ingestMu       sync.Mutex
+	autoProjection *autoProjection
+	trustPolicy    *trust.Policy
+}
+
+// projectionAlgorithmVersion is bumped for a deliberate projector-contract
+// revision. DefaultProjectionCodeVersion additionally incorporates Go's VCS
+// build metadata so a newly committed binary cannot silently write rows using
+// new code under an older projection generation.
+const projectionAlgorithmVersion = "medbeads-auto-v1"
+
+// record_state has an independent contract version. A routine binary/git
+// revision may change link logic and start a rolling link rollout, but it must
+// not force an unrelated synchronous status rebuild across a million patients.
+// Bump this value only when correction-chain semantics actually change.
+const recordStateProjectionVersion = "record-state-v1"
+
+func DefaultRecordStateProjectionCodeVersion() string {
+	return recordStateProjectionVersion
+}
+
+// DefaultProjectionCodeVersion returns an auditable default code generation.
+// Release builds normally carry vcs.revision; ad-hoc builds fall back to the Go
+// module version or an explicit devel marker. Operators may still supply their
+// own release/git identifier through OpenOptions.
+func DefaultProjectionCodeVersion() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return projectionAlgorithmVersion + "+devel"
+	}
+
+	revision := ""
+	modified := false
+	for _, setting := range info.Settings {
+		switch setting.Key {
+		case "vcs.revision":
+			revision = setting.Value
+		case "vcs.modified":
+			modified = setting.Value == "true"
+		}
+	}
+	if revision != "" {
+		version := projectionAlgorithmVersion + "+git." + revision
+		if modified {
+			version += ".dirty"
+		}
+		return version
+	}
+	if info.Main.Version != "" && info.Main.Version != "(devel)" {
+		return projectionAlgorithmVersion + "+" + info.Main.Version
+	}
+	return projectionAlgorithmVersion + "+devel"
+}
+
+// OpenOptions controls optional derived-state maintenance. Open intentionally
+// keeps its historical low-level behavior for projector tests and maintenance
+// commands; production serving enables AutoProject through OpenWithOptions.
+type OpenOptions struct {
+	AutoProject                  bool
+	ProjectionCodeVersion        string
+	RecordStateProjectionVersion string
+	// TrustPolicy enables cryptographic knowledge-release enforcement. The
+	// policy contains public keys only; private keys never enter Engine.
+	TrustPolicy *trust.Policy
+	// InitialKnowledgeBeadIDs is used by the reproject CLI to activate a
+	// pre-published, signed release when no trusted active generation exists.
+	InitialKnowledgeBeadIDs []string
 }
 
 // Open acquires the data directory's advisory lock, opens (creating if
 // necessary) its Pod store and index.db, and runs crash recovery
 // (index.CatchUp for every Pod file found) before returning. The returned
 // Engine must be Closed to release the lock and close the index database.
+// It preserves the low-level/manual projection behavior; production servers
+// use OpenWithOptions with AutoProject=true.
 //
 // A second Open against the same dataDir — from this process or another —
 // fails fast (see lock.go): only one Engine may be open per data directory
 // at a time.
 func Open(dataDir string) (*Engine, error) {
+	return OpenWithOptions(dataDir, OpenOptions{})
+}
+
+// OpenWithOptions is Open plus optional automatic patient-local projection.
+func OpenWithOptions(dataDir string, opts OpenOptions) (*Engine, error) {
 	lock, err := acquireDataDirLock(dataDir)
 	if err != nil {
 		return nil, err
@@ -57,11 +139,38 @@ func Open(dataDir string) (*Engine, error) {
 		idx:       idx,
 		flattener: index.DefaultFlattener{},
 	}
+	if opts.TrustPolicy != nil {
+		if err := opts.TrustPolicy.Validate(); err != nil {
+			e.writers.closeAll() //nolint:errcheck
+			idx.Close()          //nolint:errcheck
+			lock.release()       //nolint:errcheck
+			return nil, fmt.Errorf("engine: open %s: trust policy: %w", dataDir, err)
+		}
+		policyCopy := opts.TrustPolicy.Clone()
+		e.trustPolicy = &policyCopy
+	}
 
 	if err := e.catchUpAll(); err != nil {
 		idx.Close()    //nolint:errcheck
 		lock.release() //nolint:errcheck
 		return nil, fmt.Errorf("engine: open %s: crash recovery: %w", dataDir, err)
+	}
+
+	if opts.AutoProject {
+		codeVersion := opts.ProjectionCodeVersion
+		if codeVersion == "" {
+			codeVersion = DefaultProjectionCodeVersion()
+		}
+		statusVersion := opts.RecordStateProjectionVersion
+		if statusVersion == "" {
+			statusVersion = DefaultRecordStateProjectionCodeVersion()
+		}
+		if err := e.initializeAutoProjection(codeVersion, statusVersion, opts.InitialKnowledgeBeadIDs); err != nil {
+			e.writers.closeAll() //nolint:errcheck
+			idx.Close()          //nolint:errcheck
+			lock.release()       //nolint:errcheck
+			return nil, fmt.Errorf("engine: open %s: initialize automatic projection: %w", dataDir, err)
+		}
 	}
 
 	return e, nil

@@ -3,12 +3,32 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/medbeads/medbeads/internal/engine"
 	"github.com/medbeads/medbeads/internal/engine/bead"
 	"github.com/medbeads/medbeads/internal/engine/projector"
 )
+
+func TestPublishCuratedRules_RejectsUnverifiedInlineSignature(t *testing.T) {
+	dataDir := t.TempDir()
+	eng, err := engine.Open(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close() //nolint:errcheck
+	path := filepath.Join(dataDir, "rule.json")
+	raw := `{"rules":[{"rule_id":"rule-1","relation":"clinical_correlation","severity":"warning","tag_pairs":[["atc:a","atc:b"]],"timestamp":"2026-01-01T00:00:00Z","author":"ehr:user:1","signature":"not-verified"}]}`
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = publishCuratedRules(eng, path)
+	if err == nil || !strings.Contains(err.Error(), "inline signature is not a trusted signature") {
+		t.Fatalf("publishCuratedRules error = %v", err)
+	}
+}
 
 // staleCooccurrenceRuleBead builds a link_rule Bead sharing
 // projector.CooccurrenceRuleID (the same stable rule_id

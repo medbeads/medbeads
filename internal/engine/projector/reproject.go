@@ -35,6 +35,13 @@ type beadReader interface {
 	GetBead(id string) (BeadContent, error)
 }
 
+// sqlQueryer is implemented by both *sql.DB and *sql.Tx. Patient-local
+// automatic projection deliberately queries through the caller's transaction
+// so the just-indexed Bead and every derived row share one atomic snapshot.
+type sqlQueryer interface {
+	Query(query string, args ...any) (*sql.Rows, error)
+}
+
 // BeadContent is the minimal shape Reproject needs back from a Bead lookup:
 // just its Content map. Defined here (rather than importing bead.Bead
 // directly into beadReader's signature) so this package's public API
@@ -52,6 +59,41 @@ type Result struct {
 	RunID             string
 	PatientsProjected int
 	LinksWritten      int
+}
+
+// BeginRollingReproject validates a closed link-rule knowledge set and makes
+// it the target generation without synchronously scanning every patient.
+// Existing patient rows keep their exact generation in
+// patient_projection_state; the engine moves patients to RunID one atomic
+// patient transaction at a time. This is the scalable knowledge-update path.
+// Reproject remains available as the explicit full/drain maintenance path.
+func BeginRollingReproject(idx *index.DB, reader beadReader, knowledgeBeadIDs []string, codeVersion, builtAt string) (Result, error) {
+	_, curated, err := LoadLinkRules(idx, reader, knowledgeBeadIDs)
+	if err != nil {
+		return Result{}, fmt.Errorf("projector: begin rolling reproject: %w", err)
+	}
+	if err := validateRuleEffectivity(curated, builtAt); err != nil {
+		return Result{}, fmt.Errorf("projector: begin rolling reproject: %w", err)
+	}
+	configHash, err := computeConfigHash(knowledgeBeadIDs, codeVersion)
+	if err != nil {
+		return Result{}, fmt.Errorf("projector: begin rolling reproject: %w", err)
+	}
+	watermarks, err := queryInputWatermarks(idx.SQLDB())
+	if err != nil {
+		return Result{}, fmt.Errorf("projector: begin rolling reproject: %w", err)
+	}
+	runID, err := computeRunID(ProjectionName, knowledgeBeadIDs, configHash, codeVersion, builtAt)
+	if err != nil {
+		return Result{}, fmt.Errorf("projector: begin rolling reproject: %w", err)
+	}
+	if err := insertBuildingManifest(idx.SQLDB(), ProjectionName, runID, codeVersion, knowledgeBeadIDs, configHash, watermarks, builtAt); err != nil {
+		return Result{}, fmt.Errorf("projector: begin rolling reproject: %w", err)
+	}
+	if err := flipManifestActive(idx.SQLDB(), ProjectionName, runID); err != nil {
+		return Result{}, fmt.Errorf("projector: begin rolling reproject: %w", err)
+	}
+	return Result{RunID: runID}, nil
 }
 
 // Reproject is U3b's full-reprojection entry point (specs/
@@ -134,6 +176,9 @@ func Reproject(idx *index.DB, reader beadReader, knowledgeBeadIDs []string, code
 	if err != nil {
 		return Result{}, fmt.Errorf("projector: reproject: %w", err)
 	}
+	if err := validateRuleEffectivity(curated, builtAt); err != nil {
+		return Result{}, fmt.Errorf("projector: reproject: %w", err)
+	}
 
 	configHash, err := computeConfigHash(knowledgeBeadIDs, codeVersion)
 	if err != nil {
@@ -173,6 +218,43 @@ func Reproject(idx *index.DB, reader beadReader, knowledgeBeadIDs []string, code
 	}
 
 	return res, nil
+}
+
+func validateRuleEffectivity(rules []CuratedPairRule, asOf string) error {
+	at, err := parseRuleTime(asOf)
+	if err != nil {
+		return fmt.Errorf("invalid projection time %q: %w", asOf, err)
+	}
+	for _, rule := range rules {
+		if rule.EffectiveFrom != "" {
+			from, err := parseRuleTime(rule.EffectiveFrom)
+			if err != nil {
+				return fmt.Errorf("rule %s effective_from %q: %w", rule.RuleID, rule.EffectiveFrom, err)
+			}
+			if at.Before(from) {
+				return fmt.Errorf("rule %s is not effective until %s", rule.RuleID, rule.EffectiveFrom)
+			}
+		}
+		if rule.EffectiveTo != "" {
+			to, err := parseRuleTime(rule.EffectiveTo)
+			if err != nil {
+				return fmt.Errorf("rule %s effective_to %q: %w", rule.RuleID, rule.EffectiveTo, err)
+			}
+			if at.After(to) {
+				return fmt.Errorf("rule %s expired at %s", rule.RuleID, rule.EffectiveTo)
+			}
+		}
+	}
+	return nil
+}
+
+func parseRuleTime(value string) (time.Time, error) {
+	for _, layout := range []string{time.RFC3339Nano, "2006-01-02"} {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			return parsed, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("must be RFC3339 or YYYY-MM-DD")
 }
 
 // loadRule resolves the cooccurrence LinkRule from idx's shared Beads,
@@ -222,8 +304,52 @@ func loadCuratedRules(idx *index.DB, reader beadReader, knowledgeBeadIDs []strin
 	}, knowledgeBeadIDs...)
 }
 
+// LoadLinkRules resolves the frozen clinical-link knowledge generation used by
+// automatic patient-local projection. It is the exported, read-only form of
+// Reproject's own rule-loading phase: callers load once when an Engine opens,
+// then reuse the immutable decoded rules for each appended patient Bead.
+func LoadLinkRules(idx *index.DB, reader beadReader, knowledgeBeadIDs []string) (LinkRule, []CuratedPairRule, error) {
+	rule, err := loadRule(idx, reader, knowledgeBeadIDs)
+	if err != nil {
+		return LinkRule{}, nil, err
+	}
+	curated, err := loadCuratedRules(idx, reader, knowledgeBeadIDs)
+	if err != nil {
+		return LinkRule{}, nil, err
+	}
+	return rule, curated, nil
+}
+
 func reprojectPatient(sqlDB *sql.DB, rule LinkRule, curated []CuratedPairRule, patientRoot, runID string) (int, error) {
-	tags, err := queryPatientTags(sqlDB, patientRoot)
+	tx, err := sqlDB.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("begin: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // rollback after commit is a no-op
+
+	written, err := ProjectPatientLinksInTx(tx, rule, curated, patientRoot, runID)
+	if err != nil {
+		return 0, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit: %w", err)
+	}
+	return written, nil
+}
+
+// ProjectPatientLinksInTx deterministically replaces one patient's complete
+// clinical_links set inside tx. It is the hot-path counterpart to Reproject:
+// new patient data never requires scanning or rebuilding other patients, while
+// querying bead_tags and replacing links in the SAME transaction as IndexBead
+// prevents an indexed-new/links-old intermediate state from becoming visible.
+//
+// A full patient replace (rather than only adding pairs involving the newest
+// Bead) is required for correctness: the patient-local frequency threshold and
+// maxLinksPerBead cap can change which older pairs qualify when the denominator
+// grows. The scope is still bounded to one small patient Pod.
+func ProjectPatientLinksInTx(tx *sql.Tx, rule LinkRule, curated []CuratedPairRule, patientRoot, runID string) (int, error) {
+	tags, err := queryPatientTags(tx, patientRoot)
 	if err != nil {
 		return 0, err
 	}
@@ -237,15 +363,8 @@ func reprojectPatient(sqlDB *sql.DB, rule LinkRule, curated []CuratedPairRule, p
 		links = append(links, projectCuratedPairLinks(cr, patientRoot, tags)...)
 	}
 
-	tx, err := sqlDB.Begin()
-	if err != nil {
-		return 0, fmt.Errorf("begin: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback after commit is a no-op
-
 	if _, err := tx.Exec(
-		`DELETE FROM clinical_links WHERE patient_root = ? AND (projection_run_id IS NULL OR projection_run_id <> ?)`,
-		patientRoot, runID,
+		`DELETE FROM clinical_links WHERE patient_root = ?`, patientRoot,
 	); err != nil {
 		return 0, fmt.Errorf("delete stale clinical_links for %s: %w", patientRoot, err)
 	}
@@ -266,7 +385,7 @@ func reprojectPatient(sqlDB *sql.DB, rule LinkRule, curated []CuratedPairRule, p
 				 severity, evidence_basis, evidence_bead_ids, score_breakdown,
 				 rule_id, rule_version, projection_run_id, created_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT (bead_a, bead_b, relation, matched_tag) DO UPDATE SET
+			ON CONFLICT (bead_a, bead_b, relation, matched_tag, rule_version) DO UPDATE SET
 				link_id = excluded.link_id,
 				severity = excluded.severity,
 				evidence_basis = excluded.evidence_basis,
@@ -284,9 +403,6 @@ func reprojectPatient(sqlDB *sql.DB, rule LinkRule, curated []CuratedPairRule, p
 		}
 	}
 
-	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("commit: %w", err)
-	}
 	return len(links), nil
 }
 

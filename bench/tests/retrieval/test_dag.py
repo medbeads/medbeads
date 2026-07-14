@@ -67,6 +67,10 @@ def test_bead_ids_and_texts_come_from_items_in_order() -> None:
     assert result.meta["granularity"] == ["L0", "L1", "L2"]
     assert result.meta["provenance"] == ["anchor", "ancestor", "descendant"]
     assert result.meta["truncated_ref_count"] == 1
+    assert result.meta["linked_item_count"] == 0
+    assert result.meta["clinical_link_count"] == 0
+    assert result.meta["link_candidate_count"] == 0
+    assert result.meta["link_expansion_truncated"] is False
     assert "include_siblings" not in result.meta
 
 

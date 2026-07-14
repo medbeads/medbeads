@@ -118,10 +118,12 @@ type contextItemView struct {
 	Granularity     string `json:"granularity"`
 	Text            string `json:"text,omitempty"`
 	EstimatedTokens int    `json:"estimated_tokens"`
+	ViaLinkID       string `json:"via_link_id,omitempty"`
+	LinkDepth       int    `json:"link_depth,omitempty"`
 }
 
 func newContextItemView(item graph.ContextItem) contextItemView {
-	return contextItemView{
+	view := contextItemView{
 		ID:              bead.FormatID(item.ID),
 		Type:            item.Type,
 		Timestamp:       item.Timestamp,
@@ -129,7 +131,12 @@ func newContextItemView(item graph.ContextItem) contextItemView {
 		Granularity:     string(item.Granularity),
 		Text:            item.Text,
 		EstimatedTokens: item.EstimatedTokens,
+		LinkDepth:       item.LinkDepth,
 	}
+	if item.ViaLinkID != "" {
+		view.ViaLinkID = bead.FormatID(item.ViaLinkID)
+	}
+	return view
 }
 
 func newContextItemViews(items []graph.ContextItem) []contextItemView {

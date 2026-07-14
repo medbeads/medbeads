@@ -10,8 +10,9 @@
 // entirely (Siblings, AddSiblingEdge, WithSiblings, the explicit/implicit
 // sibling priority tiers in BuildContext) along with package apc, the
 // scanner that produced the sibling_link Beads those tiers read —
-// clinical_links (package projector, U3) is now the sole link mechanism;
-// BuildContext's context bundle is anchor/ancestor/descendant only.
+// clinical_links (package projector, U3) is now the sole link mechanism. R9
+// adds approved endpoints through BuildContextWithClinicalLinks as an
+// explicit bounded tier; graph itself still does not derive or read links.
 //
 // graph deliberately depends only on package pod and package index (and
 // package bead for the Bead type itself), not on package engine: per

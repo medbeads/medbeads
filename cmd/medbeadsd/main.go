@@ -24,20 +24,25 @@ Usage:
 
 Commands:
   serve     Start the daemon (engine + MCP; flags: -data <dir> [-role <role>] [-http <addr>]
-            [-embedder <url>] [-embed-model <name>])
+            [-embedder <url>] [-embed-model <name>] [-trust-policy <json>])
   verify    Verify Pod/index integrity (flags: -data <dir>)
   reindex   Rebuild index.db from Pod files (source of truth)
   embed     Backfill L2 semantic embeddings by draining bead_embed_queue synchronously
             (flags: -data <dir> -embedder <url> [-embed-model <name>] [-batch <n>])
-  reproject Rebuild clinical_links from bead_tags + the cooccurrence link_rule
-            Bead and flip projection_manifest's active run (flags: -data <dir>
-            [-code-version <v>] [-record-state] [-rule-file <json>]; does not
-            re-scan Pods, see reindex for that). -record-state additionally runs
+  reproject Activate a rolling clinical_links generation from bead_tags +
+            link_rule Beads, then process a bounded activity-prioritized batch
+            (flags: -data <dir> [-code-version <v>] [-record-state]
+            [-rule-file <json>] [-batch-size <n>] [-inactive-after <duration>]
+            [-trust-policy <json> -knowledge-ids <id,id,...>]
+            [-drain]; does not re-scan Pods, see reindex for that).
+            -record-state additionally runs
             U4b's record_state projector (bead_status/active_conditions/
             active_medications, its own separate manifest lineage)
   correct   Write a correction Bead — amend / retract / attest. A record is never
             edited: a correction is a NEW immutable Bead naming the one it
             corrects. Run 'medbeadsd correct' for the subcommands.
+  trust     Initialize hospital signing keys, create provenance attestations,
+            and publish signed link-rule releases. Run 'medbeadsd trust help'.
 `
 
 func main() {
@@ -64,6 +69,8 @@ func run(args []string, stdout, stderr *os.File) int {
 		return runReproject(args[1:], stdout, stderr)
 	case "correct":
 		return runCorrect(args[1:], stdout, stderr)
+	case "trust":
+		return runTrust(args[1:], stdout, stderr)
 	case "serve":
 		return runServe(args[1:], stdout, stderr)
 	case "-h", "-help", "--help", "help":

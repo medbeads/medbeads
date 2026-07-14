@@ -70,6 +70,10 @@
   (clinical_links フィールドで other endpoint の関係情報を返すが、context item には展開しない)。
   近傍展開は projection-link expansion として将来別設計(graph.Bundle rewire を避ける)。
 
+**後続更新（2026-07-13）**: 上記の将来ユニットを R9 として実装した。`include_links=true` は
+sidecar に加えて、状態・clearance 適用済みの患者内リンク先を bounded BFS で context item に展開する。
+契約と安全上限は `specs/R9_projection_link_expansion.md` を正とする。
+
 ## failure catalog 起案(data-reviewer、要ユーザー承認)
 - 「複数の独立フィルタパス(clearance が3経路)を持つ read ハンドラに新軸フィルタ(status)を足すとき、
   一部パスにだけ適用して truncated_refs/anchor_ids を取りこぼす」→ symptom: 本体からは消えたレコードが

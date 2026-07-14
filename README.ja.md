@@ -18,6 +18,9 @@ cd bench && uv run python -m bench.ingest \
   --fhir-dir ../FHIR_sample --data-dir ../demo_data --medbeadsd ../medbeadsd
 cd ..
 
+# 大規模Synthea出力から再現可能な10患者を作る場合（filename順の先頭10件）
+# cd bench && uv run python -m bench.ingest --fhir-dir ~/medbeads-synthea/output/fhir --limit 10 --data-dir ../demo_data --medbeadsd ../medbeadsd
+
 # 3. デーモン起動: 同一ポートで REST（/）と MCP（/mcp）
 ./medbeadsd serve -data ./demo_data -role viewer -http 127.0.0.1:8080
 
@@ -27,13 +30,24 @@ curl http://127.0.0.1:8080/patients          # REST（v2 契約凍結、UI が�
 ./medbeadsd reindex -data ./demo_data         # Pod 正本のみから index.db を再構築
 ```
 
+serve（および取込中のsystem-role stdio server）は、新規Beadの索引・当該患者の
+clinical_links・訂正状態を同じcommitで自動更新します。通常追記後の手動reprojectは不要です。
+知識ルールまたは投影コード世代を変更した場合は、全患者を一斉処理せず優先度付きqueueで更新します。
+新規データ患者は即時、残りは最近受診・長期未受診・死亡hintの順に小バッチ処理されます。
+
+単一病院の署名付きルール運用は`medbeadsd trust init`で病院ID・表示名・Ed25519公開鍵policyを作成し、
+`trust release`でlink_rule集合を承認します。本番の秘密鍵はローカルファイルではなくKMS/HSMで管理します。
+`serve -trust-policy <policy.json>`は起動時にactive knowledge releaseを再検証し、未承認ルールを拒否します。
+詳細は`specs/R12_signature_attestation_and_release.md`、FHIRサーバ同期案は
+`specs/R13_fhir_server_sync.md`を参照してください。
+
 React UI: `cd ui && cp .env.example .env && npm ci && npm run dev`
 （`.env` の `VITE_API_BASE_URL=http://localhost:8080` を使用。`.env.example` にある
 Python AI API は v3 で廃止済みのため無視してよい）。
 
 MCP クライアント（Claude Desktop / Claude Code）からは stdio モードで:
 `medbeadsd serve -data ./demo_data -role viewer` — `-role system` で書き込みツール
-（`create_bead` / `apc_trigger`）が有効になります。
+（`create_bead`）が有効になります。
 
 MedBeads は、医療AIにおける「コンテキストの不整合（Context Mismatch）」を解決するために設計された **イミュータブル（不変）なエージェントネイティブ・データインフラストラクチャ** です。従来の可変なリレーショナルデータベースから **マークル有向非巡回グラフ（Merkle DAG）** へと医療記録を再構築することで、MedBeads は自律型エージェントに対して、明示的な因果関係、改ざん検知性、決定論的なコンテキスト取得機能を提供します。
 

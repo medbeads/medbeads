@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"encoding/json"
 	"sort"
 
 	"github.com/medbeads/medbeads/internal/engine/bead"
@@ -31,10 +32,21 @@ const (
 type Provenance string
 
 const (
-	ProvenanceAnchor     Provenance = "anchor"
-	ProvenanceAncestor   Provenance = "ancestor"
-	ProvenanceDescendant Provenance = "descendant"
+	ProvenanceAnchor       Provenance = "anchor"
+	ProvenanceClinicalLink Provenance = "clinical_link"
+	ProvenanceAncestor     Provenance = "ancestor"
+	ProvenanceDescendant   Provenance = "descendant"
 )
+
+// LinkedAnchor is a clinical_links endpoint selected outside package graph.
+// The caller owns link policy (status, clearance, traversal limits and
+// severity/evidence ordering); this package preserves the approved path in
+// the context bundle.
+type LinkedAnchor struct {
+	ID        string
+	ViaLinkID string
+	Depth     int
+}
 
 // ContextItem is one Bead's contribution to a ContextBundle: how it was
 // reached (Provenance), at what granularity it was ultimately included, and
@@ -54,6 +66,9 @@ type ContextItem struct {
 	// ID/Type/Timestamp overhead, i.e. what this item actually cost against
 	// budget.
 	EstimatedTokens int
+	// ViaLinkID and LinkDepth are populated only for clinical_link items.
+	ViaLinkID string
+	LinkDepth int
 }
 
 // ContextBundle is BuildContext's result: the Beads that fit inside the
@@ -77,24 +92,27 @@ type candidate struct {
 	// tier is the priority bucket index (lower = higher priority), per the
 	// order documented on BuildContext.
 	tier int
+	// linkOrder preserves the policy order supplied by the caller for the
+	// clinical-link tier. Other tiers retain timestamp/ID ordering.
+	linkOrder int
+	viaLinkID string
+	linkDepth int
 }
 
 // tierGranularity is the granularity BuildContext attempts first for each
-// priority tier: anchor L0 -> ancestor L1 -> descendant L2 (specs/
-// DESIGN_v3.md §8's ordering, minus the sibling_link-description and
-// explicit/implicit sibling tiers, which U5a removed entirely along with
-// package apc — specs/U5_api_retrieve.md's deprecation list — since
-// clinical_links (U3) is now the sole link mechanism and carries no
-// context-bundle-expansion role, only a sidecar relation/severity/evidence
-// field surfaced separately by mcpserver.retrieve's ClinicalLinks).
+// priority tier: anchor L0 -> clinical-link endpoint L0 -> ancestor L1 ->
+// descendant L2. The horizontal tier is explicit and bounded by the caller;
+// it is not the removed sibling/APC inference machinery.
 var tierGranularity = []Granularity{
 	GranularityL0, // tier 0: anchors
-	GranularityL1, // tier 1: ancestors
-	GranularityL2, // tier 2: descendants
+	GranularityL0, // tier 1: clinical_links endpoints
+	GranularityL1, // tier 2: ancestors
+	GranularityL2, // tier 3: descendants
 }
 
 const (
 	tierAnchor = iota
+	tierClinicalLink
 	tierAncestor
 	tierDescendant
 )
@@ -117,6 +135,15 @@ const (
 // they are independent of the token budget itself (a large depth just means
 // more low-priority candidates competing for whatever budget remains).
 func BuildContext(bd *Bundle, anchors []string, budget int, ancestorDepth, descendantDepth int) ContextBundle {
+	return BuildContextWithClinicalLinks(bd, anchors, nil, budget, ancestorDepth, descendantDepth)
+}
+
+// BuildContextWithClinicalLinks extends BuildContext with an explicit,
+// auditable horizontal tier. Original search anchors remain highest priority;
+// linked endpoints follow at L0 in caller-supplied order. Vertical context is
+// then walked from both sets, allowing a linked result to bring the encounter
+// chain needed to interpret it without reviving the old sibling/APC model.
+func BuildContextWithClinicalLinks(bd *Bundle, anchors []string, linked []LinkedAnchor, budget int, ancestorDepth, descendantDepth int) ContextBundle {
 	out := ContextBundle{
 		AnchorIDs:    append([]string(nil), anchors...),
 		BudgetTokens: budget,
@@ -141,7 +168,7 @@ func BuildContext(bd *Bundle, anchors []string, budget int, ancestorDepth, desce
 	// TestBuildContext_MultiAnchor_CrossAnchorTierPromotion_NoDuplicate).
 	claims := make(map[string]candidate, len(bd.beads)) // id -> its resolved (best-tier) candidate
 
-	resolve := func(id string, tier int, provenance Provenance) {
+	resolve := func(id string, tier int, provenance Provenance, linkOrder int, viaLinkID string, linkDepth int) {
 		if id == "" {
 			return
 		}
@@ -152,27 +179,39 @@ func BuildContext(bd *Bundle, anchors []string, budget int, ancestorDepth, desce
 		if prior, ok := claims[id]; ok && prior.tier <= tier {
 			return
 		}
-		claims[id] = candidate{b: b, provenance: provenance, tier: tier}
+		claims[id] = candidate{
+			b: b, provenance: provenance, tier: tier, linkOrder: linkOrder,
+			viaLinkID: viaLinkID, linkDepth: linkDepth,
+		}
 	}
 
 	// Anchors first, so they always win the highest tier regardless of
 	// whether some other anchor's ancestor/descendant walk also reaches
 	// them.
 	for _, id := range anchors {
-		resolve(id, tierAnchor, ProvenanceAnchor)
+		resolve(id, tierAnchor, ProvenanceAnchor, 0, "", 0)
 	}
-	for _, id := range anchors {
+	for i, l := range linked {
+		resolve(l.ID, tierClinicalLink, ProvenanceClinicalLink, i, l.ViaLinkID, l.Depth)
+	}
+
+	seeds := make([]string, 0, len(anchors)+len(linked))
+	seeds = append(seeds, anchors...)
+	for _, l := range linked {
+		seeds = append(seeds, l.ID)
+	}
+	for _, id := range seeds {
 		for _, a := range bd.Ancestors(id, ancestorDepth) {
 			if a.ID == id {
 				continue // Ancestors includes the anchor itself at depth 0
 			}
-			resolve(a.ID, tierAncestor, ProvenanceAncestor)
+			resolve(a.ID, tierAncestor, ProvenanceAncestor, 0, "", 0)
 		}
 		for _, d := range bd.Descendants(id, descendantDepth) {
 			if d.ID == id {
 				continue // Descendants includes the anchor itself at depth 0
 			}
-			resolve(d.ID, tierDescendant, ProvenanceDescendant)
+			resolve(d.ID, tierDescendant, ProvenanceDescendant, 0, "", 0)
 		}
 	}
 
@@ -186,8 +225,11 @@ func BuildContext(bd *Bundle, anchors []string, budget int, ancestorDepth, desce
 	// Deterministic ordering within a tier (map iteration over claims is
 	// not stable) so BuildContext's output — and therefore which items get
 	// truncated first under a tight budget — does not vary run to run.
-	for _, t := range tiers {
+	for tierIdx, t := range tiers {
 		sort.Slice(t, func(i, j int) bool {
+			if tierIdx == tierClinicalLink && t[i].linkOrder != t[j].linkOrder {
+				return t[i].linkOrder < t[j].linkOrder
+			}
 			if t[i].b.Timestamp != t[j].b.Timestamp {
 				return t[i].b.Timestamp < t[j].b.Timestamp
 			}
@@ -199,7 +241,7 @@ func BuildContext(bd *Bundle, anchors []string, budget int, ancestorDepth, desce
 	for tierIdx, t := range tiers {
 		granularity := tierGranularity[tierIdx]
 		for _, c := range t {
-			item := renderItem(c.b, c.provenance, granularity)
+			item := renderItem(c, granularity)
 			if item.EstimatedTokens <= remaining {
 				out.Items = append(out.Items, item)
 				remaining -= item.EstimatedTokens
@@ -208,7 +250,7 @@ func BuildContext(bd *Bundle, anchors []string, budget int, ancestorDepth, desce
 			// Doesn't fit at this tier's preferred granularity: fall back to
 			// L2 (a bare reference) before giving up on it entirely, per
 			// DESIGN §8's "切り捨て分も必ず L2 参照で列挙".
-			ref := renderItem(c.b, c.provenance, GranularityL2)
+			ref := renderItem(c, GranularityL2)
 			if granularity != GranularityL2 && ref.EstimatedTokens <= remaining {
 				out.Items = append(out.Items, ref)
 				remaining -= ref.EstimatedTokens
@@ -224,13 +266,16 @@ func BuildContext(bd *Bundle, anchors []string, budget int, ancestorDepth, desce
 
 // renderItem builds the ContextItem for b at granularity, including its
 // token cost.
-func renderItem(b bead.Bead, provenance Provenance, granularity Granularity) ContextItem {
+func renderItem(c candidate, granularity Granularity) ContextItem {
+	b := c.b
 	item := ContextItem{
 		ID:          b.ID,
 		Type:        b.Type,
 		Timestamp:   b.Timestamp,
-		Provenance:  provenance,
+		Provenance:  c.provenance,
 		Granularity: granularity,
+		ViaLinkID:   c.viaLinkID,
+		LinkDepth:   c.linkDepth,
 	}
 	switch granularity {
 	case GranularityL0:
@@ -246,21 +291,49 @@ func renderItem(b bead.Bead, provenance Provenance, granularity Granularity) Con
 	return item
 }
 
+// RefreshContextItem re-renders an existing context slot from a replacement
+// Bead while preserving traversal provenance and granularity. MCP status
+// normalization uses this when an amended Bead is substituted with its
+// current version; changing only the ID would otherwise label stale text as
+// the corrected record.
+func RefreshContextItem(item ContextItem, replacement bead.Bead) ContextItem {
+	return renderItem(candidate{
+		b:          replacement,
+		provenance: item.Provenance,
+		viaLinkID:  item.ViaLinkID,
+		linkDepth:  item.LinkDepth,
+	}, item.Granularity)
+}
+
+// AsL2Reference demotes an already-rendered item to the fixed-cost reference
+// shape while preserving ID and traversal provenance.
+func AsL2Reference(item ContextItem) ContextItem {
+	item.Granularity = GranularityL2
+	item.Text = ""
+	item.EstimatedTokens = referenceOverheadTokens
+	return item
+}
+
 // referenceOverheadTokens is a fixed per-item cost approximating what
 // specs/DESIGN_v3.md §8 calls the ~15-token L2 shape (ID + type +
 // timestamp) that every item — L0, L1, or L2 — carries regardless of how
 // much Text it also includes.
 const referenceOverheadTokens = 15
 
-// renderL0 renders a Bead's full content, per DESIGN §8's L0 tier: this
-// deliberately reuses the same flattening approach as
-// index.DefaultFlattener.Flatten's search_text side (recursively join every
-// string value in Content) rather than a raw JSON dump, so L0 text is
-// human/LLM-readable prose rather than punctuation-heavy JSON that would
-// inflate the token estimate without adding clinical information. A
-// type-specific flattener (a later, FHIR-aware unit) can replace this
-// without changing BuildContext's shape.
+// renderL0 renders complete Content as deterministic JSON. The former
+// string-only flattening silently dropped JSON numbers and booleans, most
+// importantly valueQuantity.value for labs and vitals, so an L0 item could
+// omit the clinical result it claimed to carry. Bead Content is JSON by
+// contract and encoding/json sorts map keys, preserving both completeness
+// and deterministic token accounting.
 func renderL0(b bead.Bead) string {
+	raw, err := json.Marshal(b.Content)
+	if err == nil {
+		return b.Type + ": " + string(raw)
+	}
+
+	// Defensive fallback for an in-memory non-JSON value. Persisted Beads
+	// have already passed canonical JSON encoding and cannot reach this path.
 	var parts []string
 	collectContentStrings(b.Content, &parts)
 	// collectContentStrings walks a map, whose key iteration order Go
@@ -293,7 +366,16 @@ func renderL0(b bead.Bead) string {
 // contract (an L1 tier distinct from L0) should not silently regress once a
 // caller wires beads.summary through.
 func renderL1(b bead.Bead) string {
-	full := renderL0(b)
+	// Keep L1 compact and prose-like rather than taking an arbitrary prefix
+	// of the L0 JSON object. Direct clinical-link endpoints are L0, so their
+	// numeric facts are still complete.
+	var parts []string
+	collectContentStrings(b.Content, &parts)
+	sort.Strings(parts)
+	full := b.Type
+	if len(parts) > 0 {
+		full += ": " + parts[0]
+	}
 	const l1MaxLen = 160 // keeps L1 well under L0 (see EstimateTokens' ~40 tok target)
 	if len(full) <= l1MaxLen {
 		return full

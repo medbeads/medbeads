@@ -2,10 +2,12 @@ package mcpserver
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/medbeads/medbeads/internal/engine/bead"
 	"github.com/medbeads/medbeads/internal/engine/clearance"
+	"github.com/medbeads/medbeads/internal/engine/index"
 	"github.com/medbeads/medbeads/internal/engine/projector"
 )
 
@@ -25,6 +27,24 @@ func TestRetrieve_SemanticWithoutEmbedder_IsAToolError(t *testing.T) {
 	}
 	if res == nil || !res.IsError {
 		t.Fatalf("retrieve(semantic=true, no embedder configured): want IsError=true result, got %+v", res)
+	}
+}
+
+func TestRetrieve_LinkExpansionLimitsAreValidated(t *testing.T) {
+	e := openT(t)
+	seedPatient(t, e, "Link Limit Patient")
+	s := newServerT(t, e, SystemRole)
+	for _, in := range []retrieveIn{
+		{Query: "anything", LinkDepth: maxLinkDepth + 1},
+		{Query: "anything", MaxLinkedBeads: maxLinkedBeadsLimit + 1},
+	} {
+		res, _, err := s.retrieve(context.Background(), nil, in)
+		if err != nil {
+			t.Fatalf("retrieve: unexpected Go error: %v", err)
+		}
+		if res == nil || !res.IsError {
+			t.Fatalf("retrieve(%+v): want tool-level validation error, got %+v", in, res)
+		}
 	}
 }
 
@@ -216,15 +236,10 @@ func TestRetrieve_ClearanceFilterDropsRestrictedItems(t *testing.T) {
 	}
 }
 
-// TestRetrieve_IncludeLinksFalse_LeavesContextBundleUnaffected checks U5a's
-// context-bundle-shape change (specs/U5_api_retrieve.md): since package apc
-// and graph's sibling tiers were removed entirely, include_links=false no
-// longer changes Items/TruncatedRefs at all (there is no sibling tier left
-// to skip) — it only continues to gate retrieveOut.ClinicalLinks (see
-// TestRetrieve_SurfacesClinicalLinks for that coverage). This test pins the
-// "unaffected" half: with include_links omitted vs. explicitly false, the
-// anchor/ancestor/descendant context bundle is identical.
-func TestRetrieve_IncludeLinksFalse_LeavesContextBundleUnaffected(t *testing.T) {
+// TestRetrieve_IncludeLinksFalse_PreservesVerticalDAGContext checks that the
+// link opt-out removes only horizontal expansion/sidecar behavior; ordinary
+// anchor/ancestor/descendant traversal remains intact.
+func TestRetrieve_IncludeLinksFalse_PreservesVerticalDAGContext(t *testing.T) {
 	e := openT(t)
 
 	patient := seedPatient(t, e, "Sibling Toggle Patient")
@@ -268,11 +283,10 @@ func TestRetrieve_IncludeLinksFalse_LeavesContextBundleUnaffected(t *testing.T) 
 		t.Fatalf("retrieve (include_links=false): %v", err)
 	}
 
-	// Every non-sibling-tier item (anchor, ancestor, descendant) must be
-	// unaffected by include_links=false post-U5a.
+	// Every vertical item (anchor, ancestor, descendant) remains available.
 	for _, id := range []string{medicationView, encounterView, observationView} {
 		if !containsItemID(noSibOut.Items, id) {
-			t.Errorf("retrieve(include_links=false): Bead %s missing from Items, want unaffected by this flag post-U5a", id)
+			t.Errorf("retrieve(include_links=false): vertical Bead %s missing from Items", id)
 		}
 	}
 	if len(noSibOut.Items) != len(defaultOut.Items) {
@@ -338,11 +352,10 @@ func TestRetrieve_AnchorIDsDropRestrictedAnchorAmongMultiple(t *testing.T) {
 
 // --- U3c: retrieve surfaces clinical_links --------------------------------
 
-// TestRetrieve_SurfacesClinicalLinks checks U3c's retrieve-wiring judgment
-// call: a risk:/atc: cooccurrence pair projected by projector.Reproject
-// (U3b) is surfaced in retrieveOut.ClinicalLinks once both endpoints are in
-// Items, gated by IncludeLinks (retrieveIn's doc comment: U5b's rename of
-// include_siblings).
+// TestRetrieve_SurfacesClinicalLinks checks projection-link expansion: a
+// risk cooccurrence endpoint that is neither an ancestor nor descendant of
+// the query anchor is promoted into Items at L0, while the interpretation
+// edge remains available in ClinicalLinks with an auditable via_link_id.
 func TestRetrieve_SurfacesClinicalLinks(t *testing.T) {
 	e := openT(t)
 	patient := seedPatient(t, e, "Clinical Links Patient")
@@ -382,6 +395,22 @@ func TestRetrieve_SurfacesClinicalLinks(t *testing.T) {
 	if !containsItemID(out.Items, medicationView) {
 		t.Fatalf("retrieve Items missing anchor medicationrequest %s: %+v", medicationView, out.Items)
 	}
+	var expandedItem *provenanceView
+	for i := range out.Items {
+		if out.Items[i].ID == observationView {
+			expandedItem = &out.Items[i]
+			break
+		}
+	}
+	if expandedItem == nil {
+		t.Fatalf("retrieve did not expand linked observation %s into Items: %+v", observationView, out.Items)
+	}
+	if expandedItem.Provenance != "clinical_link" || expandedItem.Granularity != "L0" || expandedItem.LinkDepth != 1 || expandedItem.ViaLinkID == "" {
+		t.Errorf("expanded item provenance = %+v, want clinical_link/L0/depth=1/via_link_id", *expandedItem)
+	}
+	if out.LinkExpansion == nil || out.LinkExpansion.CandidateCount != 1 || len(out.LinkExpansion.ExpandedBeadIDs) != 1 || out.LinkExpansion.ExpandedBeadIDs[0] != observationView {
+		t.Errorf("LinkExpansion = %+v, want one expanded observation %s", out.LinkExpansion, observationView)
+	}
 
 	found := false
 	for _, link := range out.ClinicalLinks {
@@ -396,14 +425,16 @@ func TestRetrieve_SurfacesClinicalLinks(t *testing.T) {
 			if link.MatchedTag != "risk:nephrotoxic" {
 				t.Errorf("ClinicalLinks matched_tag = %q, want risk:nephrotoxic", link.MatchedTag)
 			}
+			if link.ProjectionRunID == "" {
+				t.Errorf("ClinicalLinks projection_run_id is empty; want manifest provenance")
+			}
 		}
 	}
 	if !found {
 		t.Fatalf("retrieve ClinicalLinks missing medication<->observation link: %+v", out.ClinicalLinks)
 	}
 
-	// include_links=false must also suppress ClinicalLinks (same flag as
-	// the sibling tiers — see retrieveOut.ClinicalLinks' doc comment).
+	// include_links=false suppresses both the sidecar and context expansion.
 	includeFalse := false
 	_, noLinksOut, err := s.retrieve(context.Background(), nil, retrieveIn{
 		Query:        "meropenem",
@@ -417,6 +448,12 @@ func TestRetrieve_SurfacesClinicalLinks(t *testing.T) {
 	}
 	if len(noLinksOut.ClinicalLinks) != 0 {
 		t.Errorf("retrieve(include_links=false).ClinicalLinks = %+v, want empty", noLinksOut.ClinicalLinks)
+	}
+	if containsItemID(noLinksOut.Items, observationView) {
+		t.Errorf("retrieve(include_links=false) still expanded linked observation %s: %+v", observationView, noLinksOut.Items)
+	}
+	if noLinksOut.LinkExpansion != nil {
+		t.Errorf("retrieve(include_links=false).LinkExpansion = %+v, want nil", noLinksOut.LinkExpansion)
 	}
 }
 
@@ -476,6 +513,9 @@ func TestRetrieve_ClinicalLinksDropRestrictedEndpoint(t *testing.T) {
 			t.Fatalf("viewer retrieve ClinicalLinks leaked restricted endpoint: %+v", link)
 		}
 	}
+	if containsItemID(viewerOut.Items, observationView) {
+		t.Fatalf("viewer retrieve expanded restricted endpoint %s into Items", observationView)
+	}
 
 	system := newServerT(t, e, SystemRole)
 	_, systemOut, err := system.retrieve(context.Background(), nil, retrieveIn{
@@ -495,5 +535,42 @@ func TestRetrieve_ClinicalLinksDropRestrictedEndpoint(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("system retrieve ClinicalLinks missing the link; want it present (system bypasses clearance): %+v", systemOut.ClinicalLinks)
+	}
+}
+
+func TestExpandClinicalLinks_DepthAndClinicalPriority(t *testing.T) {
+	a := strings.Repeat("a", 64)
+	b := strings.Repeat("b", 64)
+	c := strings.Repeat("c", 64)
+	d := strings.Repeat("d", 64)
+	infoID := strings.Repeat("1", 64)
+	warningID := strings.Repeat("2", 64)
+	secondHopID := strings.Repeat("3", 64)
+	links := []accessiblePatientLink{
+		{row: index.PatientLinkRow{LinkID: warningID, Severity: "warning", EvidenceBasis: "curated_knowledge"}, beadA: a, beadB: b},
+		{row: index.PatientLinkRow{LinkID: infoID, Severity: "info", EvidenceBasis: "cooccurrence"}, beadA: a, beadB: d},
+		{row: index.PatientLinkRow{LinkID: secondHopID, Severity: "critical", EvidenceBasis: "guideline"}, beadA: b, beadB: c},
+	}
+	sortAccessiblePatientLinks(links)
+
+	oneHop, count := expandClinicalLinks([]string{a}, links, 1, 10)
+	if count != 2 || len(oneHop) != 2 || oneHop[0].ID != b || oneHop[1].ID != d {
+		t.Fatalf("one-hop expansion = %+v count=%d, want warning B before info D", oneHop, count)
+	}
+	twoHop, count := expandClinicalLinks([]string{a}, links, 2, 10)
+	if count != 3 || len(twoHop) != 3 || twoHop[2].ID != c || twoHop[2].Depth != 2 {
+		t.Fatalf("two-hop expansion = %+v count=%d, want C at depth 2", twoHop, count)
+	}
+	capped, count := expandClinicalLinks([]string{a}, links, 2, 1)
+	if count != 3 || len(capped) != 1 || capped[0].ID != b {
+		t.Fatalf("capped expansion = %+v count=%d, want full count 3 but highest-priority B only", capped, count)
+	}
+}
+
+func sortAccessiblePatientLinks(links []accessiblePatientLink) {
+	for i := 1; i < len(links); i++ {
+		for j := i; j > 0 && clinicalLinkLess(links[j], links[j-1]); j-- {
+			links[j], links[j-1] = links[j-1], links[j]
+		}
 	}
 }

@@ -69,6 +69,9 @@ async def _run(tmp_path: Path, medbeadsd_binary: Path, synthea_fhir_dir: Path) -
     assert run_manifest["total_patients"] == 2
     assert run_manifest["ok_patients"] == 2
     assert run_manifest["limit"] == 2
+    assert run_manifest["selection_order"] == "filename_ascending"
+    assert run_manifest["selected_bundles"] == sorted(run_manifest["selected_bundles"])
+    assert len(run_manifest["selected_bundles"]) == 2
     assert run_manifest["git_commit"]  # non-empty: either a real hash or "unknown"
     assert "parent_fallback_warnings" in run_manifest  # sampled real data: this run should also be empty
     assert run_manifest["parent_fallback_warnings"] == []

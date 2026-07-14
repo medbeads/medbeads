@@ -192,3 +192,77 @@
   → **2アームを単一 dag に統合**(sibling 概念は U5a で消滅)。apc_trigger 呼び出しは削除、reproject は CLI。
 - **ユーザー裁定**: **superseded ノートは取り込まず status=="current" のみ ingest**(過去ナラティブ破棄。
   最新の累積ノートが実質全履歴を含む。過去時点の追跡[UC4]が要れば amends チェーン化を将来別ユニット)。
+
+## 2026-07-13: R9 projection-link expansion 実装
+
+- **決定**: `include_links` を sidecar-only から、患者内 clinical_links の bounded context expansion へ拡張。
+  既定 depth=1 / max=20、上限 depth=3 / max=100。明示 `include_links=false` で sidecar と展開を共に停止。
+- **安全条件**: 両 endpoint に status→clearance を適用、cross-patient 禁止、severity/evidence 優先、
+  policy truncation と token truncation を別々に応答へ明示。
+- **同時修正**: 数値/bool が L0 から消える string-only rendering、amended ID に旧本文が残る置換、
+  populated bead_status の部分欠落を active 扱いする fail-open を修正。
+- **仕様**: specs/R9_projection_link_expansion.md。
+
+## 2026-07-14: R10 患者単位の自動増分投影
+
+- **決定**: 患者Bead追記時に IndexBead + clinical_links + record_state + patient watermark を
+  同一SQLite transactionでcommitする。通常追記は当該患者だけを処理し、全患者Reprojectはしない。
+- **clinical_links**: 新規Bead接続分だけの追加方式は不採用。患者内頻度閾値とlink capにより、
+  新規1件で過去同士の適格性も変わるため、正確な患者単位全置換を採用。
+- **record_state**: 通常Beadと未承認amendmentは新規行のみ、過去を変えるattestation/retractionだけ
+  患者チェーン全解決。
+- **回復**: migration 0008 patient_projection_state を追加。Pod append後SQL commit前の停止は、
+  次回OpenがCatchUp後にwatermark不一致患者だけ再投影してからserveする。
+- **世代**: projection_manifest はknowledge/codeの解釈世代、
+  patient_projection_state は患者ごとのデータ到達点。knowledge/code変更のローリング化はR11で実装。
+- **実データ確認**: Synthea 1,135 Bundleのfilename-sort先頭10患者をscratch ingestし、
+  10患者 / 4,202 patient Bead + 1 shared rule Bead / clinical_links 492件 / 失敗0を確認。
+- **仕様**: specs/R10_incremental_patient_projection.md。
+
+## 2026-07-14: R11 link_rule v2 / 患者優先ローリング更新
+
+- **決定**: knowledge/code変更時のOpen同期全患者Reprojectを廃止。新manifestを目標世代として登録し、
+  patient_projection_stateの世代不一致を仮想queueとして一患者ずつ移行する。100万件のqueue行を一括
+  INSERTせず、patient_reprojection_queue実表は失敗・再試行だけを保持する。
+- **優先度**: 既定3年以内の受診患者、長期未受診、deceased hintの順。hintはschedule専用で臨床状態に
+  使用しない。legacyの死亡不明は高優先度側に倒す。
+- **即時経路**: 新規追記・Pod recoveryはqueueを飛び越し、当該患者を現行世代へ同一transactionで更新。
+- **link_rule v2**: min_shared/頻度閾値/link cap/score weightを実処理へ接続。v1読取互換を維持。
+  curated ruleはauthor、表示revision、effective period、外部evidence Beadを保持可能。
+- **複数根拠**: clinical_links自然キーへrule_versionを追加。同一Bead対・関係・tagを複数ruleが支持しても
+  最後のruleで上書きせず、独立したassertionとして全根拠を保持する。
+- **運用**: serveは小バッチのbackground drain、reprojectはbatch-size/3年閾値/drainを選択可能。
+- **世代分離**: link code版とrecord_state contract版を分離。link-onlyデプロイで訂正状態の同期全再投影を
+  起こさない。訂正チェーン意味論を変更した場合だけrecord-state-code-versionを更新する。
+- **仕様**: specs/R11_prioritized_rule_rollout.md。
+
+## 2026-07-14: R12 組織署名 / knowledge release
+
+- **決定**: SHA-256(content同一性)と署名(組織・記載者の真正性)を分離。既存`attestation`は訂正承認に
+  使用中のため、暗号署名はsubjectをparentに持つ不変`signature_attestation` Beadとする。
+- **単一病院**: 電子カルテで認証した`actor_id`を、病院のシステムEd25519鍵で署名する。author(記載者)と
+  signer(病院システム)を分け、病院名は表示、安定`organization_id`を信頼判断に使う。
+- **trust policy**: tenant、複数組織、公開鍵、鍵用途、鍵有効期間/失効、必要承認人数をoperator管理する。
+  秘密鍵はEngine/Pod/SQLiteに渡さない。ローカル鍵CLIはbootstrap専用、本番はKMS/HSMへ置換する。
+- **purpose分離**: `clinical_origin`、取得変換だけを証明する`fhir_import`、ルール公開の
+  `knowledge_release`を混同しない。
+- **knowledge release**: releaseが宣言した閉じたlink_rule集合と署名数が一致した場合だけrolling targetへ
+  切替。未承認rule混入、改ざん、未信頼/失効鍵、適用期間外はfail closed。serve起動時もactive manifestを
+  再検証する。
+- **互換**: hash対象外の旧`bead.Signature`は読取互換のため残すが、信頼判定には使用しない。
+- **用語**: ルールの「施行日」を廃止し、`effective_from/to`は「適用開始/終了」と表記。
+- **仕様**: specs/R12_signature_attestation_and_release.md。
+
+## 2026-07-14: R13 FHIRサーバ連携の設計境界
+
+- **現状**: Synthea file Bundleの決定的変換は実装済み。FHIR server接続、差分/version/delete、Provenance、
+  checkpoint/quarantineは未実装。
+- **決定案**: source原文の`fhir_resource_snapshot`と臨床利用Beadを二段階化する。現在のMedication参照
+  inline解決やDocumentReference本文抽出をsource改変と混同しない。
+- **同期**: 初回はBulk Data `$export`またはページ検索、差分はhistory `_since`優先、Subscriptionはtrigger、
+  `_lastUpdated` fallbackはoverlap+content-address重複排除。page成功後だけcheckpointを進める。
+- **整合性**: server/type/logical-id/versionのsource key、digest、patient/Encounter同一性、未解決参照、
+  deleteを明示管理。Patient rootへのsilent fallbackやdropを禁止しquarantine/receiptへ記録する。
+- **署名**: FHIR Provenance署名を検証できた場合だけ`clinical_origin`、connectorによる取得変換は
+  `fhir_import`として署名する。
+- **仕様**: specs/R13_fhir_server_sync.md。

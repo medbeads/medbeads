@@ -6,26 +6,19 @@ granularity), retrieve's own token-budgeted packing already happened
 server-side (graph.BuildContext's L0/L1/L2 tiered greedy packing) by the
 time this arm's retrieve() call returns — used_tokens/bead_ids/texts here
 come directly from retrieveOut's Items in the server's own priority order
-(anchor L0 -> ancestor L1 -> descendant L2).
+(anchor L0 -> clinical_link L0 -> ancestor L1 -> descendant L2).
 
 U6 consolidation (specs/U6_clinical_note.md, docs/decisions.md 2026-07-11 U6
 entry): this module used to expose two arms, dag_nosib/dag_full, toggling
 retrieve's include_siblings flag. U5a (specs/U5_api_retrieve.md) removed
 package apc and graph's sibling tiers entirely — graph.BuildContext has had
-no sibling tier to toggle since then, so include_siblings (renamed
-include_links in U5b) has gated only the clinical_links sidecar in the
-response, never Items/TruncatedRefs' context-bundle shape, since U5a landed.
-Continuing to run dag_nosib and dag_full as two separate arms after that
-point would measure the exact same retrieval_score/token_usage twice under
-two different arm names — a real, VERIFIED redundancy (see
-internal/mcpserver/retrieve_test.go's
-TestRetrieve_IncludeLinksFalse_LeavesContextBundleUnaffected, which pins
-Items being identical regardless of include_links). This module therefore
-now exposes exactly one arm, `dag`, with include_links left at its
-server-side default (True) — the sidecar is still available (meta
-carries no clinical_links data at this layer, since this arm's own
-RetrievalResult.meta only tracks the context-bundle-shaping fields
-bench.metrics needs), but no longer creates a second, redundant arm.
+no sibling tier to toggle since then. R9 later gave include_links a new,
+standard-term meaning: bounded projection-link expansion with status,
+clearance and provenance. This module still exposes one canonical MedBeads
+`dag` arm, leaving expansion at its server defaults; rag/fts remain the
+baselines. Link candidate/truncation counts are preserved in result metadata
+so the new behavior can be audited without resurrecting the obsolete
+dag_nosib/dag_full names.
 """
 
 from __future__ import annotations
@@ -104,6 +97,8 @@ class DagRetriever:
 
         truncated: list[dict[str, Any]] = out.get("truncated_refs") or []
         anchor_ids: list[str] = out.get("anchor_ids") or []
+        link_expansion: dict[str, Any] = out.get("link_expansion") or {}
+        clinical_links: list[dict[str, Any]] = out.get("clinical_links") or []
 
         return RetrievalResult(
             arm=self.arm,
@@ -116,5 +111,9 @@ class DagRetriever:
                 "granularity": [item.get("granularity", "") for item in items],
                 "provenance": [item.get("provenance", "") for item in items],
                 "truncated_ref_count": len(truncated),
+                "linked_item_count": sum(item.get("provenance") == "clinical_link" for item in items),
+                "clinical_link_count": len(clinical_links),
+                "link_candidate_count": link_expansion.get("candidate_count", 0),
+                "link_expansion_truncated": link_expansion.get("truncated", False),
             },
         )

@@ -213,6 +213,15 @@ func IndexBead(tx *sql.Tx, b bead.Bead, loc BeadLocation, f Flattener) error {
 		if err := EnqueueEmbed(tx, b.ID, loc.PatientRoot, searchText); err != nil {
 			return fmt.Errorf("index: index bead %s: %w", b.ID, err)
 		}
+
+		// Activity is a scheduling projection, not clinical state. Keeping it
+		// beside the primary index write lets a future knowledge-generation
+		// rollout prioritize recent patients without opening every Pod. A
+		// duplicate frame is deliberately ignored: replaying identical content
+		// is not new patient activity.
+		if err := upsertPatientActivity(tx, normalized, loc); err != nil {
+			return fmt.Errorf("index: index bead %s: patient activity: %w", b.ID, err)
+		}
 	}
 
 	if err := advanceWatermark(tx, podID, loc.Offset+loc.Length); err != nil {
@@ -220,6 +229,79 @@ func IndexBead(tx *sql.Tx, b bead.Bead, loc BeadLocation, f Flattener) error {
 	}
 
 	return nil
+}
+
+func upsertPatientActivity(tx *sql.Tx, b bead.Bead, loc BeadLocation) error {
+	if loc.PatientRoot == "" {
+		return nil
+	}
+
+	var clinicalAt any
+	if b.Type != "patient_registration" && b.Timestamp != "" {
+		clinicalAt = b.Timestamp
+	}
+	var encounterAt any
+	if (b.Type == "fhir_encounter" || b.Type == "encounter") && b.Timestamp != "" {
+		encounterAt = b.Timestamp
+	}
+	var visitAt any
+	if b.Type != "patient_registration" && b.Timestamp != "" {
+		visitAt = b.Timestamp
+	}
+
+	deceased := 0
+	var deceasedAt any
+	if b.Type == "patient_registration" {
+		if value, ok := b.Content["deceasedBoolean"].(bool); ok && value {
+			deceased = 1
+		}
+		if value, ok := b.Content["deceasedDateTime"].(string); ok && value != "" {
+			deceased = 1
+			deceasedAt = value
+		}
+	}
+
+	var recordedAt any
+	if loc.WrittenAt != "" {
+		recordedAt = loc.WrittenAt
+	}
+	updatedAt := loc.WrittenAt
+	if updatedAt == "" {
+		updatedAt = b.Timestamp
+	}
+	if updatedAt == "" {
+		updatedAt = "1970-01-01T00:00:00Z"
+	}
+
+	_, err := tx.Exec(`
+		INSERT INTO patient_activity
+			(patient_root, last_recorded_at, last_clinical_at,
+			 last_encounter_at, deceased_hint, deceased_at, updated_at, last_visit_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(patient_root) DO UPDATE SET
+			last_recorded_at = CASE
+				WHEN excluded.last_recorded_at IS NULL THEN patient_activity.last_recorded_at
+				WHEN patient_activity.last_recorded_at IS NULL OR excluded.last_recorded_at > patient_activity.last_recorded_at
+				THEN excluded.last_recorded_at ELSE patient_activity.last_recorded_at END,
+			last_clinical_at = CASE
+				WHEN excluded.last_clinical_at IS NULL THEN patient_activity.last_clinical_at
+				WHEN patient_activity.last_clinical_at IS NULL OR excluded.last_clinical_at > patient_activity.last_clinical_at
+				THEN excluded.last_clinical_at ELSE patient_activity.last_clinical_at END,
+			last_encounter_at = CASE
+				WHEN excluded.last_encounter_at IS NULL THEN patient_activity.last_encounter_at
+				WHEN patient_activity.last_encounter_at IS NULL OR excluded.last_encounter_at > patient_activity.last_encounter_at
+				THEN excluded.last_encounter_at ELSE patient_activity.last_encounter_at END,
+			deceased_hint = MAX(patient_activity.deceased_hint, excluded.deceased_hint),
+			deceased_at = COALESCE(excluded.deceased_at, patient_activity.deceased_at),
+			last_visit_at = CASE
+				WHEN excluded.last_visit_at IS NULL THEN patient_activity.last_visit_at
+				WHEN patient_activity.last_visit_at IS NULL OR excluded.last_visit_at > patient_activity.last_visit_at
+				THEN excluded.last_visit_at ELSE patient_activity.last_visit_at END,
+			updated_at = CASE WHEN excluded.updated_at > patient_activity.updated_at
+				THEN excluded.updated_at ELSE patient_activity.updated_at END`,
+		loc.PatientRoot, recordedAt, clinicalAt, encounterAt, deceased, deceasedAt, updatedAt, visitAt,
+	)
+	return err
 }
 
 // extractTags returns the bead_tags tags b's projection should carry: exactly

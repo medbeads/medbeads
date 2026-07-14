@@ -1,6 +1,7 @@
 package graph_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/medbeads/medbeads/internal/engine/graph"
@@ -347,6 +348,42 @@ func TestBuildContext_ItemsAndTruncatedRefs_NeverContainDuplicateBeadIDs(t *test
 				t.Errorf("budget=%d: Bead %s appears %d times across Items+TruncatedRefs, want exactly 1", budget, id, count)
 			}
 		}
+	}
+}
+
+func TestBuildContextWithClinicalLinks_PromotesEndpointWithAuditPath(t *testing.T) {
+	e := openT(t)
+	root := seedPatient(t, e, "linked context patient")
+	anchor := seedChildBead(t, e, root, "fhir_medicationrequest", map[string]any{"drug": "meropenem"})
+	linked := seedChildBead(t, e, root, "fhir_observation", map[string]any{
+		"valueQuantity": map[string]any{"value": 37.8, "unit": "Cel"},
+		"final":         true,
+	})
+	bd, err := graph.LoadBundle(storeFor(e), root.ID)
+	if err != nil {
+		t.Fatalf("LoadBundle: %v", err)
+	}
+
+	via := strings.Repeat("a", 64)
+	cb := graph.BuildContextWithClinicalLinks(bd, []string{anchor.ID}, []graph.LinkedAnchor{
+		{ID: linked.ID, ViaLinkID: via, Depth: 1},
+	}, 10_000, 1, 1)
+
+	item, ok := itemFor(cb, linked.ID)
+	if !ok {
+		t.Fatalf("linked endpoint missing from context: %+v", cb)
+	}
+	if item.Provenance != graph.ProvenanceClinicalLink || item.Granularity != graph.GranularityL0 {
+		t.Errorf("linked item provenance/granularity = %s/%s, want clinical_link/L0", item.Provenance, item.Granularity)
+	}
+	if item.ViaLinkID != via || item.LinkDepth != 1 {
+		t.Errorf("linked item audit path = via %q depth %d, want %q/1", item.ViaLinkID, item.LinkDepth, via)
+	}
+	if !strings.Contains(item.Text, `"value":37.8`) || !strings.Contains(item.Text, `"final":true`) {
+		t.Errorf("L0 text lost numeric/bool clinical content: %q", item.Text)
+	}
+	if len(cb.AnchorIDs) != 1 || cb.AnchorIDs[0] != anchor.ID {
+		t.Errorf("AnchorIDs = %v, want only original search anchor %s", cb.AnchorIDs, anchor.ID)
 	}
 }
 

@@ -331,24 +331,20 @@ type BeadStatusRow struct {
 // PatientRootsFor).
 //
 // The returned map has one entry per id actually found in bead_status; an id
-// absent from the map is not an error — retrieve's own caller treats an
-// absent id as "active" (see specs/U5_api_retrieve.md's crux 2 ruling): this
-// makes both "the record_state projector never ran on this store at all"
-// (bead_status is entirely empty) and "this one id's row is individually
-// missing" collapse to the same simple, testable default, deferring the
-// spec's stricter "controlled error on partial gap" hardening to a later
-// unit — see retrieve.go's own doc comment on where that judgment call is
-// applied.
+// absent from this low-level map is not itself a SQL error. The MCP retrieve
+// caller distinguishes a completely empty development store (fallback to
+// active) from a partial gap in a populated projection (controlled error),
+// as required by specs/U5_api_retrieve.md's crux 2 ruling.
 //
 // # Why this does not join projection_manifest
 //
 // Unlike a query that wants only "the currently active projection run"'s
 // rows, BeadStatusFor intentionally does NOT filter or join by
 // projection_manifest.status='active': writePatientState (record_state.go)
-// DELETEs a patient's stale bead_status rows (any row not stamped with the
-// run that is currently being written) inside the same per-patient
-// transaction it INSERTs the new rows in, so at most one run's rows for a
-// given patient_root ever physically exist in this table at once — a plain
+// DELETEs all of a patient's old bead_status rows inside the same per-patient
+// transaction in which it INSERTs the replacement rows, so at most one
+// generation's rows for a given patient_root ever physically exist in this
+// table at once — a plain
 // bead_id lookup already returns the current generation without needing to
 // cross-check projection_manifest at all (peer-confirmed invariant, specs/
 // U5_api_retrieve.md's "合意点" #5).
@@ -395,7 +391,7 @@ func (d *DB) BeadStatusFor(ids []string) (map[string]BeadStatusRow, error) {
 // store, where retrieve should still behave normally rather than exhibiting
 // every read as status-filtered-to-nothing) from an individual absent id
 // within an otherwise-populated table (see BeadStatusFor's own doc comment on
-// why both cases share the same "absent = active" per-id fallback for U5b).
+// how it distinguishes those two cases).
 // This is a single COUNT(*) query, called at most once per retrieve/get_links
 // call (not per id), so it adds no N+1 risk of its own.
 func (d *DB) BeadStatusTableEmpty() (bool, error) {

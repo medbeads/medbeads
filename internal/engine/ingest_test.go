@@ -252,6 +252,16 @@ func TestIngest_RejectsAttestationWithEmptyParents(t *testing.T) {
 	}
 }
 
+func TestIngest_RejectsSignatureAttestationWithEmptyParents(t *testing.T) {
+	e := openT(t)
+	attestation := unsavedBead("signature_attestation", nil, map[string]any{
+		"schema": "medbeads.signature_attestation.v1",
+	})
+	if _, err := e.Ingest(attestation); err == nil {
+		t.Fatal("Ingest of a signature_attestation Bead with empty parents succeeded, want error")
+	}
+}
+
 // TestIngest_AcceptsRetractionWithSubjectInParents is the positive-path
 // counterpart: a retraction Bead that names its subject in Parents (the
 // required shape) is accepted and lands in the SUBJECT's patient Pod, not
@@ -506,7 +516,11 @@ func TestIngest_TamperedIDRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bead.WithID: %v", err)
 	}
-	withID.ID = withID.ID[:len(withID.ID)-1] + "0" // flip the last hex digit
+	replacement := byte('0')
+	if withID.ID[len(withID.ID)-1] == replacement {
+		replacement = '1'
+	}
+	withID.ID = withID.ID[:len(withID.ID)-1] + string(replacement) // always flip the last hex digit
 	if withID.ID == "" {
 		t.Fatal("test precondition failed: mutated ID is empty")
 	}

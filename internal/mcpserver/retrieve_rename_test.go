@@ -57,6 +57,12 @@ func TestU5b_VocabularyRename_CleanCut(t *testing.T) {
 	if _, ok := retrieveSchemaProps["include_links"]; !ok {
 		t.Errorf("retrieve input schema missing %q property: %+v", "include_links", retrieveSchemaProps)
 	}
+	if _, ok := retrieveSchemaProps["link_depth"]; !ok {
+		t.Errorf("retrieve input schema missing %q property: %+v", "link_depth", retrieveSchemaProps)
+	}
+	if _, ok := retrieveSchemaProps["max_linked_beads"]; !ok {
+		t.Errorf("retrieve input schema missing %q property: %+v", "max_linked_beads", retrieveSchemaProps)
+	}
 	if _, ok := retrieveSchemaProps["include_unattested"]; !ok {
 		t.Errorf("retrieve input schema missing %q property: %+v", "include_unattested", retrieveSchemaProps)
 	}
