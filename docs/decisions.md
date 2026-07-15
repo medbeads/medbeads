@@ -266,3 +266,50 @@
 - **署名**: FHIR Provenance署名を検証できた場合だけ`clinical_origin`、connectorによる取得変換は
   `fhir_import`として署名する。
 - **仕様**: specs/R13_fhir_server_sync.md。
+
+## 2026-07-14: 論文改訂後の次期開発スケジュール
+
+- **順序**: `manuscript_v3-codex` でMedBeadsのコンセプト論文を完成させた後、ローカルにFHIRサーバを
+  構築し、Synthea由来の約1,100症例を用いてMedBeadsとの連携テストと実装開発へ進む。
+- **対象**: R13で設計した初回取り込み、差分同期、FHIR version/delete、checkpoint、quarantine、
+  source snapshotから臨床Beadへの変換、Provenance/署名連携、および障害後再開時の整合性を段階的に検証する。
+- **論文との境界**: これは今後の開発スケジュールであり、今回のコンセプト論文の本文・Future Workには
+  約1,100症例のローカルFHIRサーバ連携計画として記載しない。
+
+## 2026-07-15: R14 患者同一性・cross-patient graph contamination 防止（将来実装）
+
+- **位置付け**: 患者間リンク汚染への対策方針は設計として確定したが、MedBeads本体には未実装。
+  R13のFHIR server同期を実装する際、patient mapping/quarantineのproduction invariantとして組み込む。
+- **二重の境界**: 構造的混入は`patient_root`制約で拒否する。source EHRが別人へ一貫して誤ったPatientを
+  割り当てる意味的誤同定は構造だけでは検出できず、namespaced identifier、MPI assurance、組織署名、
+  監査・人手adjudicationを必要とする。
+- **ingest**: patient-scoped Beadに`expected_patient_root`を要求し、通常parents/amends/retractsのroot不一致、
+  subject不一致、未解決参照はappendせずquarantineする。複数患者rootから`_shared.pod`へ黙って
+  フォールバックしない。
+- **DB/監査**: `clinical_links`は`root(a)=root(b)=patient_root`をINSERT/UPDATE triggerでも強制する。
+  `verify_integrity`をPod metadata、Bead edges、訂正関係、clinical_linksのroot監査へ拡張する。
+- **多施設患者同一性**: FHIR `Patient.link`/`Person.link`を入力根拠とし、承認・組織署名・assurance・
+  consent/purpose/clearance・有効期間・撤回履歴を持つ専用`patient_identity_link`へ昇格する。通常の
+  `parents`/`clinical_links`とは分離し、root/Podは統合しない。
+- **互換性**: 現在のshared-parent利用を先に監査し、共有知識参照をEvidenceまたは専用knowledge referenceへ
+  移行してから通常parentの同一root制約を有効化する。
+- **仕様**: specs/R14_patient_identity_and_partition_integrity.md。
+
+## 2026-07-15: R15 法域中立の医療フェデレーション（将来実装）
+
+- **coreと法域の分離**: MedBeads coreは特定法を埋め込まず、不変Bead、署名、患者同一性、訂正、
+  clinical links、purpose、clearance、release manifest、audit receiptを共通機構とする。米国Cures/ONC、
+  EU EHDS/AI Act、日本のsecondary use等はversioned regulatory profileとして外付けする。
+- **三契約の分離**: token-budgetedなAI向け`retrieve`、要求範囲を省略しないFHIR/EHI完全export、
+  仮名化・最小化・secure environmentを伴うsecondary-use releaseを相互に代用しない。
+- **federation**: 将来のP2Pはpublic networkではなく、認証・契約された役割付きnodeによるpermissioned
+  federationとする。control planeのtrust/identity/permitと、暗号化されたdata planeを分離する。
+- **識別子保護**: Bead IDをpublic network locatorとして広告しない。研究releaseは仮名化後の新しい
+  canonical object/IDを生成し、元patient root・FHIR identifier・source Bead IDとの対応は分離vaultに置く。
+- **derived interpretation**: 受信施設は署名・manifestを検証し、自施設のknowledge/policy世代で
+  clinical linksを再構築する。外部derived linkを無条件に正本化しない。
+- **blockchain/IPFS**: coreの必須要件にしない。private P2P transportは後から選択可能。blockchainは
+  中央運営者なしの共有監査logが必要と実証された場合にcommitment用途へ限定し、医療情報本体を載せない。
+- **論文境界**: 現在の国際コンセプト論文へ日本固有法または各国法の詳細な適合主張は追加せず、
+  将来実装・別論文・法域別deployment profileとして扱う。
+- **仕様**: specs/R15_jurisdiction_neutral_federation.md。
