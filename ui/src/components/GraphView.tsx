@@ -1,4 +1,4 @@
-import { useMemo, useCallback, useState, useEffect } from 'react';
+import { useMemo, useCallback, useState, useEffect, useRef } from 'react';
 import ReactFlow, {
   Background,
   Controls,
@@ -69,7 +69,7 @@ const PAPER = {
   ink: '#1A2027',
   spine: '#3B3170',
   spineTint: '#EDEBF5',
-  quietArc: '#B8B2C8',
+  quietArc: '#81799A',
   warningArc: '#B45309',
   activeAccent: '#2F855A',
 };
@@ -77,7 +77,7 @@ const PAPER = {
 // severity: info = thin pale indigo/grey (co-occurrence always reads as
 // quiet), warning = amber, alert/critical = red (critical thicker still).
 const SEVERITY_STYLE: Record<GraphLinkSeverity, { stroke: string; width: number; dashed?: boolean }> = {
-  info: { stroke: PAPER.quietArc, width: 1 },
+  info: { stroke: PAPER.quietArc, width: 2 },
   warning: { stroke: PAPER.warningArc, width: 2.25 },
   alert: { stroke: '#c2410c', width: 3 },
   critical: { stroke: '#9f1d1d', width: 4 },
@@ -838,7 +838,7 @@ function ArcLinkEdge({ id, sourceX, sourceY, targetX, targetY, data, markerEnd }
 
   const strokeStyle = figureMode
     ? FIGURE_SEVERITY_STYLE[data?.severity ?? 'info']
-    : { ...SEVERITY_STYLE[data?.severity ?? 'info'], opacity: quiet ? 0.32 : 0.85 };
+    : { ...SEVERITY_STYLE[data?.severity ?? 'info'], opacity: quiet ? 0.78 : 0.85 };
 
   return (
     <>
@@ -854,10 +854,10 @@ function ArcLinkEdge({ id, sourceX, sourceY, targetX, targetY, data, markerEnd }
           // severity='info' whenever evidence_basis='cooccurrence' — see
           // migrations_0006_test.go), which is exactly the "haze" a
           // paper-figure capture reported as visually noisy at 483 links.
-          // Lowered further (0.5 -> 0.32) so the co-occurrence mass recedes
-          // and true warning/alert/critical arcs stay legible by contrast —
-          // static tuning only, no new interactive state (kept intentionally
-          // simple per this round's "optional, don't over-engineer" note).
+          // Interactive links must remain visible against the paper
+          // background. A moderate opacity keeps large co-occurrence sets
+          // subordinate to warning/alert/critical arcs without making small
+          // link sets look absent.
           // Figure mode (requirement 2) instead uses FIGURE_SEVERITY_STYLE,
           // which raises the whole scale (width AND opacity) so `info` reads
           // as a deliberate line in print rather than an artifact, while
@@ -1135,6 +1135,10 @@ function BeadGraphView({
   figureMode?: boolean;
 }) {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set());
+  // A clinical_link relates Beads, not encounter cards. Link focus therefore
+  // expands the two encounters containing a representative linked pair and
+  // keeps the arc endpoints on the actual horizontally-laid-out Bead tiles.
+  const [linkFocusActive, setLinkFocusActive] = useState(() => graph.links.length > 0);
   // Legend starts OPEN by default (top-right, clear of the spine which
   // originates top-left — see defaultViewport below) — still collapsible via
   // its header toggle for users who want the extra width back.
@@ -1162,7 +1166,12 @@ function BeadGraphView({
     });
   }, []);
 
-  const { fitView } = useReactFlow();
+  const { fitView, setViewport } = useReactFlow();
+  // Each patient is automatically focused once on a nearby linked encounter
+  // pair. Without this, the viewport starts at the newest encounter while a
+  // patient's clinical_links may all be much farther down the time spine,
+  // which makes a valid graph look as if it has no links at all.
+  const autoFocusedPatientRef = useRef<string | null>(null);
 
   // Requirement 2 — figure-mode auto-focus: in figure mode, a pair of nearby
   // encounters whose children are linked by clinical_links (findFigureFocus
@@ -1181,14 +1190,14 @@ function BeadGraphView({
   // reintroduce the render loop documented on BeadTile (hover is still not
   // involved anywhere in this computation).
   const effectiveExpandedIds = useMemo(() => {
-    if (!figureMode) return expandedIds;
+    if (!figureMode && !linkFocusActive) return expandedIds;
     const focus = findFigureFocusPair(graph);
     if (!focus) return expandedIds;
     if (focus.pair.every((id) => expandedIds.has(id))) return expandedIds;
     const next = new Set(expandedIds);
     focus.pair.forEach((id) => next.add(id));
     return next;
-  }, [figureMode, graph, expandedIds]);
+  }, [figureMode, linkFocusActive, graph, expandedIds]);
 
   const { nodes, edges } = useMemo(() => {
     const tm = tileMetricsFor(figureMode);
@@ -1264,8 +1273,11 @@ function BeadGraphView({
       nodes.push({
         id: encounter.id,
         position: pos,
+        // As a parent, an encounter connects rightward to its expanded Bead
+        // children. As a child, it receives the registration parent edge at
+        // the top, preserving the vertical registration -> encounter DAG.
         sourcePosition: Position.Right,
-        targetPosition: Position.Left,
+        targetPosition: Position.Top,
         className: 'bead-encounter-node',
         data: {
           label: (
@@ -1407,12 +1419,27 @@ function BeadGraphView({
 
     const edges: Edge[] = [];
 
-    // Vertical spine: parent DAG edges are implicit in the stacked-card
-    // layout itself (chapter -> its own expanded children are visually
-    // grouped; no explicit line needed and none is drawn), so the only
-    // rendered edges are the horizontal-axis clinical_links (arcs) and the
-    // correction chains (amends/retracts), which can legitimately connect
-    // across encounters (e.g. an amendment recorded at a later encounter).
+    // Vertical axis: the persisted parent DAG from graph.edges. The patient
+    // registration -> encounter edges form the vertical backbone. When an
+    // encounter is expanded, its encounter -> Bead edges branch rightward
+    // into the horizontal tile islands. Collapsed child edges resolve back
+    // to their owning encounter and are skipped as self-edges.
+    graph.edges.forEach((parentEdge) => {
+      const parentNodeId = renderNodeIdFor(parentEdge.parent_id);
+      const childNodeId = renderNodeIdFor(parentEdge.child_id);
+      if (!parentNodeId || !childNodeId || parentNodeId === childNodeId) return;
+      edges.push({
+        id: `parent-${parentEdge.parent_id}-${parentEdge.child_id}`,
+        source: parentNodeId,
+        target: childNodeId,
+        type: 'straight',
+        className: 'parent-dag-edge',
+        style: { stroke: PAPER.spine, strokeWidth: 1.5, opacity: 0.3 },
+      });
+    });
+
+    // Correction chains (amends/retracts) and horizontal-axis
+    // clinical_links can legitimately connect across encounters.
 
     // Correction chains (amends/retracts): resolve each endpoint through the
     // same collapse-aware mapping as clinical_links so a chain into a
@@ -1489,6 +1516,7 @@ function BeadGraphView({
         source: sourceNodeId,
         target: targetNodeId,
         type: 'arcLink',
+        className: 'clinical-link-edge',
         data: {
           relation: link.relation,
           matchedTag: link.matched_tag,
@@ -1504,6 +1532,75 @@ function BeadGraphView({
     return { nodes, edges };
   }, [graph, selectedBeadId, effectiveExpandedIds, toggleExpanded, figureMode]);
 
+  const focusClinicalLinks = useCallback(
+    (duration = 300): boolean => {
+      const focus = findFigureFocusPair(graph);
+      if (!focus) return false;
+
+      // Include both owning encounters and the real Bead endpoints: the
+      // former retain the vertical parent DAG in-frame, while the latter
+      // show clinical_links landing on horizontally expanded Bead tiles.
+      const focusIds = [...focus.pair, ...focus.linkedBeadIds];
+      const uniqueIds = Array.from(new Set(focusIds));
+      if (uniqueIds.length < 2 || !uniqueIds.every((id) => nodes.some((node) => node.id === id))) {
+        return false;
+      }
+
+      return fitView({
+        nodes: uniqueIds.map((id) => ({ id })),
+        padding: figureMode ? 0.3 : 0.45,
+        maxZoom: figureMode ? 0.9 : 1.1,
+        duration,
+      });
+    },
+    [figureMode, fitView, graph, nodes],
+  );
+
+  // Make at least one clinical_link visible when Graph View first opens for
+  // a patient. ReactFlow measures nodes asynchronously, so retry for a few
+  // animation frames just as the figure-mode focus below does.
+  useEffect(() => {
+    if (
+      figureMode ||
+      !linkFocusActive ||
+      graph.links.length === 0 ||
+      autoFocusedPatientRef.current === graph.patient_root
+    ) return;
+
+    let attempts = 0;
+    let rafId: number;
+    const tryFocus = () => {
+      const didFit = focusClinicalLinks(0);
+      attempts += 1;
+      if (didFit) {
+        autoFocusedPatientRef.current = graph.patient_root;
+      } else if (attempts < 30) {
+        rafId = requestAnimationFrame(tryFocus);
+      }
+    };
+    rafId = requestAnimationFrame(tryFocus);
+    return () => cancelAnimationFrame(rafId);
+  }, [figureMode, focusClinicalLinks, graph.links.length, graph.patient_root, linkFocusActive]);
+
+  const showClinicalLinks = useCallback(() => {
+    if (linkFocusActive) {
+      focusClinicalLinks();
+      return;
+    }
+    // Re-arm the focus effect even if the user previously returned to the
+    // timeline or manually panned away from the linked Beads.
+    autoFocusedPatientRef.current = null;
+    setLinkFocusActive(true);
+  }, [focusClinicalLinks, linkFocusActive]);
+
+  const focusTimelineStart = useCallback(() => {
+    setLinkFocusActive(false);
+    void setViewport(
+      { x: spineViewportMargin, y: spineViewportMargin, zoom: 1 },
+      { duration: 300 },
+    );
+  }, [setViewport]);
+
   const handleNodeClick = useCallback(
     (_: React.MouseEvent, node: Node) => {
       const bead = graph.beads.find((b) => b.id === node.id);
@@ -1512,55 +1609,21 @@ function BeadGraphView({
     [graph, onBeadClick],
   );
 
-  // Requirement 2 (continued): once the auto-focus pair (see the effect
-  // above) has actually been expanded into real nodes — i.e. `nodes` has
-  // been rebuilt by the useMemo above and contains their child tiles — pan/
-  // zoom so both focus encounter cards and the specific linked bead tiles
-  // are visible together, which is what puts both endpoints of the arcs
-  // between them inside the frame. Deliberately does NOT fit to the whole
-  // 542-bead spine: that would zoom out far enough that arc labels/tile text
-  // become illegible again, defeating requirement 1 (see the focusNodeIds
-  // comment below for the two tighter alternatives that were also tried and
-  // rejected). Only runs in figure mode — the interactive view keeps its
-  // pinned top-left defaultViewport (see the ReactFlow props below)
-  // untouched.
+  // Figure mode uses the same two-axis focus as the interactive link view:
+  // keep the owning encounter cards (and therefore the vertical parent DAG)
+  // in frame together with the specific horizontal Bead endpoints.
   useEffect(() => {
     if (!figureMode) return;
     const focus = findFigureFocusPair(graph);
     if (!focus) return;
-    const { linkedBeadIds } = focus;
-    // Fit to ONLY the specific bead tiles the clinical_links actually
-    // connect (linkedBeadIds) — deliberately NOT the two encounter cards
-    // themselves. Three things were tried and rejected first, all verified
-    // with a Playwright capture + real DOM node positions read back from the
-    // page:
-    //   - fitting to just the two encounter cards: crops out the tiles
-    //     entirely, since an expanded island renders well to the right of
-    //     its card (layoutBeadGraph's `islandX = encounterCardWidth +
-    //     islandGap`).
-    //   - fitting to the two cards + EVERY child in both islands: bloats the
-    //     bounding box enough that fitView zooms out to the point tile text
-    //     is illegible (defeats requirement 1).
-    //   - fitting to the two cards + only the linked tiles: still too wide,
-    //     because the linked tiles' own island (e.g. medicationrequest) can
-    //     sit ~2000px right of the card at x:0 simply because several OTHER
-    //     islands (condition/observation/diagnosticreport/procedure) are
-    //     laid out before it in TYPE_ORDER — the cards being pinned at x:0
-    //     forces the same wide bounding box regardless of which children are
-    //     selected. The task's actual requirement is "arcs land inside the
-    //     frame with both endpoints on identifiable Beads", not "the
-    //     originating encounter card must also be in frame" — the card is
-    //     still one click away and its date/type is visible in the tile
-    //     data itself, so dropping it from the FIT target (it still renders,
-    //     just outside this frame) is what actually satisfies the
-    //     requirement instead of fighting the existing island layout.
-    const focusNodeIds = linkedBeadIds.map((id) => ({ id }));
+    const focusIds = Array.from(new Set([...focus.pair, ...focus.linkedBeadIds]));
+    const focusNodeIds = focusIds.map((id) => ({ id }));
 
     // Only attempt once the useMemo above has actually produced nodes for
     // the focus pair's linked tiles (guards the first render, where `nodes`
     // may still reflect the pre-expand state before effectiveExpandedIds
     // includes them).
-    const ready = linkedBeadIds.every((id) => nodes.some((n) => n.id === id));
+    const ready = focusIds.every((id) => nodes.some((n) => n.id === id));
     if (!ready) return;
 
     // ReactFlow's fitView() silently no-ops (returns false, per its
@@ -1654,6 +1717,11 @@ function BeadGraphView({
             </div>
 
             <div className="mb-2">
+              <div className="font-medium mb-1" style={{ color: '#5b5b56' }}>Vertical axis</div>
+              <LegendLine color={PAPER.spine} width={1.5} label="parent DAG edge" />
+            </div>
+
+            <div className="mb-2">
               <div className="font-medium mb-1" style={{ color: '#5b5b56' }}>Status (card border)</div>
               <div className="space-y-1">
                 <LegendSwatch color={PAPER.activeAccent} label="active" />
@@ -1692,6 +1760,41 @@ function BeadGraphView({
               </div>
             </div>
           </>
+        )}
+      </div>
+
+      {/* clinical_links are derived graph data and may occur far below the
+          newest encounter. Keep their count and navigation visible even when
+          the current viewport is elsewhere on the time spine. */}
+      <div
+        className="nodrag nopan absolute bottom-4 right-4 rounded-lg border bg-white p-2.5 text-xs shadow-lg"
+        style={{ borderColor: PAPER.spine, color: PAPER.ink, zIndex: 20000 }}
+        data-testid="clinical-link-summary"
+      >
+        <div className="font-semibold">
+          {graph.links.length} clinical_link{graph.links.length === 1 ? '' : 's'}
+        </div>
+        {graph.links.length > 0 ? (
+          <div className="mt-2 flex gap-1.5">
+            <button
+              type="button"
+              onClick={showClinicalLinks}
+              className="rounded px-2 py-1 text-white"
+              style={{ background: PAPER.spine }}
+            >
+              Show linked Beads
+            </button>
+            <button
+              type="button"
+              onClick={focusTimelineStart}
+              className="rounded border px-2 py-1"
+              style={{ borderColor: PAPER.spine, color: PAPER.spine }}
+            >
+              Timeline top
+            </button>
+          </div>
+        ) : (
+          <div className="mt-1 text-[10px] text-slate-500">No projected links for this patient</div>
         )}
       </div>
     </ReactFlow>
@@ -1754,6 +1857,7 @@ export default function GraphView(props: GraphViewProps) {
       <ReactFlowProvider>
         {props.graph ? (
           <BeadGraphView
+            key={props.graph.patient_root}
             graph={props.graph}
             onBeadClick={props.onBeadClick}
             selectedBeadId={props.selectedBeadId}

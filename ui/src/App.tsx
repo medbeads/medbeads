@@ -253,7 +253,9 @@ function App() {
                         )}
                     </div>
                     <span className="px-3 py-1 bg-white/20 text-white text-sm font-semibold rounded-lg">
-                        {viewMode === 'graph' ? `${patientGraph?.beads.length ?? 0} beads` : `${filteredItems.length} items`}
+                        {viewMode === 'graph'
+                          ? `${patientGraph?.beads.length ?? 0} beads · ${patientGraph?.links.length ?? 0} links`
+                          : `${filteredItems.length} items`}
                     </span>
                     <button
                       onClick={(e) => {
