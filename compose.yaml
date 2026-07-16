@@ -1,0 +1,52 @@
+name: medbeads-paper-demo
+
+services:
+  core:
+    image: medbeads-paper-demo-core:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        MEDBEADS_PROJECTION_VERSION: paper-demo-v1
+    command:
+      - serve
+      - -data
+      - /data
+      - -role
+      - viewer
+      - -http
+      - 0.0.0.0:8080
+      - -projection-code-version
+      - paper-demo-v1
+    environment:
+      MEDBEADS_CORS_ORIGINS: http://localhost:5174,http://127.0.0.1:5174
+    ports:
+      - "127.0.0.1:8080:8080"
+    init: true
+    stop_grace_period: 15s
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    labels:
+      io.medbeads.distribution-profile: public-paper-demo
+      io.medbeads.data-classification: synthetic-only
+  ui:
+    image: medbeads-paper-demo-ui:local
+    build:
+      context: ./ui
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: /api/core
+    depends_on:
+      - core
+    ports:
+      - "127.0.0.1:5174:5174"
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    labels:
+      io.medbeads.distribution-profile: public-paper-demo
+      io.medbeads.data-classification: synthetic-only

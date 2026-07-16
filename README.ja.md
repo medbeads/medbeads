@@ -1,304 +1,146 @@
-# MedBeads: 医療AIのためのイミュータブルでエージェントネイティブなデータ基盤
+# MedBeads
 
-> **お知らせ:** `main` は v3 統合再構築中です（仕様: `specs/DESIGN_v3.md`）。
-> 安定版 v2 は タグ `v2.2.0` またはブランチ `v2-maintenance` を参照してください。
+MedBeadsは、コンテンツアドレス化された不変の **Bead** と、再構築可能な
+**clinical links**からなる、生成AI向け医療情報基盤です。患者の縦断的記録を患者単位Podへ格納し、
+明示的なリンクを決定論的に辿ることで、生成AIが必要とする連結コンテキストを準備します。
 
-## v3 クイックスタート
+![MedBeadsコンセプト](docs/concept-image.jpeg)
 
-v3 のコアは単一 Go バイナリ `medbeadsd`（エンジン + MCP サーバー + REST API）です。
-必要環境: Go 1.25+、C コンパイラ（CGO）、サンプルデータ投入用の [uv](https://docs.astral.sh/uv/)。
-本節より下の説明は **v2** のもので、v3 完成時に全面改訂します。`main` を動かす手順はこちらです。
+> **公開配布プロファイル:** このリポジトリは研究用reference implementation／論文再現デモです。
+> 合成データだけを含み、本番電子カルテ、医療機器、臨床利用可能なdeploymentではありません。
+> 詳細は[R16](specs/R16_public_demo_and_production_boundary.md)を参照してください。
+
+[English](README.md)
+
+## Dockerクイックスタート
+
+必要環境はDocker Desktop、またはDocker Engine＋Compose v2だけです。
 
 ```bash
-# 1. ビルド（sqlite_fts5 タグと CGO が必須）
+git clone https://github.com/medbeads/medbeads.git
+cd medbeads
+docker compose up --build
+```
+
+起動後、**http://localhost:5174** を開きます。初回ビルドではGoコアのコンパイル、Pod検証、
+`index.db`の再構築、clinical linksの投影、React UIのビルドを自動実行します。
+APIキー、外部FHIRサーバ、Python環境、ローカルのGo／Node.jsは不要です。
+
+公開ポートはlocalhostだけに限定しています。
+
+- UI: http://127.0.0.1:5174
+- REST API／MCP HTTP endpoint: http://127.0.0.1:8080
+
+停止とデモコンテナの削除は次のコマンドです。
+
+```bash
+docker compose down
+```
+
+再度`docker compose up`を実行すると、イメージに格納された合成seedから起動します。
+ソース変更後に再構築する場合は`docker compose up --build`を使用します。
+
+## 確認できる内容
+
+同梱データは、決定的に選択したSynthea合成患者10人、患者Bead 4,202件、
+共有knowledge Pod 1件、投影済みclinical links 492件です。
+
+1. UIで患者を選択します。
+2. 縦方向のparent／時間DAGと、横方向の`clinical_links`を確認します。
+3. viewer roleを変更し、security clearanceによる表示制御を確認します。
+4. REST APIを確認します。
+
+   ```bash
+   curl http://127.0.0.1:8080/patients
+   ```
+
+5. 全Pod frameとBead hashを検証します。
+
+   ```bash
+   docker compose exec core medbeadsd verify -data /data
+   ```
+
+同じGoコアが`/mcp`でMCPを提供し、決定論的retrieveと上限付きclinical-link展開を
+生成AIクライアントへ返せます。外部LLMは任意であり、paper-demoコンテナには含めません。
+
+## 公開デモと本番開発の区別
+
+公開デモは意図的に次の範囲へ限定します。
+
+- 合成患者10人と固定されたBead corpus
+- 新規患者登録と`create_bead`権限なし
+- service tokenを持たない`viewer` MCP role
+- localhost限定ポート
+- FHIR credential、病院identity、秘密鍵、実患者データなし
+- clearance表示確認用の、破棄可能な派生状態変更
+
+本番開発では同じcoreの意味論を利用しますが、施設FHIR endpoint、患者identity mapping、
+trust policy、credential、KMS/HSM、監視、backup、実データは、別管理のprivate deployment
+overlayに置きます。R13/R14の完全性制御および運用・セキュリティ・性能・規制検証を満たすまでは、
+MedBeadsをproduction-readyとは表記しません。
+
+## 構成
+
+```text
+ブラウザ
+  │
+  ▼
+Nginx / React UI :5174
+  │  /api/core/*
+  ▼
+medbeadsd :8080 ── REST + MCP
+  │
+  ├── 患者単位Pod              不変の正本
+  └── index.db                 再構築可能な検索／リンク投影
+```
+
+`medbeadsd`はengine、REST API、MCP serverを統合した単一Goデーモンです。
+Docker buildは開発機で作ったSQLiteを配布せず、commitされたPod正本からSQLiteを再構築します。
+
+## Dockerを使わないローカル開発
+
+必要環境はGo 1.25以上、C compiler、Node.js 24以上です。
+
+```bash
+# Core
 CGO_ENABLED=1 go build -tags sqlite_fts5 -o medbeadsd ./cmd/medbeadsd
-
-# 2. 同梱の Synthea 合成10患者を投入（MCP 経由、約30秒）
-cd bench && uv run python -m bench.ingest \
-  --fhir-dir ../FHIR_sample --data-dir ../demo_data --medbeadsd ../medbeadsd
-cd ..
-
-# 大規模Synthea出力から再現可能な10患者を作る場合（filename順の先頭10件）
-# cd bench && uv run python -m bench.ingest --fhir-dir ~/medbeads-synthea/output/fhir --limit 10 --data-dir ../demo_data --medbeadsd ../medbeadsd
-
-# 3. デーモン起動: 同一ポートで REST（/）と MCP（/mcp）
-./medbeadsd serve -data ./demo_data -role viewer -http 127.0.0.1:8080
-
-# 4. 動作確認
-curl http://127.0.0.1:8080/patients          # REST（v2 契約凍結、UI が使用）
-./medbeadsd verify -data ./demo_data          # 暗号学的完全性検証
-./medbeadsd reindex -data ./demo_data         # Pod 正本のみから index.db を再構築
+./medbeadsd reindex -data ./demo_data
+./medbeadsd reproject -data ./demo_data -code-version local-demo -record-state -drain
+./medbeadsd serve -data ./demo_data -role viewer -http 127.0.0.1:8080 \
+  -projection-code-version local-demo
 ```
 
-serve（および取込中のsystem-role stdio server）は、新規Beadの索引・当該患者の
-clinical_links・訂正状態を同じcommitで自動更新します。通常追記後の手動reprojectは不要です。
-知識ルールまたは投影コード世代を変更した場合は、全患者を一斉処理せず優先度付きqueueで更新します。
-新規データ患者は即時、残りは最近受診・長期未受診・死亡hintの順に小バッチ処理されます。
-
-単一病院の署名付きルール運用は`medbeadsd trust init`で病院ID・表示名・Ed25519公開鍵policyを作成し、
-`trust release`でlink_rule集合を承認します。本番の秘密鍵はローカルファイルではなくKMS/HSMで管理します。
-`serve -trust-policy <policy.json>`は起動時にactive knowledge releaseを再検証し、未承認ルールを拒否します。
-詳細は`specs/R12_signature_attestation_and_release.md`、FHIRサーバ同期案は
-`specs/R13_fhir_server_sync.md`を参照してください。
-
-React UI: `cd ui && cp .env.example .env && npm ci && npm run dev`
-（`.env` の `VITE_API_BASE_URL=http://localhost:8080` を使用。`.env.example` にある
-Python AI API は v3 で廃止済みのため無視してよい）。
-
-MCP クライアント（Claude Desktop / Claude Code）からは stdio モードで:
-`medbeadsd serve -data ./demo_data -role viewer` — `-role system` で書き込みツール
-（`create_bead`）が有効になります。
-
-MedBeads は、医療AIにおける「コンテキストの不整合（Context Mismatch）」を解決するために設計された **イミュータブル（不変）なエージェントネイティブ・データインフラストラクチャ** です。従来の可変なリレーショナルデータベースから **マークル有向非巡回グラフ（Merkle DAG）** へと医療記録を再構築することで、MedBeads は自律型エージェントに対して、明示的な因果関係、改ざん検知性、決定論的なコンテキスト取得機能を提供します。
-
-![MedBeads Concept](docs/concept-image.jpeg)
-
-**コンテキストの不整合（The Context Mismatch Problem）:**
-現在の電子カルテ（EMR）やFHIR規格は人間の閲覧用に設計されており、暗黙的なコンテキストや確率的な検索（Vector RAGなど）に依存しているため、AIのハルシネーション（幻覚）を引き起こす原因となっています。MedBeads はこのパラダイムを転換します：
-*   **確率的から決定論的へ:** コンテキストを推測するのではなく、AIエージェントは明示的な暗号学的リンクを辿ります。
-*   **可変から不変へ:** すべての記録（"Bead"）はコンテンツアドレス指定され、変更不可能であり、監査可能性を保証します。
-*   **冗長からトークン効率的へ:** 構造化されたグラフは、圧縮された「AIネイティブ言語」として機能します。
-
----
-
-[English](README.md) | [日本語](README.ja.md)
-
-## システムアーキテクチャ
-
-```mermaid
-graph TD
-    User((User))
-    
-    subgraph Frontend
-        UI["React UI (Vite)<br/>Port: 5174"]
-    end
-    
-    subgraph Backend
-        Core["Go Core Server<br/>Port: 8080"]
-        API["Python AI API<br/>Port: 8000"]
-    end
-    
-    subgraph Storage
-        Objects["Object Storage<br/>(CAS)"]
-        SQL["Metadata DB<br/>(SQLite)"]
-    end
-    
-    subgraph External
-        Gemini[Gemini AI API]
-    end
-
-    User -->|Browser| UI
-    UI -->|Data/Search| Core
-    UI -->|AI Analysis| API
-    
-    API -->|Get Context| Core
-    API -->|Generate| Gemini
-    
-    Core -->|Read/Write| Objects
-    Core -->|Read/Write| SQL
-```
-
-### ディレクトリ構造
-
-```
-medbeads/
-├── core/                    # Go バックエンドサーバー
-│   ├── main.go              # エントリーポイント
-│   ├── medbeads_data/       # データ保存領域 (Dockerではマウント)
-│   └── Dockerfile           # Core用 Dockerfile
-│
-├── api/                     # Python AI APIサーバー
-│   ├── main.py              # FastAPIエントリーポイント
-│   ├── ai.py                # Gemini AI連携ロジック
-│   └── Dockerfile           # API用 Dockerfile
-│
-├── ui/                      # React フロントエンド
-│   ├── src/                 # ソースコード
-│   └── Dockerfile           # UI用 Dockerfile
-│
-├── FHIR_sample/             # サンプルデータ (Synthea由来)
-├── docker-compose.yml       # Docker構成ファイル
-└── start.sh                 # ローカル開発用起動スクリプト
-```
-
-## 設定 (Configuration)
-
-AI機能を利用するには、Google Gemini APIキーの設定が必要です。
-
-1. サンプルの環境変数ファイルをコピーします:
-   ```bash
-   cp api/.env.example api/.env
-   ```
-2. `api/.env` を編集し、取得したAPIキーを設定してください:
-   ```
-   GEMINI_API_KEY=your_actual_api_key_here
-   ```
-
-## クイックスタート (Docker)
-
-MedBeads を最も簡単に実行する方法は Docker を使用することです。これにより、Core、API、UI の各サービスが起動します。
-
-### 前提条件
-- Docker Engine
-- Docker Compose
-
-### アプリケーションの実行
-
-1. コンテナのビルドと起動:
-   ```bash
-   docker-compose up --build
-   ```
-
-2. **ブラウザでUIにアクセス:**
-   
-   👉 **http://localhost:5174**
-
-3. 全サービス一覧:
-   - **UI (Visualizer):** [http://localhost:5174](http://localhost:5174)
-   - **AI API:** [http://localhost:8000](http://localhost:8000)
-   - **Core Engine:** [http://localhost:8080](http://localhost:8080)
-
-4. アプリケーションの停止:
-   ```bash
-   Ctrl+C
-   ```
-
-### プリロード済みサンプルデータ
-
-このリポジトリには、すぐにデモできるように **3名のサンプル患者** が含まれています。FHIRサンプルから追加の患者を取り込むには、Docker起動中に以下のコマンドを実行してください:
+別のterminalでUIを起動します。
 
 ```bash
-# 追加の患者を取り込み（例: 5名追加）
-uv run --with requests scripts/mass_ingest.py FHIR_sample --limit 5
+cd ui
+cp .env.example .env.local
+npm ci
+npm run dev
 ```
 
-## ローカル開発 (手動実行)
+`bench/`配下のPythonコードは再現可能な取込・benchmark用であり、v3の常駐serviceではありません。
 
-Docker を使用せずに個別にサービスを実行したい場合は、以下の手順に従ってください。
+## 完全性と派生リンク
 
-### 前提条件
-- Go 1.21+
-- Python 3.12+ (`uv` で管理)
-- Node.js 20+
+- Bead IDはcanonical contentのSHA-256 digestです。
+- Beadは患者単位Podへ追記され、上書きされません。
+- `index.db`は派生状態で、Podから再構築できます。
+- `clinical_links`はversion付きruleとprojection codeから導出し、患者単位で更新できます。
+- retrieveはrecord status、患者partition、security clearance、depth／item／token上限を適用します。
 
-### ワンクリック・スタート（推奨）
-ヘルパースクリプトを使用して、環境確認、サンプルデータの取り込み、全サーバーの起動を一括で行うことができます:
+設計と実装判断は[`specs/`](specs/)と[`docs/decisions.md`](docs/decisions.md)に記録しています。
+
+## テスト
+
 ```bash
-./start.sh
+CGO_ENABLED=1 go test -tags sqlite_fts5 ./... -race
+cd ui && npm test && npm run build
 ```
 
-### 手動手順 (詳細)
+## 引用
 
-1. **Core Engine (Go) の起動:**
-   データの保存とインデックスを管理するサービスです。
-   ```bash
-   cd core
-   go run main.go
-   # Server runs on localhost:8080
-   ```
-
-2. **初期データの取り込み (Python):**
-   *(データベースが空の場合に必須)*
-   FHIR サンプルのデータを Beads に変換し、Core Engine に送信します。
-   Core が起動している状態で、**新しいターミナル**を開いて実行してください:
-   ```bash
-   # 5件のサンプル患者データを取り込み
-   uv run --with requests scripts/mass_ingest.py medbeads/FHIR_sample --limit 5
-   ```
-
-3. **Start AI API (Python):**
-   AI分析機能を提供するサービスです。
-   ```bash
-   cd api
-   uv run uvicorn main:app --host 0.0.0.0 --port 8000
-   ```
-
-4. **Start UI (React):**
-   フロントエンドの可視化インターフェースです。
-   ```bash
-   cd ui
-   npm install
-   npm run dev
-   # Access at http://localhost:5174
-   ```
-
-## データアーキテクチャと取り込みフロー
-
-1. **FHIR ソースデータ**
-   - `medbeads/FHIR_sample/`（一般サンプル）または `sample_data/fhir/`（セキュリティクリアランステストデータ）に配置されています。
-   - 生の FHIR JSON ファイルが含まれます。
-
-2. **取り込みプロセス (Python)**
-   - `python scripts/mass_ingest.py` (または `uv run`) を実行します。
-   - スクリプトは JSON ファイルを読み込み、**Beads** (マークルグラフノード) に変換して Core Server の API 経由で送信します。
-   - **重要:** Beads は SQLite にインデックス登録されるために、必ず API 経由で取り込む必要があります。オブジェクトファイルを単にコピーしただけではデータベースに登録されません。
-
-3. **ストレージ (Core Engine)**
-   - **Content Addressable Storage (CAS):** 生データは `medbeads/core/medbeads_data/objects/` に不変ファイルとして保存されます。
-   - **Metadata Index (SQLite):** 検索可能なインデックスが `medbeads/core/medbeads_data/metadata.db` に保存されます。
-
-4. **Docker 起動時の取り込み**
-   - Docker（`deploy/hf/Dockerfile`）で実行する場合、スタートアップスクリプトが自動的に以下を実行します：
-     1. Core サーバーを一時的に起動
-     2. `mass_ingest.py` を使用して `sample_data/fhir/` から FHIR データを取り込み
-     3. セキュリティクリアランスルールを設定
-     4. supervisord でサービスを再起動
-
-## セキュリティクリアランス
-
-MedBeads は、特定の医療記録を誰が閲覧できるかを制御する **セキュリティクリアランス** をサポートしています。**ブラックリストモデル**（デフォルト：全員閲覧可、特定のロールを明示的に拒否）を採用しています。
-
-### 閲覧者ロール
-
-| ロール | ラベル（英語） | 説明 |
-|--------|---------------|------|
-| `patient` | Patient | 患者本人 |
-| `family` | Family | 家族 |
-| `primary_care` | Primary Care | 主治医 |
-| `specialist` | Specialist | 専門医 |
-| `nurse` | Nurse | 看護師 |
-| `insurance` | Insurance | 保険会社 |
-| `researcher` | Researcher | 研究者 |
-| `emergency` | Emergency | 緊急時オーバーライド（全制限を無視） |
-| `system` | System | システム/AI（フルアクセス） |
-
-### サンプルテスト患者
-
-`sample_data/fhir/` ディレクトリには、さまざまなクリアランスシナリオを持つ5名のテスト患者が含まれています：
-
-| 患者 | シナリオ | クリアランス |
-|------|----------|-------------|
-| 患者A (30代女性) | 婦人科受診 | 家族から隠す |
-| 患者B (50代男性) | がん疑い | 患者・家族から一時的に隠す（2週間） |
-| 患者C (40代男性) | 精神科通院 | 保険会社から隠す |
-| 患者D (60代女性) | 一般内科 | 制限なし |
-| 患者E (20代男性) | 複合/緊急 | 複数の制限（薬物検査、アルコール） |
-
-### クリアランスのテスト
-
-UIヘッダーの **Viewer Role セレクター** を使用してロールを切り替え、制限された記録がどのように表示または非表示になるかを確認できます。
-
-## シードデータ（初期データ）の投入
-
-リポジトリに初期シードデータ（例：サンプルの半分）を投入してコミットしたい場合の手順:
-
-1. Core Server を起動:
-   ```bash
-   cd core && go run main.go
-   ```
-2. 取り込みスクリプトを実行 (別ターミナル):
-   ```bash
-   uv run --with requests medbeads/scripts/mass_ingest.py medbeads/FHIR_sample --limit 5
-   ```
-3. (任意) 生成されたデータを強制的にコミット:
-   ```bash
-   git add -f core/medbeads_data/metadata.db core/medbeads_data/objects/
-   ```
-
-## 📚 Citation（引用）
-
-本プロジェクトを研究で使用される場合は、以下の論文を引用してください
-（[arXiv:2602.01086](https://arxiv.org/abs/2602.01086)）:
+研究で使用する場合は論文（[arXiv:2602.01086](https://arxiv.org/abs/2602.01086)）を引用してください。
 
 ```bibtex
 @article{nakajima2026medbeads,
@@ -311,14 +153,10 @@ UIヘッダーの **Viewer Role セレクター** を使用してロールを切
 }
 ```
 
-`CITATION.cff` を同梱しているため、GitHub の「Cite this repository」ボタンとも同期します。
+`CITATION.cff`はGitHubの「Cite this repository」に対応しています。
 
-## 📄 ライセンス
+## ライセンスとデータ
 
-[Apache License 2.0](LICENSE) の下で公開しています。帰属表示は [`NOTICE`](NOTICE) を参照してください。
-患者データはすべて合成データ（Synthea 生成）であり、実際の PHI はリポジトリ・履歴・テストの
-いずれにも含まれません。
-
-## 🙏 Acknowledgement（謝辞）
-
-本プロジェクトで使用している合成FHIRデータを提供してくださった [Synthea](https://synthetichealth.github.io/synthea/) に感謝いたします。
+[Apache License 2.0](LICENSE)の下で公開します。帰属表示は[`NOTICE`](NOTICE)を参照してください。
+同梱患者データはすべて[Synthea](https://synthetichealth.github.io/synthea/)による合成データで、
+実際のPHIは含まれません。

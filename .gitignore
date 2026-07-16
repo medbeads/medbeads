@@ -10,6 +10,11 @@ medbeads_data/
 .env
 .env.local
 .env.*.local
+*.key
+*.pem
+deploy/private/
+deploy/production/secrets/
+deploy/production/*.env
 
 # Python
 __pycache__/
@@ -32,7 +37,11 @@ build/
 medbeads-core
 core/medbeads-core
 /medbeadsd
-demo_data/
+demo_data/*
+!demo_data/README.md
+!demo_data/CHECKSUMS.sha256
+!demo_data/pods/
+!demo_data/pods/**
 
 # OS & IDE
 .DS_Store

@@ -313,3 +313,30 @@
 - **論文境界**: 現在の国際コンセプト論文へ日本固有法または各国法の詳細な適合主張は追加せず、
   将来実装・別論文・法域別deployment profileとして扱う。
 - **仕様**: specs/R15_jurisdiction_neutral_federation.md。
+
+## 2026-07-15: R16 公開論文デモと本番開発の分離
+
+- **公開GitHub版**: 論文読者がDockerで短時間に再現するreference implementationとする。Synthea等の
+  合成10症例、`viewer`、localhost限定、外部API key不要、新規患者登録なしを既定とする。
+- **本番開発**: 共通coreを利用するが、FHIR endpoint、患者identity mapping、実データ、trust policy、
+  service credential、秘密鍵、監視・backup等はprivate deployment overlayへ分離する。
+- **分離原則**: デモ用core forkや安全検証の迂回は作らない。分離するのはデータ、権限、接続、運用設定、
+  配布物と主張であり、Bead hash、Pod、clinical links、retrieveの意味論は共通に保つ。
+- **Docker**: 公開repoの既定composeはpaper demoだけを起動する。本番composeを公開デモの単純な環境変数
+  差し替えとして提供せず、施設側がrelease tag/image digestをpinしたprivate overlayを管理する。
+- **表示**: R13/R14、KMS/HSM、監査、障害・負荷・規制検証を満たすまではproduction readyと表記しない。
+- **仕様**: specs/R16_public_demo_and_production_boundary.md。
+
+## 2026-07-15: R16 公開paper-demo Docker実装
+
+- **配布物**: root `Dockerfile` + `compose.yaml`（Go core / Nginx+React UI）を追加。既定は
+  `viewer`、service tokenなし、localhost bind、非root core、合成データlabelとした。
+- **再構築**: 合成10患者のPod正本3.6MBだけをcommitし、SQLiteは配布しない。image build内で
+  `verify`→`reindex`→`reproject`を実行し、Podからschema v11とderived linksを再構築する。
+- **実測smoke test**: Docker Desktop arm64で10患者 / 4,202患者Bead / 4,192 parent edge /
+  492 clinical links、UI health、Nginx API proxy、全11 Pod・4,204 frame検証OKを確認。
+  `POST /patients`と`POST /beads`は405。clearance派生変更はcontainer再作成で初期化された。
+- **UI依存**: `npm audit fix`（`--force`なし）で40 packageを更新し、65 GitHub alertの原因だった
+  npm既知脆弱性を本番依存・開発依存とも0件にした。36 UI testとproduction buildは成功。
+- **回帰防止**: CIにamd64 Docker build、10患者、492 links、proxy、登録拒否、Pod verifyを検査する
+  `Paper demo (Docker)` jobを追加。
